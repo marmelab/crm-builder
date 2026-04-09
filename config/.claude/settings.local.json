@@ -4,12 +4,7 @@
   },
   "permissions": {
     "allow": [
-      "Bash(mkdir -p /tmp/tondix-crm/public/logos)",
-      "Bash(curl -sL -o /tmp/tondix-crm/public/logos/tondix_logo.jpg \"https://vectorportal.com/storage/o7Bwxb5n0c0PxqgAJL5Bbo2eRye8fvuHaBKPqNnl.jpg\")",
-      "Bash(curl -sL -o /tmp/tondix-crm/public/logos/tondix_logo.jpg -H \"User-Agent: Mozilla/5.0\" \"https://vectorportal.com/storage/o7Bwxb5n0c0PxqgAJL5Bbo2eRye8fvuHaBKPqNnl.jpg\")",
       "Bash(npx tsc:*)",
-      "Bash(grep -E \"^\\(create|edit|show|list|simple-form|text-input|number-input|reference-input|select-input|date-input|autocomplete-input|number-field|text-field|date-field|reference-field|record-field\\)\\\\.tsx$\")",
-      "Bash(grep -E \"\\(date_fin|date_debut\\)\" /tmp/tondix-crm/src/components/atomic-crm/ventes-services/*.tsx)",
       "Bash(grep)"
     ]
   }
