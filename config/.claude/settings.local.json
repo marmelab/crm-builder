@@ -5,7 +5,22 @@
   "permissions": {
     "allow": [
       "Bash(npx tsc:*)",
-      "Bash(grep)"
+      "Bash(gh auth status)",
+      "Bash(ls)",
+      "Bash(find)",
+      "Bash(grep)",
+      "Bash(supabase --version)",
+      "Bash(vercel --version)",
+      "Bash(gh repo:*)",
+      "Bash(gh api:*)",
+      "Bash(xargs curl)",
+      "Bash(xargs curl:*)",
+      "Bash(npm install:*)",
+      "Bash(npx supabase:*)",
+      "Bash(SUPABASE_ACCESS_TOKEN=sbp_8995252127999847b78a88ec5df4efd3b9e4570a npx supabase db dump)",
+      "Bash(echo \"EXIT: $?\")",
+      "Bash(SUPABASE_ACCESS_TOKEN=sbp_8995252127999847b78a88ec5df4efd3b9e4570a npx supabase *)",
+      "Bash(vercel *)"
     ]
   }
 }

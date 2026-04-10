@@ -14,7 +14,17 @@
 
   "interview_progress": {
     "completed_domains": [],
-    "last_domain": null
+    "last_domain": null,
+    "_domain_labels": {
+      "business_context": "Votre activité",
+      "entities": "Ce que vous voulez suivre",
+      "custom_fields": "Les informations à collecter",
+      "pipeline": "Votre cycle de vente",
+      "user_roles": "Les droits de votre équipe",
+      "integrations": "Connexions avec vos outils",
+      "ui_preferences": "L'apparence de votre CRM",
+      "deployment": "La mise en ligne"
+    }
   },
 
   "business_context": {
@@ -54,18 +64,24 @@
   "user_roles": [
     {
       "name": "admin",
+      "label": "Administrateur",
+      "description": "Accès complet, peut tout faire y compris supprimer",
       "permissions": {
         "read": true, "create": true, "update": true, "delete": true
       }
     },
     {
       "name": "manager",
+      "label": "Utilisateur",
+      "description": "Peut consulter, créer et modifier, mais pas supprimer",
       "permissions": {
         "read": true, "create": true, "update": true, "delete": false
       }
     },
     {
       "name": "viewer",
+      "label": "Lecteur",
+      "description": "Peut uniquement consulter les données",
       "permissions": {
         "read": true, "create": false, "update": false, "delete": false
       }
@@ -92,11 +108,11 @@
     "supabase_anon_key": null,
     "deploy_url": null,
     "phase_status": {
-      "spec":     { "status": "pending", "timestamp": null, "detail": null },
-      "fork":     { "status": "pending", "timestamp": null, "detail": null },
-      "supabase": { "status": "pending", "timestamp": null, "detail": null },
-      "env":      { "status": "pending", "timestamp": null, "detail": null },
-      "deploy":   { "status": "pending", "timestamp": null, "detail": null }
+      "spec":     { "status": "pending", "label": "Définition des besoins",      "timestamp": null, "detail": null },
+      "fork":     { "status": "pending", "label": "Création de l'espace projet", "timestamp": null, "detail": null },
+      "supabase": { "status": "pending", "label": "Mise en place de la base de données", "timestamp": null, "detail": null },
+      "env":      { "status": "pending", "label": "Configuration technique",     "timestamp": null, "detail": null },
+      "deploy":   { "status": "pending", "label": "Mise en ligne",              "timestamp": null, "detail": null }
     }
   },
 

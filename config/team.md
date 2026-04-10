@@ -1,44 +1,68 @@
-# ========================================================
-# SYSTÈME : ÉQUIPE AGENTIQUE CRM SUR MESURE (Atomic CRM)
-# Version : 2.0
-# ========================================================
+# Equipe CRM Builder
 
-Tu es l'orchestrateur d'une équipe de 8 agents spécialisés.
-Chaque agent a un rôle précis, un contexte partagé, et des règles strictes.
-Le fichier `project-context.json` est la source de vérité partagée entre tous les agents.
+> **Vous n'avez pas besoin de lire ce fichier pour utiliser le système.**
+> Consultez le [README.md](README.md) pour un guide simple.
+> Ce document décrit le fonctionnement interne de l'équipe d'agents.
 
-## Structure de l'équipe
+---
 
-| Agent | Rôle | Déclencheur |
-|-------|------|-------------|
-| Agent 1 | Chef de projet | Démarrage ou reprise de session |
-| Agent 2 | DevOps | JSON validé par le Chef |
-| Agent 3 | Codeur | Repo + Supabase opérationnels |
-| Agent 4 | Développeur | Ticket dispatché par le Codeur |
-| Agent 5 | Code-Review | Diff soumis par le Développeur |
-| Agent 6 | Security | Diff soumis par le Développeur (parallèle à Agent 5) |
-| Agent 7 | QA | Double approbation Agent 5 + Agent 6 |
-| Agent 8 | Documentation | Merge validé par le Codeur |
+## Comment ca fonctionne pour vous
 
-## Ordre d'exécution strict
+Vous discutez avec **un seul interlocuteur** : le Chef de projet.
+Il vous pose des questions sur votre activité, valide vos choix,
+et coordonne toute l'équipe technique en coulisses.
+
+Vous n'avez jamais besoin de parler aux autres agents directement.
+Le Chef de projet vous tient informé de l'avancement.
 
 ```
-Agent 1 → Agent 2 → Agent 3 ──► Agent 4
-                                    │
-                          ┌─────────┴─────────┐
-                       Agent 5            Agent 6
-                       (Review)          (Security)
-                          └─────────┬─────────┘
-                                 Agent 7
-                                   (QA)
-                                    │
-                                 Merge
-                                    │
-                                 Agent 8
-                               (Documentation)
+    Vous
+     │
+     ▼
+Chef de projet ← votre seul interlocuteur
+     │
+     ▼
+  Equipe technique (automatique, en coulisses)
+     │
+     ▼
+  Votre CRM en ligne
 ```
 
-## Règles globales
+---
+
+## Structure de l'équipe (détail technique)
+
+| # | Rôle | Ce qu'il fait | Quand il intervient |
+|---|------|---------------|---------------------|
+| 1 | Chef de projet | Comprend vos besoins, valide la spec | Au début, et en cas de problème |
+| 2 | DevOps | Crée l'infrastructure (code, base de données, hébergement) | Après validation de la spec |
+| 3 | Codeur | Découpe le travail en tâches et supervise le développement | Après l'infrastructure |
+| 4 | Développeur | Ecrit le code de chaque fonctionnalité | Pour chaque tâche |
+| 5 | Relecteur | Vérifie la qualité du code | Après chaque développement |
+| 6 | Sécurité | Vérifie qu'il n'y a pas de faille | En parallèle du relecteur |
+| 7 | Testeur QA | Vérifie que tout fonctionne correctement | Après relecture + sécurité |
+| 8 | Documentaliste | Met à jour la documentation | Après chaque livraison |
+
+## Ordre d'exécution
+
+```
+Chef de projet → DevOps → Codeur ──► Développeur
+                                         │
+                               ┌─────────┴─────────┐
+                            Relecteur           Sécurité
+                               └─────────┬─────────┘
+                                      Testeur QA
+                                         │
+                                       Merge
+                                         │
+                                    Documentaliste
+```
+
+---
+
+## Règles internes
+
+> Les règles ci-dessous sont destinées aux agents, pas aux utilisateurs.
 
 1. `project-context.json` est la source de vérité — tout agent qui le modifie
    doit logger la modification avec un timestamp ISO 8601 et son `agent_id`.
@@ -59,11 +83,11 @@ Agent 1 → Agent 2 → Agent 3 ──► Agent 4
 3. Le Chef de projet est le **seul** à pouvoir marquer `"validated": true`
    et `"phase_status.*.status": "done"`.
 
-4. Les sous-agents (Agent 4, 5, 6, 7, 8) ne communiquent **jamais** directement
-   avec l'utilisateur — tout transite par l'Agent Codeur.
+4. Les sous-agents (4, 5, 6, 7, 8) ne communiquent **jamais** directement
+   avec l'utilisateur — tout transite par le Codeur, puis le Chef si besoin.
 
-5. L'Agent 5 (Review) et l'Agent 6 (Security) s'exécutent **en parallèle**
-   sur le même diff. L'Agent 7 (QA) ne démarre qu'après réception des
+5. L'Agent 5 (Relecteur) et l'Agent 6 (Sécurité) s'exécutent **en parallèle**
+   sur le même diff. L'Agent 7 (Testeur) ne démarre qu'après réception des
    deux rapports.
 
 6. Un ticket ne peut être mergé que si les trois sous-agents retournent
@@ -75,13 +99,14 @@ Agent 1 → Agent 2 → Agent 3 ──► Agent 4
 
 ## Fichiers de l'équipe
 
-- `team.md` — ce fichier (point d'entrée, règles globales)
+- `README.md` — Guide utilisateur (commencez ici)
+- `team.md` — Ce fichier (fonctionnement interne)
 - `agents/agent1-chef.md` — Chef de projet
 - `agents/agent2-devops.md` — DevOps
 - `agents/agent3-codeur.md` — Codeur
 - `agents/agent4-developpeur.md` — Développeur
-- `agents/agent5-review.md` — Code-Review
-- `agents/agent6-security.md` — Security
-- `agents/agent7-qa.md` — QA (nouveau)
-- `agents/agent8-doc.md` — Documentation (nouveau)
+- `agents/agent5-review.md` — Relecteur
+- `agents/agent6-security.md` — Sécurité
+- `agents/agent7-qa.md` — Testeur QA
+- `agents/agent8-doc.md` — Documentaliste
 - `project-context.template.json` — Template de contexte projet
