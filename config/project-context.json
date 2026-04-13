@@ -3,8 +3,8 @@
     "version": "2.0",
     "schema": "atomic-crm-context",
     "created_at": "2026-04-10T10:00:00Z",
-    "last_modified_at": "2026-04-10T10:00:00Z",
-    "last_modified_by": "chef"
+    "last_modified_at": "2026-04-13T11:30:00Z",
+    "last_modified_by": "codeur"
   },
 
   "project_name": "tondix-crm",
@@ -60,7 +60,7 @@
       "description": "Affaires / opportunités de vente"
     },
     {
-      "name": "product",
+      "name": "tondeuse",
       "type": "create",
       "description": "Modèles de tondeuses du catalogue Tondix",
       "seed_data": [
@@ -131,7 +131,7 @@
       ]
     },
     {
-      "name": "service",
+      "name": "assurance",
       "type": "create",
       "description": "Assurances proposées pour les tondeuses (annuelles ou mensuelles, avec options)",
       "seed_data": [
@@ -276,18 +276,18 @@
       { "name": "expected_close_date", "label": "Date de clôture prévue", "type": "date", "required": false },
       { "name": "notes", "label": "Notes", "type": "text", "required": false }
     ],
-    "product": [
+    "tondeuse": [
       { "name": "name", "label": "Nom du modèle", "type": "text", "required": true },
       { "name": "reference", "label": "Référence", "type": "text", "required": true },
       { "name": "price", "label": "Prix (€)", "type": "number", "required": true },
-      { "name": "product_type", "label": "Type", "type": "select", "required": true, "options": ["thermique", "électrique", "robot"] },
+      { "name": "tondeuse_type", "label": "Type", "type": "select", "required": true, "options": ["thermique", "électrique", "robot"] },
       { "name": "cutting_width_cm", "label": "Largeur de coupe (cm)", "type": "number", "required": false },
       { "name": "weight_kg", "label": "Poids (kg)", "type": "number", "required": false }
     ],
-    "service": [
+    "assurance": [
       { "name": "name", "label": "Nom de l'assurance", "type": "text", "required": true },
       { "name": "billing", "label": "Type", "type": "select", "required": true, "options": ["annuelle", "mensuelle"] },
-      { "name": "product_reference", "label": "Tondeuse associée", "type": "text", "required": true },
+      { "name": "tondeuse_id", "label": "Tondeuse associée", "type": "reference", "required": true, "references": "tondeuse" },
       { "name": "price", "label": "Prix (€)", "type": "number", "required": true },
       { "name": "options", "label": "Options souscrites", "type": "multiselect", "required": false, "options": ["garantie panne", "garantie vol", "garantie casse accidentelle", "assistance dépannage", "remplacement express"] }
     ]
@@ -360,7 +360,8 @@
       "fork":     { "status": "done", "label": "Création de l'espace projet", "timestamp": "2026-04-10T14:30:00Z", "detail": "Fork créé : erwanMarmelab/tondix-crm" },
       "supabase": { "status": "done", "label": "Mise en place de la base de données", "timestamp": "2026-04-10T14:30:00Z", "detail": "Tables products (8 modèles) et services (16 assurances) créées avec RLS" },
       "env":      { "status": "done", "label": "Configuration technique", "timestamp": "2026-04-10T14:30:00Z", "detail": "Variables Vercel configurées : VITE_SUPABASE_URL, VITE_SB_PUBLISHABLE_KEY, VITE_IS_DEMO, VITE_ATTACHMENTS_BUCKET" },
-      "deploy":   { "status": "done", "label": "Mise en ligne", "timestamp": "2026-04-10T14:30:00Z", "detail": "Déployé sur Vercel : https://tondix-crm.vercel.app" }
+      "deploy":   { "status": "done", "label": "Mise en ligne", "timestamp": "2026-04-10T14:30:00Z", "detail": "Déployé sur Vercel : https://tondix-crm.vercel.app" },
+      "code":     { "status": "in_review", "label": "Pages métier + identité visuelle", "timestamp": "2026-04-13T11:25:00Z", "detail": "PR #1 ouverte : pages Tondeuses/Assurances, renommage métier, logo Tondix, thème bleu/rouge. Migration SQL à exécuter sur Supabase avant merge." }
     }
   },
 
@@ -424,6 +425,18 @@
       "agent_id": "devops",
       "action": "deployed",
       "detail": "Déploiement Vercel réussi : https://tondix-crm.vercel.app"
+    },
+    {
+      "timestamp": "2026-04-13T11:25:00Z",
+      "agent_id": "codeur",
+      "action": "feature_branch_opened",
+      "detail": "PR #1 ouverte sur erwanMarmelab/tondix-crm (branche feat/tondeuses-assurances-branding) : pages Tondeuse/Assurance, renommage product→tondeuse et service→assurance (code + migration SQL), identité visuelle Tondix (logo, thème bleu/rouge, favicon, title). Migration Supabase à exécuter manuellement avant merge."
+    },
+    {
+      "timestamp": "2026-04-13T11:30:00Z",
+      "agent_id": "chef",
+      "action": "entities_renamed",
+      "detail": "project-context.json aligné sur le nouveau vocabulaire métier : entities[].name et custom_fields.* renommés (product→tondeuse, service→assurance, product_type→tondeuse_type, product_reference→tondeuse_id)."
     }
   ]
 }
