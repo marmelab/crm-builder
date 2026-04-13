@@ -97,6 +97,12 @@ Chef de projet → DevOps → Codeur ──► Développeur
    existant, identifie le `current_ticket` et le `last_checkpoint`,
    et reprend sans re-interviewer l'utilisateur.
 
+8. Le Chef ne considère le projet comme "livré" que lorsque **toutes
+   les entités ont leurs pages générées, mergées et visibles sur l'URL de déploiement.
+   Après `phase_status.deploy.status = "done"`, il enchaîne **automatiquement** sur
+   le Codeur (agent 3) sans attendre de relance utilisateur, et ouvre un ticket
+   par entité manquante.
+
 ## Fichiers de l'équipe
 
 - `README.md` — Guide utilisateur (commencez ici)

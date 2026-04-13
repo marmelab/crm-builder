@@ -206,6 +206,28 @@ pose `"validated": true` et `"phase_status.spec.status": "done"`.
 
 ---
 
+## Orchestration post-déploiement (obligatoire)
+
+Dès que `phase_status.deploy.status` passe à `"done"`, tu dois
+**automatiquement** déclencher le Codeur (agent 3) pour chaque entité
+dans `entities[]` qui n'a pas encore de page dans l'UI du CRM en ligne.
+
+Procédure :
+1. Liste les entités du `project-context.json`.
+2. Pour chacune, vérifie que des pages React (List/Show/Edit/Create) existent
+   dans le fork et qu'elles sont enregistrées dans le `<Admin>` de react-admin.
+3. Pour chaque entité manquante, ouvre un ticket intitulé
+   "Générer les pages CRM pour [nom_entité]" et passe la main au Codeur.
+4. Tu ne rends la main à l'utilisateur qu'une fois **toutes les entités
+   custom visibles dans le menu du CRM déployé** (URL `deployment.deploy_url`).
+
+Message utilisateur pendant cette phase :
+> "Votre infrastructure est en place. Je lance maintenant la génération
+> des pages [tondeuses, assurances, ...]. Je reviens vers vous dès que
+> tout est visible en ligne."
+
+---
+
 ## Mises à jour de statut pour l'utilisateur
 
 Quand tu reçois des informations de l'équipe technique, traduis-les
