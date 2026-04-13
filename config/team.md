@@ -46,17 +46,40 @@ Chef de projet ← votre seul interlocuteur
 ## Ordre d'exécution
 
 ```
-Chef de projet → DevOps → Codeur ──► Développeur
-                                         │
-                               ┌─────────┴─────────┐
-                            Relecteur           Sécurité
-                               └─────────┬─────────┘
-                                      Testeur QA
-                                         │
-                                       Merge
-                                         │
-                                    Documentaliste
+  [Utilisateur]
+       │  (interview + validation spec — unique interaction avant livraison)
+       ▼
+   Chef de projet ─────────────────────── (orchestre tout, sans re-demander)
+       │                                                 │
+       ▼                                                 │
+    DevOps ── fork + DB + env + deploy                   │
+       │                                                 │
+       ▼ (phase_status.deploy = "done" → enchaîne auto)  │
+    Codeur                                               │
+       │                                                 │
+       ▼                                                 │
+   Développeur                                           │
+       │                                                 │
+     ┌─┴─┐                                               │
+  Relecteur  Sécurité   (parallèle)                      │
+     └─┬─┘                                               │
+       ▼                                                 │
+   Testeur QA                                            │
+       │                                                 │
+       ▼                                                 │
+     Merge                                               │
+       │                                                 │
+       ▼                                                 │
+ Documentaliste ──► ticket suivant ──────────────────────┤
+                                                         │
+                                                         ▼
+                                              Toutes entités en ligne
+                                                         │
+                                                         ▼
+                                               [Utilisateur] livraison
 ```
+
+**Aucune flèche ne repasse par l'utilisateur entre le "go" initial et la livraison finale** — sauf les 5 exceptions listées dans la "Règle d'or" d'`agent1-chef.md` (credentials, question métier bloquante, escalade 2×, etc.).
 
 ---
 
@@ -64,10 +87,19 @@ Chef de projet → DevOps → Codeur ──► Développeur
 
 > Les règles ci-dessous sont destinées aux agents, pas aux utilisateurs.
 
-1. `project-context.json` est la source de vérité — tout agent qui le modifie
+1. **Orchestration continue — règle prioritaire.** Le Chef **ne rend jamais la
+   main à l'utilisateur entre deux phases**. Il enchaîne automatiquement :
+   validation spec → DevOps → Codeur → QA → merge → ticket suivant → livraison.
+   Les **seules** interactions légitimes avec l'utilisateur sont listées dans
+   `agents/agent1-chef.md` section "Règle d'or". Toute pause "par politesse"
+   ou "pour donner le contrôle" est un bug d'orchestration. Si le Chef hésite
+   entre "demander" et "enchaîner", il enchaîne — l'utilisateur a déjà donné
+   son go/no-go lors de la validation de la spec.
+
+2. `project-context.json` est la source de vérité — tout agent qui le modifie
    doit logger la modification avec un timestamp ISO 8601 et son `agent_id`.
 
-2. Aucun agent ne dépasse **2 tentatives autonomes** sur une erreur avant
+3. Aucun agent ne dépasse **2 tentatives autonomes** sur une erreur avant
    d'escalader au Chef de projet via le format suivant :
    ```json
    {
@@ -80,28 +112,31 @@ Chef de projet → DevOps → Codeur ──► Développeur
    }
    ```
 
-3. Le Chef de projet est le **seul** à pouvoir marquer `"validated": true`
+4. Le Chef de projet est le **seul** à pouvoir marquer `"validated": true`
    et `"phase_status.*.status": "done"`.
 
-4. Les sous-agents (4, 5, 6, 7, 8) ne communiquent **jamais** directement
+5. Les sous-agents (4, 5, 6, 7, 8) ne communiquent **jamais** directement
    avec l'utilisateur — tout transite par le Codeur, puis le Chef si besoin.
 
-5. L'Agent 5 (Relecteur) et l'Agent 6 (Sécurité) s'exécutent **en parallèle**
+6. L'Agent 5 (Relecteur) et l'Agent 6 (Sécurité) s'exécutent **en parallèle**
    sur le même diff. L'Agent 7 (Testeur) ne démarre qu'après réception des
    deux rapports.
 
-6. Un ticket ne peut être mergé que si les trois sous-agents retournent
+7. Un ticket ne peut être mergé que si les trois sous-agents retournent
    `"status": "approved"`.
 
-7. En cas de reprise de session, le Chef relit le `project-context.json`
+8. En cas de reprise de session, le Chef relit le `project-context.json`
    existant, identifie le `current_ticket` et le `last_checkpoint`,
    et reprend sans re-interviewer l'utilisateur.
 
-8. Le Chef ne considère le projet comme "livré" que lorsque **toutes
-   les entités ont leurs pages générées, mergées et visibles sur l'URL de déploiement.
-   Après `phase_status.deploy.status = "done"`, il enchaîne **automatiquement** sur
-   le Codeur (agent 3) sans attendre de relance utilisateur, et ouvre un ticket
-   par entité manquante.
+9. **Définition de "livré" (application directe de la règle 0).** Le Chef ne
+   considère le projet comme "livré" que lorsque **toutes les entités custom
+   ont leurs pages générées, mergées ET visibles sur l'URL de déploiement** —
+   pas juste en base ou en code. Après `phase_status.deploy.status = "done"`,
+   il enchaîne **automatiquement et immédiatement** sur le Codeur (agent 3),
+   sans attendre de relance utilisateur, et ouvre un ticket par entité manquante.
+   Vérification de sortie : `curl` sur `deployment.deploy_url` + lecture du JS
+   bundle pour confirmer que chaque entité apparaît dans la navigation.
 
 ## Fichiers de l'équipe
 
