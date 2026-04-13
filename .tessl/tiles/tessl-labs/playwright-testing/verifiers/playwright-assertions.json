@@ -1,0 +1,34 @@
+{
+  "instruction": "Use web-first assertions and user-visible locator patterns in Playwright tests",
+  "relevant_when": "Agent writes Playwright test assertions or selects elements in test files",
+  "context": "Playwright tests must use web-first assertions (expect(locator).toBeVisible(), .toHaveText(), .toHaveCount()) that auto-retry, not page.$() or page.textContent() which execute once. Locators must use getByRole, getByLabel, getByText, or getByTestId — not CSS selectors or XPath.",
+  "sources": [
+    {
+      "type": "file",
+      "filename": "skills/playwright-testing/SKILL.md",
+      "tile": "tessl-labs/playwright-testing@0.2.0"
+    }
+  ],
+  "checklist": [
+    {
+      "name": "web-first-assertions",
+      "rule": "Agent uses expect(locator).toBeVisible(), .toHaveText(), .toHaveCount(), .toBeEnabled(), .toContainText() instead of page.$(), page.textContent(), page.isVisible(), or page.evaluate() for element verification",
+      "relevant_when": "Agent writes assertions in Playwright tests to check element state or content"
+    },
+    {
+      "name": "user-visible-locators",
+      "rule": "Agent uses getByRole, getByLabel, getByText, getByPlaceholder, or getByTestId instead of CSS selectors (page.locator('.class'), page.locator('#id')) or XPath",
+      "relevant_when": "Agent selects elements in Playwright tests"
+    },
+    {
+      "name": "getByRole-preferred",
+      "rule": "Agent prefers getByRole with accessible name over getByText or getByTestId when the element has a clear ARIA role (buttons, headings, links, textboxes)",
+      "relevant_when": "Agent writes locators for interactive elements like buttons, links, and form fields"
+    },
+    {
+      "name": "no-page-dollar",
+      "rule": "Agent does not use page.$(), page.$$(), or page.evaluate() to check element existence or content — these do not auto-retry and cause flaky tests",
+      "relevant_when": "Agent writes Playwright tests that verify elements exist or have specific content"
+    }
+  ]
+}

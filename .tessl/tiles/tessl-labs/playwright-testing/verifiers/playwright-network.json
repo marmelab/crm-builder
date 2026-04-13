@@ -1,0 +1,34 @@
+{
+  "instruction": "Use page.route() for API mocking and page.waitForResponse() for API call verification in Playwright tests",
+  "relevant_when": "Agent writes Playwright tests that interact with APIs or need to mock network responses",
+  "context": "Playwright tests should use page.route() to mock API responses for isolated, deterministic tests. When verifying real API calls, use page.waitForResponse() and set up the response promise BEFORE the action that triggers the request. Use route.fulfill() with explicit status, contentType, and body.",
+  "sources": [
+    {
+      "type": "file",
+      "filename": "skills/playwright-testing/SKILL.md",
+      "tile": "tessl-labs/playwright-testing@0.2.0"
+    }
+  ],
+  "checklist": [
+    {
+      "name": "page-route-for-mocking",
+      "rule": "Agent uses page.route() with route.fulfill() to mock API responses rather than setting up a separate mock server or modifying application code",
+      "relevant_when": "Agent writes Playwright tests that need to control API responses"
+    },
+    {
+      "name": "wait-for-response-before-action",
+      "rule": "Agent sets up page.waitForResponse() BEFORE the action that triggers the API call (e.g., button click), not after, to avoid race conditions",
+      "relevant_when": "Agent writes Playwright tests that verify API calls were made"
+    },
+    {
+      "name": "route-fulfill-explicit-fields",
+      "rule": "Agent provides explicit status, contentType, and body in route.fulfill() rather than relying on defaults",
+      "relevant_when": "Agent mocks API responses with page.route()"
+    },
+    {
+      "name": "glob-patterns-for-routes",
+      "rule": "Agent uses glob patterns (e.g., '**/api/products') in page.route() for URL matching rather than exact full URLs to work across environments",
+      "relevant_when": "Agent sets up route interception in Playwright tests"
+    }
+  ]
+}

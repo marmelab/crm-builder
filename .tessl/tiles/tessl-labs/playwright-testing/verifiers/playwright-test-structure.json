@@ -1,0 +1,44 @@
+{
+  "instruction": "Structure Playwright tests with describe/beforeEach, fixtures, page objects, and no explicit waits",
+  "relevant_when": "Agent writes or organizes Playwright test files",
+  "context": "Playwright tests should use test.describe for grouping related tests, test.beforeEach for shared setup like page.goto, custom fixtures for reusable setup/teardown (especially authentication), page objects for encapsulating page interactions, and storageState for authentication reuse. Never use page.waitForTimeout() or page.waitForSelector() before locator actions.",
+  "sources": [
+    {
+      "type": "file",
+      "filename": "skills/playwright-testing/SKILL.md",
+      "tile": "tessl-labs/playwright-testing@0.2.0"
+    }
+  ],
+  "checklist": [
+    {
+      "name": "describe-groups-tests",
+      "rule": "Agent uses test.describe to group related tests rather than having flat, ungrouped test() calls at the module level",
+      "relevant_when": "Agent writes Playwright test files with multiple tests"
+    },
+    {
+      "name": "before-each-for-setup",
+      "rule": "Agent uses test.beforeEach for repeated setup like page.goto() rather than duplicating the same navigation in every test",
+      "relevant_when": "Agent writes multiple tests that share the same starting page or setup"
+    },
+    {
+      "name": "no-explicit-waits",
+      "rule": "Agent does not use page.waitForTimeout(ms) or arbitrary delays — relies on Playwright's auto-waiting and web-first assertions instead",
+      "relevant_when": "Agent writes Playwright tests that wait for UI to update"
+    },
+    {
+      "name": "no-wait-for-selector-before-action",
+      "rule": "Agent does not use page.waitForSelector() before a locator action (click, fill, etc.) — Playwright auto-waits for actionability before performing actions",
+      "relevant_when": "Agent writes Playwright test interactions"
+    },
+    {
+      "name": "storage-state-for-auth",
+      "rule": "Agent uses storageState with a setup project for authentication reuse rather than repeating login steps in every test file",
+      "relevant_when": "Agent writes Playwright tests for an app that requires authentication"
+    },
+    {
+      "name": "page-objects-for-reuse",
+      "rule": "Agent encapsulates page-specific locators and actions in page object classes when the same page is tested across multiple spec files",
+      "relevant_when": "Agent writes Playwright tests that interact with the same page or component in multiple test files"
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "name": "tessl-labs/playwright-testing",
+  "version": "0.2.0",
+  "summary": "Playwright E2E testing patterns — web-first assertions, user-visible locators, network interception, fixtures, authentication, and parallel execution",
+  "skills": {
+    "playwright-testing": {
+      "path": "skills/playwright-testing/SKILL.md"
+    }
+  },
+  "private": false
+}

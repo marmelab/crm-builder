@@ -1,0 +1,49 @@
+{
+  "instruction": "Configure Playwright with webServer, retries, parallel execution, and proper CI settings",
+  "relevant_when": "Agent sets up E2E testing with Playwright or creates playwright.config.ts",
+  "context": "Playwright config must include webServer to auto-start the app, retries in CI, fullyParallel for parallel execution, forbidOnly to prevent test.only in CI, screenshots on failure, and traces on first retry.",
+  "sources": [
+    {
+      "type": "file",
+      "filename": "skills/playwright-testing/SKILL.md",
+      "tile": "tessl-labs/playwright-testing@0.2.0"
+    }
+  ],
+  "checklist": [
+    {
+      "name": "webserver-configured",
+      "rule": "Agent configures webServer in playwright.config.ts to auto-start the dev server with command, port, and reuseExistingServer",
+      "relevant_when": "Agent creates or modifies playwright.config.ts"
+    },
+    {
+      "name": "retries-in-ci",
+      "rule": "Agent configures retries conditionally for CI (e.g., retries: process.env.CI ? 2 : 0) rather than hardcoded retries",
+      "relevant_when": "Agent sets up Playwright configuration"
+    },
+    {
+      "name": "fully-parallel",
+      "rule": "Agent enables fullyParallel: true for parallel test execution rather than running tests sequentially",
+      "relevant_when": "Agent creates playwright.config.ts"
+    },
+    {
+      "name": "forbid-only-in-ci",
+      "rule": "Agent sets forbidOnly: !!process.env.CI to prevent accidental test.only commits from passing in CI",
+      "relevant_when": "Agent creates playwright.config.ts"
+    },
+    {
+      "name": "screenshot-on-failure",
+      "rule": "Agent configures screenshot: 'only-on-failure' to capture screenshots when tests fail",
+      "relevant_when": "Agent sets up Playwright use options"
+    },
+    {
+      "name": "trace-on-retry",
+      "rule": "Agent configures trace: 'on-first-retry' for post-mortem debugging with the trace viewer",
+      "relevant_when": "Agent sets up Playwright use options"
+    },
+    {
+      "name": "base-url-configured",
+      "rule": "Agent configures baseURL in the use section rather than hardcoding full URLs in test files",
+      "relevant_when": "Agent creates playwright.config.ts"
+    }
+  ]
+}
