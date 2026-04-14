@@ -1,6 +1,6 @@
 ---
 name: pr-creation
-description: How to create a PR, enable auto-merge, and monitor CI for a task branch. Used by JULIEN.
+description: How to create a PR, enable auto-merge, and monitor CI for a task branch. Used by MERGER.
 ---
 
 ## Standard workflow

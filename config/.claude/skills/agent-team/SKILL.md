@@ -1,61 +1,127 @@
 ---
 name: agent-team
-description: Multi-agent team workflow for implementing tickets. Use when dispatching agents, reviewing PRs, arbitrating conflicts, or following the ticket lifecycle (spec → impl → review → merge).
+description: Multi-agent team workflow for implementing tickets. Use when dispatching agents or following the full lifecycle (bootstrap → planning → spec → impl → review → merge).
 ---
 
-## Per-ticket workflow
+## Full lifecycle
 
-```
-make spin TASK=XXX NAME=yyy
-  → ERWAN   — spec validation             @.claude/agents/ERWAN.md
-  → JEROME  — code plan                   @.claude/agents/JEROME.md
-  → ERWAN   — plan approval
-  → JEROME  — implementation
-    ↓ (in parallel)
-  JIBE          FRANCIS         GUILLAUME       ALEXANDRA
-  code+spec     security        green tests     UI/UX visual demo
-    ↓
-  Conflict? → BENOIT arbitrates  @.claude/agents/BENOIT.md
-  → JEROME  — docs/reflections/TASK-XXX-reflection.md
-  → JULIEN  — make merge + gh pr merge --auto + gh pr checks --watch
-make clean TASK=XXX NAME=yyy
-```
+### Phase 0 — Bootstrap (once per project)
+
+Check project-context.json at project root:
+
+- Does not exist or validated: false
+    → PROJECT-MANAGER  @.claude/agents/project-manager.md
+    → produces project-context.json with validated: true
+
+- validated: true, bootstrapped: false
+    → DEVOPS  @.claude/agents/devops.md
+    → fork + supabase + env + deploy → bootstrapped: true
+
+- validated: true, bootstrapped: true
+    → proceed to Phase 1
+
+---
+
+### Phase 1 — Ticket planning (once per feature/need)
+
+    → PLANNER  @.claude/agents/planner.md
+    → produces ordered list of TASK-XXX tickets
+
+---
+
+### Phase 2 — Per-ticket cycle
+
+    make spin TASK=XXX NAME=yyy
+
+    → ARCHITECT  @.claude/agents/architect.md
+         mode: spec validation
+         APPROVED  → continue
+         BLOCKED   → back to PLANNER
+
+    → DEVELOPER  @.claude/agents/developer.md
+         mode: plan
+
+    → ARCHITECT  @.claude/agents/architect.md
+         mode: plan approval
+         APPROVED  → continue
+         REJECTED  → back to DEVELOPER
+
+    → DEVELOPER  @.claude/agents/developer.md
+         mode: implementation
+         make test must pass before notifying team-lead
+
+    → parallel reviews (simultaneously):
+         CODE-REVIEWER      @.claude/agents/code-reviewer.md
+         SECURITY-REVIEWER  @.claude/agents/security-reviewer.md
+         TEST-VALIDATOR     @.claude/agents/test-validator.md
+
+    All APPROVED:
+         → DEVELOPER  mode: reflection
+              docs/reflections/TASK-XXX-reflection.md
+         → MERGER  @.claude/agents/merger.md
+              make merge + gh pr merge --squash --auto + gh pr checks --watch
+         make clean TASK=XXX NAME=yyy
+
+    Any BLOCKED:
+         → DEVELOPER  fix issues
+         → re-run parallel reviews
+
+---
 
 ## Model routing
 
-| Agent    | Model                     | Definition                        |
-|----------|---------------------------|-----------------------------------|
-| ERWAN    | claude-sonnet-4-6         | @.claude/agents/ERWAN.md          |
-| JEROME   | claude-opus-4-6           | @.claude/agents/JEROME.md         |
-| JIBE     | claude-sonnet-4-6         | @.claude/agents/JIBE.md           |
-| FRANCIS  | claude-sonnet-4-6         | @.claude/agents/FRANCIS.md        |
-| GUILLAUME| claude-haiku-4-5-20251001 | @.claude/agents/GUILLAUME.md      |
-| ALEXANDRA| claude-haiku-4-5-20251001 | @.claude/agents/ALEXANDRA.md      |
-| BENOIT   | claude-sonnet-4-6         | @.claude/agents/BENOIT.md         |
-| JULIEN   | claude-haiku-4-5-20251001 | @.claude/agents/JULIEN.md         |
+| Agent              | Model                     | Definition                           |
+|--------------------|---------------------------|--------------------------------------|
+| PROJECT-MANAGER    | claude-sonnet-4-6         | @.claude/agents/project-manager.md   |
+| DEVOPS             | claude-sonnet-4-6         | @.claude/agents/devops.md            |
+| PLANNER            | claude-sonnet-4-6         | @.claude/agents/planner.md           |
+| ARCHITECT          | claude-opus-4-6           | @.claude/agents/architect.md         |
+| DEVELOPER          | claude-opus-4-6           | @.claude/agents/developer.md         |
+| CODE-REVIEWER      | claude-sonnet-4-6         | @.claude/agents/code-reviewer.md     |
+| SECURITY-REVIEWER  | claude-sonnet-4-6         | @.claude/agents/security-reviewer.md |
+| TEST-VALIDATOR     | claude-haiku-4-5-20251001 | @.claude/agents/test-validator.md    |
+| MERGER             | claude-haiku-4-5-20251001 | @.claude/agents/merger.md            |
 
-## Spawning agents (visible tmux)
+---
 
-```js
-TeamCreate({ team_name: "project-phase1", description: "..." })
-TaskCreate({ subject: "TASK-XXX: ...", description: "..." })
-TaskUpdate({ taskId: "N", owner: "JEROME-XXX", status: "in_progress" })
+## Spawning agents
 
-// Read the agent file and include it in the prompt
-Agent({ name: "JEROME-XXX", team_name: "project-phase1", model: "opus",
-  prompt: `[contents of .claude/agents/JEROME.md]\n\nTicket context:\n...` })
-```
+TeamCreate with team_name and description.
+TaskCreate with subject "TASK-XXX: ..." and description.
+TaskUpdate with taskId, owner "AGENT-XXX", status "in_progress".
 
-**Shutdown:** always manual — `{"type":"shutdown_request"}` after receiving the completion message.
+Always read the agent file and include its contents in the prompt:
+
+    Agent(
+      name: "DEVELOPER-XXX",
+      team_name: "project-phase1",
+      model: "opus",
+      prompt: contents of .claude/agents/developer.md + ticket context
+    )
+
+Agents become idle after sending their summary.
+Team-lead sends shutdown_request to terminate them.
+
+---
 
 ## Global rules
 
 - **Circuit-breaker:** agent stuck after 3 iterations → kill and reassign
-- **Plan approval:** ERWAN validates BEFORE JEROME codes
-- **Parallel reviews:** JIBE, FRANCIS, GUILLAUME, ALEXANDRA simultaneously
-- **BENOIT:** only on conflict, not on every ticket
-- **Reflection:** after reviews, not before merge
-- **CI:** branch protection + `--auto` + `--watch` = double lock
+- **Spec first:** ARCHITECT validates spec BEFORE DEVELOPER plans
+- **Plan approval:** ARCHITECT approves plan BEFORE DEVELOPER codes
+- **Tests before reviews:** DEVELOPER runs make test before notifying
+  team-lead — do not dispatch reviews on broken code
+- **Parallel reviews:** CODE-REVIEWER, SECURITY-REVIEWER, TEST-VALIDATOR
+  run simultaneously
+- **Any BLOCKED = no merge:** one blocking verdict from any reviewer
+  stops the merge — security always wins over code style
+- **Reflection:** after all reviews approved, before merge
+- **CI:** branch protection + --auto + --watch = double lock
 - **PR title:** task subject, never the last commit message
-- **e2e tests:** mandatory for any UI/filter/interaction task (unless noted in acceptance_criteria)
-- **Silent mode:** enforced by `.claude/hooks/silent-mode-check.sh`
+- **e2e tests:** mandatory for any UI/filter/interaction task unless
+  explicitly noted otherwise in acceptance_criteria
+- **Silent mode:** enforced by .claude/hooks/silent-mode-check.sh
+- **Port isolation:** each agent running a local server derives its port
+  from the task number — 5180 + TASK_NUM — to avoid conflicts
+- **project-context.json:** available to all agents — read it for
+  project conventions, entities, roles, and constraints

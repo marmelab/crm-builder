@@ -1,11 +1,11 @@
 ---
 name: reflection-writing
-description: How and when to write a post-implementation reflection. Used by JEROME after reviews are complete.
+description: How and when to write a post-implementation reflection. Used by DEVELOPER after reviews are complete.
 ---
 
 ## When to write it
 
-After all parallel reviews (JIBE, FRANCIS, GUILLAUME, ALEXANDRA) are complete — never before merge.
+After all parallel reviews (CODE-REVIEWER, SECURITY-REVIEWER, TEST-VALIDATOR) are complete — never before merge.
 
 ## Where to put it
 
@@ -35,4 +35,4 @@ docs/reflections/TASK-XXX-reflection.md
 
 ## Purpose
 
-Reflections are read by JEROME **before** implementing future tasks in the same domain. Reading `docs/reflections/` files related to the current task is mandatory before starting implementation.
+Reflections are read by DEVELOPER **before** implementing future tasks in the same domain. Reading `docs/reflections/` files related to the current task is mandatory before starting implementation.

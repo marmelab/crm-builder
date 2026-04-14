@@ -17,11 +17,11 @@ Exception: if the task is pure CSS or a DB migration only, this must be explicit
 
 e2e/task-xxx-<feature-name>.spec.ts
 
-Name the file after the ticket and feature — makes it easy for GUILLAUME to find it.
+Name the file after the ticket and feature — makes it easy for TEST-VALIDATOR to find it.
 
 ## What to verify
 
-JEROME writes them, GUILLAUME checks they exist and are syntactically valid.
+DEVELOPER writes them, TEST-VALIDATOR checks they exist and are syntactically valid.
 CI runs them — agents do not need to execute them locally.
 
 ## Checking syntax without running
