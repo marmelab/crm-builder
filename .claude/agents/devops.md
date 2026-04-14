@@ -80,7 +80,7 @@ git branch -m clean-start main
 git remote remove origin
 
 gh repo create "{github_username}/{project_name}-crm" \
-  --private \
+  --public \
   --source=. \
   --remote=origin \
   --push
