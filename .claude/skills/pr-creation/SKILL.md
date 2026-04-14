@@ -5,7 +5,6 @@ description: How to create a PR, enable auto-merge, and monitor CI for a task br
 
 ## Standard workflow
 
-```bash
 # 1. From the task worktree
 cd worktrees/TASK-XXX
 
@@ -14,12 +13,18 @@ make merge TASK=XXX TITLE="feat/fix: <ticket description>"
 # TITLE always comes from the task subject — never the last commit message
 # Use TaskGet if you need to retrieve the subject
 
-# 3. Enable auto-merge (squash)
-gh pr merge --squash --auto <PR_NUMBER>
+# 3. Watch CI first — never merge before CI is green
+    gh pr checks <PR_NUMBER> --watch
+    EXIT=$?
 
-# 4. Watch CI
-gh pr checks <PR_NUMBER> --watch
-```
+    if [ $EXIT -ne 0 ]; then
+      echo "CI failed — merge blocked. Report to team-lead."
+      exit 1
+    fi
+
+# 4. Enable auto-merge only if CI passed
+    gh pr merge --squash --auto <PR_NUMBER>
+
 
 ## Interpreting the result
 
