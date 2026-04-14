@@ -29,22 +29,149 @@ Resume from the last incomplete phase in `phase_status` if restarting.
 
 ---
 
-## Phase 1 — Fork
+# Phase 0 — Install required CLIs if not present
+
+# GitHub CLI
+if ! command -v gh &> /dev/null; then
+  curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+    | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] \
+    https://cli.github.com/packages stable main" \
+    | tee /etc/apt/sources.list.d/github-cli.list
+  apt-get update && apt-get install -y gh
+fi
+
+# Supabase CLI
+if ! command -v supabase &> /dev/null; then
+  curl -fsSL https://supabase.io/install.sh | sh
+fi
+
+# Vercel CLI
+if ! command -v vercel &> /dev/null; then
+  npm install -g vercel
+fi
+
+---
+
+## Phase 1 — Clone and create repo
+
+### Step 1 — Clone atomic-crm without history
 
 ```bash
-gh repo fork marmelab/atomic-crm \
-  --clone=false \
-  --fork-name "{project_name}-crm"
+mkdir -p projects
+git clone --depth 1 https://github.com/marmelab/atomic-crm \
+  "projects/{project_name}-crm"
 
-# Verify fork exists
-gh repo view "{github_username}/{project_name}-crm"
+cd "projects/{project_name}-crm"
+
+# Squash entire history into a single clean commit
+git checkout --orphan clean-start
+git add -A
+git commit -m "chore: initial setup from atomic-crm"
+
+# Replace the default branch
+git branch -D main 2>/dev/null || true
+git branch -m clean-start main
+```
+
+### Step 2 — Remove atomic-crm remote, create your own repo
+
+```bash
+git remote remove origin
+
+gh repo create "{github_username}/{project_name}-crm" \
+  --private \
+  --source=. \
+  --remote=origin \
+  --push
+```
+
+### Step 3 — Set up branch protection on main
+
+The CI jobs from atomic-crm are already present. Reference their exact names
+in the required status checks:
+
+```bash
+gh api repos/{github_username}/{project_name}-crm/branches/main/protection \
+  --method PUT \
+  --field required_status_checks='{
+    "strict": true,
+    "contexts": [
+      "🔬 ESLint",
+      "🏷️ Typecheck",
+      "🔎 Test",
+      "🔨 Build"
+    ]
+  }' \
+  --field enforce_admins=false \
+  --field required_pull_request_reviews='{"required_approving_review_count":0,"dismiss_stale_reviews":true}' \
+  --field restrictions=null \
+  --field allow_force_pushes=false \
+  --field allow_deletions=false
+```
+
+Note: e2e-test is intentionally excluded from required checks — e2e tests
+are flaky in CI and should not block merges. They still run and are visible.
+
+### Step 4 — Verify CI
+
+The CI workflow already exists from atomic-crm (lint, typecheck, test,
+e2e, build). Verify it is present and skip creation:
+
+```bash
+ls .github/workflows/
+```
+
+If missing for any reason, report to team-lead — do not create a custom
+CI workflow without explicit instructions.
+
+### Step 5 — Set up worktree support (Makefile)
+
+Verify the Makefile has the worktree commands agents depend on.
+If `spin`, `merge`, `clean`, `typecheck`, and `test` targets are already
+present, skip. Otherwise add the missing ones:
+
+```makefile
+TASK ?= $(error TASK is required)
+NAME ?= $(error NAME is required)
+
+spin:
+	git worktree add worktrees/$(TASK) -b $(NAME)
+	cd worktrees/$(TASK) && ln -s ../../node_modules node_modules
+
+merge:
+	cd worktrees/$(TASK) && \
+	git rebase main && \
+	git push origin HEAD && \
+	gh pr create --title "$(TITLE)" --body "" --base main
+
+clean:
+	git worktree remove worktrees/$(TASK) --force
+	git branch -D $(NAME) 2>/dev/null || true
+
+typecheck:
+	npm run typecheck
+
+test:
+	npm test -- --run
+```
+
+Commit if modified:
+
+```bash
+git add Makefile
+git commit -m "chore: add worktree targets to Makefile" 2>/dev/null || true
+git push origin main 2>/dev/null || true
 ```
 
 Update `project-context.json`:
+
 ```json
 "repo_url": "https://github.com/{github_username}/{project_name}-crm",
+"local_path": "projects/{project_name}-crm",
 "phase_status": { "fork": { "status": "done", "timestamp": "..." } }
 ```
+
 
 ---
 
