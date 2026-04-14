@@ -9,44 +9,56 @@ description: Multi-agent team workflow for implementing tickets. Use when dispat
 
 Check project-context.json at project root:
 
-- Does not exist or validated: false
+  Does not exist or validated: false
     → PROJECT-MANAGER  @.claude/agents/project-manager.md
-    → produces project-context.json with validated: true
+        ↓ (produces project-context.json with validated: true)
 
-- validated: true, bootstrapped: false
-    → DEVOPS  @.claude/agents/devops.md
-    → fork + supabase + env + deploy → bootstrapped: true
+  validated: true, bootstrapped: false
+    → DEVOPS           @.claude/agents/devops.md
+        ↓ (fork + supabase + env + deploy → bootstrapped: true)
 
-- validated: true, bootstrapped: true
+  validated: true, bootstrapped: true
     → proceed to Phase 1
-
----
 
 ### Phase 1 — Ticket planning (once per feature/need)
 
-    → PLANNER  @.claude/agents/planner.md
-    → produces ordered list of TASK-XXX tickets
+    → PLANNER            @.claude/agents/planner.md
+        ↓ produces ordered list of TASK-XXX tickets
+        ↓ writes each ticket to docs/tickets/TASK-XXX.json
+        ↓ writes ticket list to project-context.json under "tickets" key
 
----
+### Phase 1b — Session resume (if ~/.claude/tasks/ is empty)
+
+On session start, check if tasks exist in ~/.claude/tasks/:
+
+  Tasks missing but docs/tickets/ contains tickets
+    → read project-context.json tickets array
+    → recreate each pending ticket via TaskCreate
+    → resume from last incomplete ticket
+
+  No tickets at all
+    → proceed to Phase 1 (new planning session)
 
 ### Phase 2 — Per-ticket cycle
 
     make spin TASK=XXX NAME=yyy
 
-    → ARCHITECT  @.claude/agents/architect.md
+    → ARCHITECT          @.claude/agents/architect.md
          mode: spec validation
+         reads ticket from docs/tickets/TASK-XXX.json
          APPROVED  → continue
          BLOCKED   → back to PLANNER
 
-    → DEVELOPER  @.claude/agents/developer.md
+    → DEVELOPER          @.claude/agents/developer.md
          mode: plan
+         reads ticket from docs/tickets/TASK-XXX.json
 
-    → ARCHITECT  @.claude/agents/architect.md
+    → ARCHITECT          @.claude/agents/architect.md
          mode: plan approval
          APPROVED  → continue
          REJECTED  → back to DEVELOPER
 
-    → DEVELOPER  @.claude/agents/developer.md
+    → DEVELOPER          @.claude/agents/developer.md
          mode: implementation
          make test must pass before notifying team-lead
 
@@ -60,6 +72,7 @@ Check project-context.json at project root:
               docs/reflections/TASK-XXX-reflection.md
          → MERGER  @.claude/agents/merger.md
               make merge + gh pr merge --squash --auto + gh pr checks --watch
+         → update docs/tickets/TASK-XXX.json status to "merged"
          make clean TASK=XXX NAME=yyy
 
     Any BLOCKED:
@@ -68,19 +81,70 @@ Check project-context.json at project root:
 
 ---
 
+## Ticket persistence
+
+Tickets are stored in two places:
+
+- ~/.claude/tasks/ — native agent teams storage (session-scoped, lost on sandbox restart)
+- docs/tickets/TASK-XXX.json — permanent project storage (source of truth)
+
+All agents read tickets from docs/tickets/TASK-XXX.json.
+The team-lead reads project-context.json on session start and recreates
+tasks via TaskCreate if ~/.claude/tasks/ is empty.
+
+---
+
+## Ticket format in docs/tickets/TASK-XXX.json
+
+``````json
+{
+  "ticket_id": "TASK-001",
+  "title": "Short imperative title",
+  "description": "What needs to be done and why",
+  "type": "feature|fix|migration|config",
+  "risk_level": "low|medium|high",
+  "acceptance_criteria": [
+    "Specific, testable, verifiable statement"
+  ],
+  "non_functional_requirements": {
+    "performance": "...",
+    "security": "...",
+    "scalability": "..."
+  },
+  "dependencies": ["TASK-000"],
+  "status": "pending|in_progress|merged"
+}
+``````
+
+---
+
 ## Model routing
 
-| Agent              | Model                     | Definition                           |
-|--------------------|---------------------------|--------------------------------------|
-| PROJECT-MANAGER    | claude-sonnet-4-6         | @.claude/agents/project-manager.md   |
-| DEVOPS             | claude-sonnet-4-6         | @.claude/agents/devops.md            |
-| PLANNER            | claude-sonnet-4-6         | @.claude/agents/planner.md           |
-| ARCHITECT          | claude-opus-4-6           | @.claude/agents/architect.md         |
-| DEVELOPER          | claude-opus-4-6           | @.claude/agents/developer.md         |
-| CODE-REVIEWER      | claude-sonnet-4-6         | @.claude/agents/code-reviewer.md     |
-| SECURITY-REVIEWER  | claude-sonnet-4-6         | @.claude/agents/security-reviewer.md |
-| TEST-VALIDATOR     | claude-haiku-4-5-20251001 | @.claude/agents/test-validator.md    |
-| MERGER             | claude-haiku-4-5-20251001 | @.claude/agents/merger.md            |
+| Agent              | Model                     | Definition                               |
+|--------------------|---------------------------|------------------------------------------|
+| PROJECT-MANAGER    | claude-sonnet-4-6         | @.claude/agents/project-manager.md       |
+| DEVOPS             | claude-sonnet-4-6         | @.claude/agents/devops.md                |
+| PLANNER            | claude-sonnet-4-6         | @.claude/agents/planner.md               |
+| ARCHITECT          | claude-opus-4-6           | @.claude/agents/architect.md             |
+| DEVELOPER          | claude-opus-4-6           | @.claude/agents/developer.md             |
+| CODE-REVIEWER      | claude-sonnet-4-6         | @.claude/agents/code-reviewer.md         |
+| SECURITY-REVIEWER  | claude-sonnet-4-6         | @.claude/agents/security-reviewer.md     |
+| TEST-VALIDATOR     | claude-haiku-4-5-20251001 | @.claude/agents/test-validator.md        |
+| MERGER             | claude-haiku-4-5-20251001 | @.claude/agents/merger.md                |
+
+## Model selection rationale
+
+HAIKU — lightweight agents with low reasoning requirements,
+high invocation frequency, deterministic output:
+TEST-VALIDATOR, MERGER
+
+SONNET — main review and analysis work, orchestration,
+complex structured output:
+PROJECT-MANAGER, DEVOPS, PLANNER, CODE-REVIEWER, SECURITY-REVIEWER
+
+OPUS — deep architectural reasoning, long implementation sessions,
+decisions with lasting consequences:
+ARCHITECT, DEVELOPER
 
 ---
 
@@ -97,6 +161,7 @@ Always read the agent file and include its contents in the prompt:
       team_name: "project-phase1",
       model: "opus",
       prompt: contents of .claude/agents/developer.md + ticket context
+              + contents of docs/tickets/TASK-XXX.json
     )
 
 Agents become idle after sending their summary.
@@ -125,3 +190,5 @@ Team-lead sends shutdown_request to terminate them.
   from the task number — 5180 + TASK_NUM — to avoid conflicts
 - **project-context.json:** available to all agents — read it for
   project conventions, entities, roles, and constraints
+- **Ticket source of truth:** docs/tickets/TASK-XXX.json — always read
+  tickets from here, never rely solely on ~/.claude/tasks/
