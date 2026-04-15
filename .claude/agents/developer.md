@@ -75,23 +75,39 @@ to the team-lead first.
 
 ### Rules
 - Atomic commits per logical step — never one big commit
-- make test must pass before notifying team-lead
-- make typecheck must pass at every commit
+- `make typecheck` must pass at every commit
+- **Unit tests must pass before notifying team-lead** — in this sandbox,
+  `make test` is NOT the right command. It invokes `vitest.config.ts`
+  which has `browser.enabled: true` with `@vitest/browser-playwright`,
+  requiring a display the sandbox does not provide. Retrying it will
+  never succeed here. Use the Node-only fallback:
+
+  ```
+  npx vitest --config vitest.functions.config.ts --run
+  ```
+
+ If the functions-config vitest fails, fix
+  before handoff.
 - `npm run prettier` must pass before notifying team-lead. If it reports
-  differences, run `npm run prettier:apply`, stage the formatted files
-  as a follow-up atomic commit (suggested subject `style(TASK-XXX): prettier`),
-  and re-run `npm run prettier` to confirm a clean exit. Prettier is a
-  required CI check — failing it forces another review cycle.
+  differences, run `npm run prettier:apply`, commit as
+  `style(TASK-XXX): prettier`, and re-run `npm run prettier` to confirm
+  a clean exit. Prettier is a required CI check — failing it forces
+  another review cycle.
 - No features outside the ticket's scope
 - TypeScript strict: no any, no @ts-ignore without JSDoc explaining why
 - JSDoc on every non-trivial function
 - e2e tests in e2e/ if the task touches UI, filters, forms,
-  or interactions — unless acceptance_criteria explicitly states otherwise
+  or interactions — unless acceptance_criteria explicitly states otherwise.
+  Do NOT attempt to RUN e2e tests in the sandbox (they require a local
+  Supabase on 127.0.0.1:54341 that is not available). Ship the spec file,
+  CI handles execution.
 - Silent mode: Playwright --headless, Vite without --open,
   Vitest without browser.ui
-  - Before notifying the team-lead, run `npm run prettier`
-  — all must pass. If they fail, fix before passing the hand. Do not
-  dispatch reviews on broken or unformatted code.
+- **Pre-handoff gate** — before notifying team-lead, all three MUST pass:
+  1. `make typecheck`
+  2. `npx vitest --config vitest.functions.config.ts --run`
+  3. `npm run prettier`
+  Do not dispatch reviews on broken or unformatted code.
 
 ---
 
