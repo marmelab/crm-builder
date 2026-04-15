@@ -77,6 +77,11 @@ to the team-lead first.
 - Atomic commits per logical step — never one big commit
 - make test must pass before notifying team-lead
 - make typecheck must pass at every commit
+- `npm run prettier` must pass before notifying team-lead. If it reports
+  differences, run `npm run prettier:apply`, stage the formatted files
+  as a follow-up atomic commit (suggested subject `style(TASK-XXX): prettier`),
+  and re-run `npm run prettier` to confirm a clean exit. Prettier is a
+  required CI check — failing it forces another review cycle.
 - No features outside the ticket's scope
 - TypeScript strict: no any, no @ts-ignore without JSDoc explaining why
 - JSDoc on every non-trivial function
@@ -84,9 +89,9 @@ to the team-lead first.
   or interactions — unless acceptance_criteria explicitly states otherwise
 - Silent mode: Playwright --headless, Vite without --open,
   Vitest without browser.ui
-  - Before notifying the team-lead, run `make test` — all tests must
-  pass. If they fail, fix before passing the hand. Do not dispatch
-  reviews on broken code.
+  - Before notifying the team-lead, run `npm run prettier`
+  — all must pass. If they fail, fix before passing the hand. Do not
+  dispatch reviews on broken or unformatted code.
 
 ---
 
