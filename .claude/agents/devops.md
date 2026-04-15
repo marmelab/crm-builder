@@ -63,6 +63,7 @@ git clone --depth 1 https://github.com/marmelab/atomic-crm \
   "projects/{project_name}-crm"
 
 cd "projects/{project_name}-crm"
+npm install
 
 # Squash entire history into a single clean commit
 git checkout --orphan clean-start
