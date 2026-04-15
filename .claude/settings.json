@@ -35,6 +35,21 @@
                     {
                         "type": "command",
                         "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/silent-mode-check.sh"
+                    },
+                    {
+                        "type": "command",
+                        "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/circuit-breaker.sh"
+                    }
+                ]
+            }
+        ],
+        "PostToolUse": [
+            {
+                "matcher": "Edit|Write",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/prettier-on-edit.sh"
                     }
                 ]
             }
@@ -45,6 +60,16 @@
                     {
                         "type": "command",
                         "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/typecheck-on-commit.sh"
+                    }
+                ]
+            }
+        ],
+        "TeammateIdle": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/token-stats.sh"
                     }
                 ]
             }
