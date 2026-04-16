@@ -41,6 +41,36 @@
                         "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/circuit-breaker.sh"
                     }
                 ]
+            },
+            {
+                "matcher": "Edit|Write",
+                "hooks": [
+                    {
+                        "type": "agent",
+                        "prompt": "Run the e2e tests with 'npx playwright test'. If any test fails, report the failures and their reasons so the main agent can fix them.",
+                        "timeout": 120
+                    }
+              ]
+            },
+            {
+                "matcher": "Edit|Write",
+                "hooks": [
+                    {
+                        "type": "agent",
+                        "prompt": "Run the unit tests with 'CI=true npm run test:unit:app'. If any test fails, report the failures and their reasons so the main agent can fix them.",
+                        "timeout": 120
+                    }
+              ]
+            },
+            {
+                "matcher": "Edit|Write",
+                "hooks": [
+                    {
+                        "type": "agent",
+                        "prompt": "Run the unit tests with 'CI=true npm run test:unit:functions'. If any test fails, report the failures and their reasons so the main agent can fix them.",
+                        "timeout": 120
+                    }
+              ]
             }
         ],
         "PostToolUse": [
