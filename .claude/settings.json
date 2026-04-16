@@ -46,31 +46,37 @@
                 "matcher": "Edit|Write",
                 "hooks": [
                     {
-                        "type": "agent",
-                        "prompt": "Run the e2e tests with 'npx playwright test'. If any test fails, report the failures and their reasons so the main agent can fix them.",
+                        "type": "command",
+                        "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/run-e2e-tests.sh",
+                        "asyncRewake": true,
+                        "rewakeMessage": "E2E tests failed:",
                         "timeout": 120
                     }
-              ]
+                ]
             },
             {
                 "matcher": "Edit|Write",
                 "hooks": [
                     {
-                        "type": "agent",
-                        "prompt": "Run the unit tests with 'CI=true npm run test:unit:app'. If any test fails, report the failures and their reasons so the main agent can fix them.",
+                        "type": "command",
+                        "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/run-unit-tests-app.sh",
+                        "asyncRewake": true,
+                        "rewakeMessage": "Unit tests (app) failed:",
                         "timeout": 120
                     }
-              ]
+                ]
             },
             {
                 "matcher": "Edit|Write",
                 "hooks": [
                     {
-                        "type": "agent",
-                        "prompt": "Run the unit tests with 'CI=true npm run test:unit:functions'. If any test fails, report the failures and their reasons so the main agent can fix them.",
+                        "type": "command",
+                        "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/run-unit-tests-functions.sh",
+                        "asyncRewake": true,
+                        "rewakeMessage": "Unit tests (functions) failed:",
                         "timeout": 120
                     }
-              ]
+                ]
             }
         ],
         "PostToolUse": [
