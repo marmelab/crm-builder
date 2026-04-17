@@ -1,35 +1,59 @@
-const widget  = document.getElementById('chat-widget');
-const fab     = document.getElementById('chat-fab');
-const toggle  = document.getElementById('chat-toggle');
-const form    = document.getElementById('chat-form');
-const input   = document.getElementById('chat-input');
-const send    = document.getElementById('chat-send');
-const status  = document.getElementById('chat-status');
+const widget   = document.getElementById('chat-widget');
+const fab      = document.getElementById('chat-fab');
+const toggle   = document.getElementById('chat-toggle');
+const expandBtn = document.getElementById('chat-expand');
+const debugBtn = document.getElementById('chat-debug');
+const form     = document.getElementById('chat-form');
+const input    = document.getElementById('chat-input');
+const send     = document.getElementById('chat-send');
+const statusDots = document.getElementById('chat-status-dots');
 const messages = document.getElementById('chat-messages');
 
-let working = false;
+let working  = false;
+let debugMode = false;
 
-// WebSocket
+const TOOL_LABELS = {
+  Task:       '🤖 Agent',
+  TeamCreate: '👥 Agent team',
+  TeamDelete: '✓  Agent team done',
+  Read:       '📖 Reading',
+  Write:      '✏️  Writing',
+  Edit:       '✏️  Editing',
+  Bash:       '⚡ Running command',
+  Glob:       '🔍 Searching files',
+  Grep:       '🔍 Searching code',
+};
+
 const ws = new WebSocket(`ws://${location.host}`);
 
 ws.onmessage = (event) => {
   let msg;
-  try {
-    msg = JSON.parse(event.data);
-  } catch {
-    return;
-  }
+  try { msg = JSON.parse(event.data); } catch { return; }
 
   if (msg.type === 'status') {
     working = msg.working;
     send.disabled = working;
-    status.textContent = working ? 'Working...' : '';
+    statusDots.style.display = working ? 'inline-flex' : 'none';
     const existing = messages.querySelector('.msg-working');
     if (working && !existing) {
-      appendMessage('working', '⟳ Working on it...');
+      const el = document.createElement('div');
+      el.className = 'msg msg-working';
+      const spinner = document.createElement('div');
+      spinner.className = 'spinner';
+      const label = document.createElement('span');
+      label.textContent = 'Working on it...';
+      el.appendChild(spinner);
+      el.appendChild(label);
+      messages.appendChild(el);
+      messages.scrollTop = messages.scrollHeight;
     } else if (!working && existing) {
       existing.remove();
     }
+    return;
+  }
+
+  if (msg.type === 'debug') {
+    if (debugMode) appendDebug(msg.tool, msg.input);
     return;
   }
 
@@ -48,6 +72,41 @@ function appendMessage(role, content) {
   const el = document.createElement('div');
   el.className = `msg msg-${role}`;
   el.textContent = content;
+  messages.appendChild(el);
+  messages.scrollTop = messages.scrollHeight;
+}
+
+function appendDebug(toolName, input) {
+  const label = TOOL_LABELS[toolName] || `🔧 ${toolName}`;
+  const el = document.createElement('div');
+  el.className = 'msg msg-debug';
+
+  const name = document.createElement('span');
+  name.className = 'debug-tool';
+  name.textContent = label;
+  el.appendChild(name);
+
+  // Single agent: show its description
+  if (toolName === 'Task' && input?.description) {
+    const detail = document.createElement('span');
+    detail.className = 'debug-detail';
+    detail.textContent = input.description;
+    el.appendChild(detail);
+  }
+
+  // Agent team: list member names
+  if (toolName === 'TeamCreate') {
+    const members = Array.isArray(input?.agents)
+      ? input.agents.map((a) => a.name || a).join(', ')
+      : input?.description || '';
+    if (members) {
+      const detail = document.createElement('span');
+      detail.className = 'debug-detail';
+      detail.textContent = `Members: ${members}`;
+      el.appendChild(detail);
+    }
+  }
+
   messages.appendChild(el);
   messages.scrollTop = messages.scrollHeight;
 }
@@ -84,4 +143,21 @@ toggle.addEventListener('click', () => {
 fab.addEventListener('click', () => {
   widget.classList.remove('chat-closed');
   fab.style.display = 'none';
+});
+
+// Expand toggle
+expandBtn.addEventListener('click', () => {
+  const expanded = widget.classList.toggle('chat-expanded');
+  expandBtn.textContent = expanded ? '⤡' : '⤢';
+  expandBtn.title = expanded ? 'Reduce' : 'Expand';
+});
+
+// Debug toggle
+debugBtn.addEventListener('click', () => {
+  debugMode = !debugMode;
+  debugBtn.classList.toggle('debug-active', debugMode);
+  debugBtn.title = debugMode ? 'Debug ON' : 'Debug OFF';
+  if (!debugMode) {
+    messages.querySelectorAll('.msg-debug').forEach((el) => el.remove());
+  }
 });

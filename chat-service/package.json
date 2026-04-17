@@ -7,7 +7,6 @@
     "test": "node --test test/server.test.js"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "latest",
     "ws": "^8.18.0"
   }
 }

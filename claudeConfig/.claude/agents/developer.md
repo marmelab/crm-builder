@@ -32,6 +32,19 @@ Follow the output format in .claude/rules/agent-output-format.md.
 
 ---
 
+### Environment check — do this first
+
+Run `echo $MODE` before anything else.
+
+**If MODE=demo:**
+- The app uses FakeRest (in-memory data in the browser). There is NO database.
+- NEVER create SQL migration files, NEVER run supabase commands.
+- Adding a field means: update the TypeScript type + update the fake data generator (look in `src/` for fakerest or dataProvider files).
+- Do not mention database or migrations anywhere.
+
+**If MODE=full:**
+- Supabase is running. Schema changes require a migration file in `supabase/migrations/`.
+
 ### Pre-plan checklist
 1. Read docs/tickets/TASK-XXX.json
 2. Extend existing code, don't recreate it

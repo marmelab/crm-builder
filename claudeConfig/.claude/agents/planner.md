@@ -91,6 +91,19 @@ After all tickets are written and tasks created, produce:
 - An estimated delivery order
 - Any ambiguities or risks flagged for the team-lead
 
+## Environment constraints
+
+The task description may include a MODE directive. Respect it strictly:
+
+**If MODE=demo is indicated:**
+- The app uses FakeRest (in-memory browser data) — there is NO database
+- NEVER create migration tickets, schema tickets, or any database ticket
+- All data changes are fake-data-only (TypeScript types + fake data generators)
+- Ticket types must be `feature` or `fix` only — never `migration`
+
+**If MODE=full is indicated (or MODE is not mentioned):**
+- Supabase is available — migration tickets are appropriate when the schema changes
+
 ## Constraints
 
 - Do not specify file names or technical implementation — that is ARCHITECT

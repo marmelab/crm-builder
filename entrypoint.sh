@@ -20,10 +20,10 @@ echo -e "${BOLD}${BLUE}╚══════════════════
 echo ""
 
 # ── Auth check — API key or OAuth token ───────────────────────
-OAUTH_TOKEN_FILE="/home/developer/.claude/credentials.json"
+CLAUDE_DIR="/home/developer/.claude"
 if [ -n "${ANTHROPIC_API_KEY}" ]; then
   echo -e "${GREEN}✓  Auth: API key${NC}"
-elif [ -f "${OAUTH_TOKEN_FILE}" ]; then
+elif [ -f "${CLAUDE_DIR}/.credentials.json" ] || [ -f "${CLAUDE_DIR}/credentials.json" ]; then
   echo -e "${GREEN}✓  Auth: OAuth token (claude login)${NC}"
 else
   echo -e "${YELLOW}⚠️   No authentication found — starting terminal for claude login${NC}"
@@ -32,8 +32,15 @@ else
   echo -e "  → Run: ${YELLOW}claude login${NC}"
   echo -e "  → Then restart this container (Ctrl+C, then docker compose up again)"
   echo ""
+  export HOME=/home/developer
   exec /usr/local/bin/ttyd --port 7681 --writable --interface 0.0.0.0 /usr/local/bin/ttyd-session.sh
 fi
+
+# Always use the image's .claude config (volume may have stale copy)
+cp -f /root/.claude/settings.json /home/developer/.claude/settings.json 2>/dev/null || true
+
+# Fix ownership — credentials written during bootstrap run as root
+chown -R developer:developer /home/developer/.claude 2>/dev/null || true
 
 cd ${APP_DIR}
 

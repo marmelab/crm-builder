@@ -87,7 +87,8 @@ RUN useradd -m -s /bin/bash developer \
     && chown -R developer:developer /home/developer \
     && chown -R developer:developer /app \
     && mkdir -p /worktrees && chown developer:developer /worktrees \
-    && mkdir -p /app/node_modules/.vite && chown -R developer:developer /app/node_modules/.vite
+    && mkdir -p /app/node_modules/.vite && chown -R developer:developer /app/node_modules/.vite \
+    && ln -sf .claude/.claude.json /home/developer/.claude.json
 
 # ── Save original App.tsx (Supabase mode) ─────────────────────
 RUN cp src/App.tsx src/App.supabase.tsx
