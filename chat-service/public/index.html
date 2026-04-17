@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Atomic CRM</title>
+  <link rel="stylesheet" href="/chat.css">
+</head>
+<body>
+  <iframe id="crm-frame" src="http://localhost:5173" allow="same-origin"></iframe>
+
+  <div id="chat-widget" class="chat-open">
+    <div id="chat-header">
+      <span id="chat-title">✦ CRM Assistant</span>
+      <span id="chat-status"></span>
+      <button id="chat-toggle" aria-label="Toggle chat">✕</button>
+    </div>
+    <div id="chat-messages"></div>
+    <form id="chat-form">
+      <textarea
+        id="chat-input"
+        placeholder="Ask me to customize your CRM..."
+        rows="1"
+        autocomplete="off"
+      ></textarea>
+      <button type="submit" id="chat-send" aria-label="Send">↑</button>
+    </form>
+  </div>
+
+  <button id="chat-fab" aria-label="Open assistant">✦</button>
+
+  <script src="/chat.js"></script>
+</body>
+</html>
