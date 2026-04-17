@@ -52,6 +52,11 @@ ws.onmessage = (event) => {
     return;
   }
 
+  if (msg.type === 'choices') {
+    appendChoices(msg.content, msg.options);
+    return;
+  }
+
   if (msg.type === 'debug') {
     if (debugMode) appendDebug(msg.tool, msg.input);
     return;
@@ -67,6 +72,40 @@ ws.onmessage = (event) => {
 ws.onclose = () => {
   appendMessage('assistant', 'Connection lost. Please reload the page.');
 };
+
+function appendChoices(content, options) {
+  const wrap = document.createElement('div');
+  wrap.className = 'msg-choices';
+
+  const text = document.createElement('p');
+  text.className = 'choices-text';
+  text.textContent = content;
+  wrap.appendChild(text);
+
+  options.forEach(({ id, label, sublabel }) => {
+    const btn = document.createElement('button');
+    btn.className = 'choice-btn';
+    const lbl = document.createElement('span');
+    lbl.className = 'choice-label';
+    lbl.textContent = label;
+    btn.appendChild(lbl);
+    if (sublabel) {
+      const sub = document.createElement('span');
+      sub.className = 'choice-sublabel';
+      sub.textContent = sublabel;
+      btn.appendChild(sub);
+    }
+    btn.addEventListener('click', () => {
+      wrap.remove();
+      appendMessage('user', label);
+      ws.send(JSON.stringify({ content: id }));
+    });
+    wrap.appendChild(btn);
+  });
+
+  messages.appendChild(wrap);
+  messages.scrollTop = messages.scrollHeight;
+}
 
 function appendMessage(role, content) {
   const el = document.createElement('div');

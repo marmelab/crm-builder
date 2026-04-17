@@ -106,6 +106,25 @@ body { height: 100vh; overflow: hidden; font-family: system-ui, sans-serif; back
   border-bottom-left-radius: 4px;
 }
 
+/* Mode choice buttons */
+.msg-choices {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 4px 0;
+}
+.choices-text {
+  font-size: 14px; color: #f2f2f7; margin-bottom: 4px; line-height: 1.5;
+}
+.choice-btn {
+  display: flex; flex-direction: column; gap: 3px;
+  background: #2c2c2e; border: 1px solid #3a3a3c;
+  border-radius: 12px; padding: 12px 16px;
+  cursor: pointer; text-align: left;
+  transition: border-color .15s, background .15s;
+}
+.choice-btn:hover { border-color: #3b82f6; background: #1e2a3a; }
+.choice-label { font-size: 14px; color: #f2f2f7; font-weight: 500; }
+.choice-sublabel { font-size: 11px; color: #636366; }
+
 /* Debug messages */
 .msg-debug {
   align-self: flex-start;

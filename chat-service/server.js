@@ -11,7 +11,14 @@ const PORT = 8080;
 const CWD = '/app';
 const CLAUDE_HOME = '/home/developer';
 const ORCHESTRATOR_MD = `${CLAUDE_HOME}/.claude/agents/chat-orchestrator.md`;
-const WELCOME = 'Hello, ready to build your dreaming CRM? Ask me in any language';
+const WELCOME_CHOICES = {
+  type: 'choices',
+  content: 'Hello! How can I help you today?',
+  options: [
+    { id: 'FULL_SETUP', label: '🗺️  Set up my CRM from scratch', sublabel: 'Interview to understand your business and build a complete plan' },
+    { id: 'QUICK_EDIT', label: '⚡ Make a quick change',          sublabel: 'Describe what you want to add or modify' },
+  ],
+};
 
 async function loadSystemPrompt() {
   try {
@@ -151,7 +158,7 @@ httpServer.on('error', (err) => console.error('HTTP server error:', err));
 
 wss.on('connection', (ws) => {
   connections.set(ws, { sessionId: null, busy: false, queue: [] });
-  safeSend(ws, { type: 'message', role: 'assistant', content: WELCOME });
+  safeSend(ws, WELCOME_CHOICES);
 
   ws.on('message', (data) => {
     let parsed;
