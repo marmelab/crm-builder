@@ -22,10 +22,7 @@
         "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
     },
     "permissions": {
-        "allow": [
-            "Bash(npx tsc:*)",
-            "Bash(grep)"
-        ]
+        "allow": []
     },
     "hooks": {
         "PreToolUse": [
@@ -39,6 +36,44 @@
                     {
                         "type": "command",
                         "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/circuit-breaker.sh"
+                    }
+                ]
+            },
+        ],
+    "SubagentStop": [
+            {
+                "matcher": "developer",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/run-e2e-tests.sh",
+                        "asyncRewake": true,
+                        "rewakeMessage": "E2E tests failed after developer finished:",
+                        "timeout": 120
+                    }
+                ]
+            },
+            {
+                "matcher": "developer",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/run-unit-tests-app.sh",
+                        "asyncRewake": true,
+                        "rewakeMessage": "Unit tests (app) failed after developer finished:",
+                        "timeout": 120
+                    }
+                ]
+            },
+            {
+                "matcher": "developer",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/run-unit-tests-functions.sh",
+                        "asyncRewake": true,
+                        "rewakeMessage": "Unit tests (functions) failed after developer finished:",
+                        "timeout": 120
                     }
                 ]
             }
