@@ -38,7 +38,7 @@
                         "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/circuit-breaker.sh"
                     }
                 ]
-            },
+            }
         ],
         "SubagentStop": [
             {
