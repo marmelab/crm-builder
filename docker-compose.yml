@@ -1,0 +1,49 @@
+# ─────────────────────────────────────────────────────────────
+#  docker compose --profile demo up   → FakeRest mode (lightweight)
+#  docker compose --profile full up   → Supabase mode (full stack)
+# ─────────────────────────────────────────────────────────────
+
+x-base: &base
+  build: .
+  image: atomic-crm-dev
+  environment:
+    - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+  volumes:
+    - crm-source:/app/src      # persisted code changes
+    - crm-worktrees:/worktrees
+
+services:
+
+  # ── Demo mode — FakeRest, starts in seconds ────────────────
+  crm-demo:
+    <<: *base
+    profiles: [ demo ]
+    container_name: atomic-crm-demo
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - MODE=demo
+    ports:
+      - "5173:5173" # CRM
+      - "7681:7681" # Claude terminal
+
+  # ── Full mode — local Supabase, requires Docker socket ─────
+  crm-full:
+    <<: *base
+    profiles: [ full ]
+    container_name: atomic-crm-full
+    network_mode: host # Supabase runs on the host via Docker socket;
+                       # host networking makes localhost:54321 reachable from inside the container
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - MODE=full
+    # No ports: with network_mode: host, host ports are directly exposed
+    volumes:
+      - crm-source:/app/src
+      - crm-worktrees:/worktrees
+      - /var/run/docker.sock:/var/run/docker.sock # ⚠️ required
+      - supabase-cache:/root/.docker              # cache pulled images
+
+volumes:
+  crm-source:
+  crm-worktrees:
+  supabase-cache:
