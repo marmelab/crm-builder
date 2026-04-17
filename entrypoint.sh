@@ -19,13 +19,24 @@ fi
 echo -e "${BOLD}${BLUE}╚══════════════════════════════════════════════════════╝${NC}"
 echo ""
 
-# ── API key check ─────────────────────────────────────────────
-if [ -z "${ANTHROPIC_API_KEY}" ]; then
-  echo -e "${RED}❌  ANTHROPIC_API_KEY is missing!${NC}"
-  echo "    Add: -e ANTHROPIC_API_KEY=sk-ant-..."
+# ── Auth check — API key or OAuth token ───────────────────────
+OAUTH_TOKEN_FILE="/home/developer/.claude/credentials.json"
+if [ -n "${ANTHROPIC_API_KEY}" ]; then
+  echo -e "${GREEN}✓  Auth: API key${NC}"
+elif [ -f "${OAUTH_TOKEN_FILE}" ]; then
+  echo -e "${GREEN}✓  Auth: OAuth token (claude login)${NC}"
+else
+  echo -e "${RED}❌  No authentication found!${NC}"
+  echo ""
+  echo "    Option 1 — API key:"
+  echo "      docker run -e ANTHROPIC_API_KEY=sk-ant-... ..."
+  echo ""
+  echo "    Option 2 — OAuth (Claude Max/Teams):"
+  echo "      Start the container once, open http://localhost:7681"
+  echo "      and run: claude login"
+  echo "      Then restart — your token will persist via the claude-auth volume."
   exit 1
 fi
-echo -e "${GREEN}✓  Anthropic API key found${NC}"
 
 cd ${APP_DIR}
 
@@ -88,6 +99,7 @@ echo -e "  ${BLUE}🌐  CRM              →  http://localhost:5173${NC}"
 if [ "$MODE" = "full" ]; then
 echo -e "  ${BLUE}🗄️   Supabase          →  http://localhost:54323${NC}"
 fi
+echo -e "  ${BLUE}💬  Chat assistant    →  http://localhost:8080${NC}"
 echo -e "  ${BLUE}🤖  Claude terminal   →  http://localhost:7681${NC}"
 echo ""
 echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"

@@ -105,6 +105,11 @@ RUN chmod +x /usr/local/bin/switch-mode /usr/local/bin/ttyd-session.sh
 COPY supervisord.demo.conf /etc/supervisor/conf.d/demo.conf
 COPY supervisord.full.conf /etc/supervisor/conf.d/full.conf
 
+# ── Chat service ──────────────────────────────────────────────
+COPY chat-service/ /chat-service/
+RUN cd /chat-service && npm install \
+    && chown -R developer:developer /chat-service
+
 # ── Entrypoint ────────────────────────────────────────────────
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
@@ -113,6 +118,6 @@ RUN chmod +x /entrypoint.sh
 # 54321 → Supabase API  (MODE=full only)
 # 54323 → Supabase Dashboard (MODE=full only)
 # 7681  → Claude Code web terminal
-EXPOSE 5173 54321 54323 7681
+EXPOSE 5173 54321 54323 7681 8080
 
 ENTRYPOINT ["/entrypoint.sh"]

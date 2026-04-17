@@ -25,6 +25,11 @@ services:
     ports:
       - "5173:5173" # CRM
       - "7681:7681" # Claude terminal
+      - "8080:8080" # Chat assistant
+    volumes:
+      - crm-source:/app/src
+      - crm-worktrees:/worktrees
+      - claude-auth:/home/developer/.claude
 
   # ── Full mode — local Supabase, requires Docker socket ─────
   crm-full:
@@ -47,3 +52,4 @@ volumes:
   crm-source:
   crm-worktrees:
   supabase-cache:
+  claude-auth:
