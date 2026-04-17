@@ -29,7 +29,13 @@ export function extractText(msg) {
 // Static file server
 const httpServer = createServer(async (req, res) => {
   const urlPath = req.url === '/' ? '/index.html' : req.url;
-  const filePath = join(__dirname, 'public', urlPath);
+  const publicDir = join(__dirname, 'public');
+  const filePath = join(publicDir, urlPath);
+  if (!filePath.startsWith(publicDir + '/')) {
+    res.writeHead(400);
+    res.end('Bad request');
+    return;
+  }
   try {
     const data = await readFile(filePath);
     const mime = MIME_TYPES[extname(filePath)] || 'text/plain';
@@ -90,11 +96,13 @@ async function processNext() {
     }
   } finally {
     safeSend(ws, { type: 'status', working: false });
-    processNext();
+    setImmediate(processNext);
   }
 }
 
 const wss = new WebSocketServer({ server: httpServer });
+wss.on('error', (err) => console.error('WebSocket server error:', err));
+httpServer.on('error', (err) => console.error('HTTP server error:', err));
 
 wss.on('connection', (ws) => {
   safeSend(ws, { type: 'message', role: 'assistant', content: WELCOME });
@@ -108,6 +116,8 @@ wss.on('connection', (ws) => {
   });
 });
 
-httpServer.listen(PORT, '0.0.0.0', () => {
-  console.log(`Chat service listening on port ${PORT}`);
-});
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  httpServer.listen(PORT, '0.0.0.0', () => {
+    console.log(`Chat service listening on port ${PORT}`);
+  });
+}
