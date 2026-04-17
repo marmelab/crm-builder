@@ -13,7 +13,12 @@ let working = false;
 const ws = new WebSocket(`ws://${location.host}`);
 
 ws.onmessage = (event) => {
-  const msg = JSON.parse(event.data);
+  let msg;
+  try {
+    msg = JSON.parse(event.data);
+  } catch {
+    return;
+  }
 
   if (msg.type === 'status') {
     working = msg.working;
