@@ -107,7 +107,7 @@ COPY supervisord.full.conf /etc/supervisor/conf.d/full.conf
 
 # ── Chat service ──────────────────────────────────────────────
 COPY chat-service/ /chat-service/
-RUN cd /chat-service && npm install \
+RUN cd /chat-service && npm ci \
     && chown -R developer:developer /chat-service
 
 # ── Entrypoint ────────────────────────────────────────────────

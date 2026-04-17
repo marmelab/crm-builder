@@ -45,6 +45,7 @@ services:
     volumes:
       - crm-source:/app/src
       - crm-worktrees:/worktrees
+      - claude-auth:/home/developer/.claude
       - /var/run/docker.sock:/var/run/docker.sock # ⚠️ required
       - supabase-cache:/root/.docker              # cache pulled images
 
