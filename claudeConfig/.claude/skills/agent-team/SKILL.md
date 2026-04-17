@@ -13,11 +13,7 @@ Check project-context.json at project root:
     → PROJECT-MANAGER  @.claude/agents/project-manager.md
         ↓ (produces project-context.json with validated: true)
 
-  validated: true, bootstrapped: false
-    → DEVOPS           @.claude/agents/devops.md
-        ↓ (fork + supabase + env + deploy → bootstrapped: true)
-
-  validated: true, bootstrapped: true
+  validated: true
     → proceed to Phase 1
 
 ### Phase 1 — Ticket planning (once per feature/need)
@@ -43,24 +39,9 @@ On session start, check if tasks exist in ~/.claude/tasks/:
 
     make spin TASK=XXX NAME=yyy
 
-    → ARCHITECT          @.claude/agents/architect.md
-         mode: spec validation
-         reads ticket from docs/tickets/TASK-XXX.json
-         APPROVED  → continue
-         BLOCKED   → back to PLANNER
-
-    → DEVELOPER          @.claude/agents/developer.md
-         mode: plan
-         reads ticket from docs/tickets/TASK-XXX.json
-
-    → ARCHITECT          @.claude/agents/architect.md
-         mode: plan approval
-         APPROVED  → continue
-         REJECTED  → back to DEVELOPER
-
     → DEVELOPER          @.claude/agents/developer.md
          mode: implementation
-         make test must pass before notifying team-lead
+         reads ticket from docs/tickets/TASK-XXX.json
 
     → parallel reviews (simultaneously):
          CODE-REVIEWER      @.claude/agents/code-reviewer.md
@@ -70,8 +51,6 @@ On session start, check if tasks exist in ~/.claude/tasks/:
     All APPROVED:
          → DEVELOPER  mode: reflection
               docs/reflections/TASK-XXX-reflection.md
-         → MERGER  @.claude/agents/merger.md
-              make merge + gh pr merge --squash --auto + gh pr checks --watch
          → update docs/tickets/TASK-XXX.json status to "merged"
          make clean TASK=XXX NAME=yyy
 
@@ -172,10 +151,6 @@ Team-lead sends shutdown_request to terminate them.
 ## Global rules
 
 - **Circuit-breaker:** agent stuck after 3 iterations → kill and reassign
-- **Spec first:** ARCHITECT validates spec BEFORE DEVELOPER plans
-- **Plan approval:** ARCHITECT approves plan BEFORE DEVELOPER codes
-- **Tests before reviews:** DEVELOPER runs make test before notifying
-  team-lead — do not dispatch reviews on broken code
 - **Parallel reviews:** CODE-REVIEWER, SECURITY-REVIEWER, TEST-VALIDATOR
   run simultaneously
 - **Any BLOCKED = no merge:** one blocking verdict from any reviewer

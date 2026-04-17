@@ -1,0 +1,95 @@
+<h2>À quoi ressemblent les réponses de Claude ?</h2>
+<p class="subtitle">Même action ("ajoute un champ Priorité aux contacts") — 3 façons différentes de le présenter</p>
+
+<div class="split" style="gap:16px;margin-bottom:24px">
+  <div class="mockup" style="flex:1">
+    <div class="mockup-header" style="background:#e74c3c">❌ Sans contrôle (ce que tu crains)</div>
+    <div class="mockup-body" style="padding:14px;font-family:monospace;font-size:12px;line-height:1.6;color:#333">
+      <div style="color:#888;margin-bottom:8px">User: ajoute un champ priorité aux contacts</div>
+      <div style="color:#2c3e50">
+        I'll add a priority field to the contacts. Let me start by reading the existing Contact type definition.<br><br>
+        <span style="color:#27ae60">Reading file: src/components/atomic-crm/types/Contact.ts</span><br>
+        <span style="color:#27ae60">Reading file: src/components/atomic-crm/components/ContactForm.tsx</span><br><br>
+        I can see the Contact interface at line 12. I'll add a <code>priority</code> field of type <code>'low' | 'medium' | 'high'</code>. I also need to update the Zod schema in <code>contactValidation.ts</code> and the form component.<br><br>
+        <span style="color:#e67e22">Editing: src/components/atomic-crm/types/Contact.ts</span><br>
+        <span style="color:#e67e22">Editing: src/components/atomic-crm/components/ContactForm.tsx</span><br>
+        <span style="color:#e67e22">Editing: src/components/atomic-crm/validation/contactValidation.ts</span><br><br>
+        I've updated 3 files. The <code>priority</code> field is now a required field with a <code>SelectInput</code> using <code>ra-ui-materialui</code>. You may need to run <code>npm run dev</code> to see the changes reflected in the hot-reload.
+      </div>
+    </div>
+  </div>
+
+  <div class="mockup" style="flex:1">
+    <div class="mockup-header" style="background:#27ae60">✓ Option B avec system prompt strict</div>
+    <div class="mockup-body" style="padding:14px;font-size:13px;line-height:1.7;color:#333">
+      <div style="color:#888;margin-bottom:8px;font-size:12px">User: ajoute un champ priorité aux contacts</div>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:#666">
+          <span style="animation:spin 1s linear infinite;display:inline-block">⟳</span>
+          <em>Je lis la structure actuelle des contacts...</em>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:#666">
+          <span>✏️</span>
+          <em>Je modifie le formulaire de contact...</em>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:#666">
+          <span>🔧</span>
+          <em>Je mets à jour la validation des données...</em>
+        </div>
+        <div style="background:#eafaf1;border-left:3px solid #27ae60;padding:10px;border-radius:4px;margin-top:4px">
+          <strong>✅ C'est fait !</strong><br>
+          Le champ "Priorité" (Basse / Moyenne / Haute) apparaît maintenant dans le formulaire de création et d'édition d'un contact. La page se recharge automatiquement.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="mockup" style="margin-bottom:24px">
+  <div class="mockup-header" style="background:#8e44ad">Option B+ — Double agent (exécution + présentation séparés)</div>
+  <div class="mockup-body" style="padding:14px;font-size:13px">
+    <div style="display:flex;gap:16px">
+      <div style="flex:1;border:1px solid #ddd;border-radius:6px;padding:12px">
+        <div style="font-size:11px;font-weight:bold;color:#8e44ad;margin-bottom:8px">AGENT 1 — Exécution (invisible pour l'utilisateur)</div>
+        <div style="font-size:11px;color:#666;font-family:monospace;line-height:1.6">
+          Reading Contact.ts...<br>
+          Editing Contact.ts at line 12...<br>
+          Editing ContactForm.tsx...<br>
+          Running: npm run typecheck<br>
+          ✓ 0 errors
+        </div>
+      </div>
+      <div style="font-size:24px;align-self:center">→</div>
+      <div style="flex:1;border:1px solid #ddd;border-radius:6px;padding:12px">
+        <div style="font-size:11px;font-weight:bold;color:#27ae60;margin-bottom:8px">AGENT 2 — Présentation (ce que voit l'utilisateur)</div>
+        <div style="font-size:12px;line-height:1.7">
+          <div style="color:#666"><em>Je modifie le formulaire...</em></div>
+          <div style="color:#666"><em>Je vérifie que tout fonctionne...</em></div>
+          <div style="background:#eafaf1;padding:8px;border-radius:4px;border-left:3px solid #27ae60;margin-top:6px">
+            ✅ <strong>Champ "Priorité" ajouté !</strong> Tu peux le voir dans le formulaire contact.
+          </div>
+        </div>
+      </div>
+    </div>
+    <div style="margin-top:12px;padding:8px;background:#f5eef8;border-radius:4px;font-size:12px;color:#666;border-left:3px solid #8e44ad">
+      <strong>Coût :</strong> 2 appels Claude en parallèle — légèrement plus cher, mais garantit un langage naturel même si l'agent d'exécution déraille.
+    </div>
+  </div>
+</div>
+
+<div class="options">
+  <div class="option" data-choice="b-prompt" onclick="toggleSelect(this)">
+    <div class="letter">1</div>
+    <div class="content">
+      <h3>Option B — system prompt strict</h3>
+      <p>Un seul Claude, guidé pour parler simple. Moins cher, légèrement moins garanti mais suffisant dans 95% des cas.</p>
+    </div>
+  </div>
+  <div class="option" data-choice="b-dual" onclick="toggleSelect(this)">
+    <div class="letter">2</div>
+    <div class="content">
+      <h3>Option B+ — double agent</h3>
+      <p>Claude 1 travaille, Claude 2 traduit. Plus robuste, garantit toujours un langage humain, coût légèrement supérieur.</p>
+    </div>
+  </div>
+</div>

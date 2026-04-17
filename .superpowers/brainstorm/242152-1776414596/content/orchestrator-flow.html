@@ -1,0 +1,110 @@
+<h2>L'orchestrateur comme interface utilisateur</h2>
+<p class="subtitle">Comment Claude Code sépare naturellement ce qui est visible et ce qui est technique</p>
+
+<div class="mockup" style="margin-bottom:24px">
+  <div class="mockup-header">Architecture complète</div>
+  <div class="mockup-body" style="padding:20px;font-size:13px">
+
+    <div style="display:flex;gap:12px;align-items:stretch">
+
+      <!-- User side -->
+      <div style="flex:1;border:2px solid #3498db;border-radius:8px;padding:12px">
+        <div style="font-weight:bold;color:#3498db;margin-bottom:10px;font-size:12px">NAVIGATEUR (port 8080)</div>
+        <div style="background:#f0f7ff;border-radius:6px;padding:10px;font-size:12px;line-height:1.7">
+          <div style="color:#888;margin-bottom:6px">💬 Chat UI</div>
+          <div style="background:white;border-radius:4px;padding:6px;margin-bottom:4px;border-left:3px solid #3498db">
+            <strong>User :</strong> Ajoute un champ "Budget" aux deals
+          </div>
+          <div style="background:#eafaf1;border-radius:4px;padding:6px;margin-bottom:4px;border-left:3px solid #27ae60;font-size:11px">
+            <em>⟳ Je lis la structure des deals...</em>
+          </div>
+          <div style="background:#eafaf1;border-radius:4px;padding:6px;margin-bottom:4px;border-left:3px solid #27ae60;font-size:11px">
+            <em>✏️ Mon développeur modifie le formulaire...</em>
+          </div>
+          <div style="background:#eafaf1;border-radius:4px;padding:6px;border-left:3px solid #27ae60;font-size:11px">
+            <em>🔍 Un reviewer vérifie le code...</em>
+          </div>
+          <div style="background:#27ae60;border-radius:4px;padding:6px;margin-top:4px;color:white;font-size:11px">
+            ✅ <strong>C'est fait !</strong> "Budget" est visible dans le formulaire deal.
+          </div>
+        </div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;justify-content:center;font-size:20px">⇄</div>
+
+      <!-- Backend -->
+      <div style="flex:1;border:2px solid #e67e22;border-radius:8px;padding:12px">
+        <div style="font-weight:bold;color:#e67e22;margin-bottom:10px;font-size:12px">BACKEND NODE.JS (port 8080)</div>
+        <div style="font-size:12px;color:#555;line-height:1.8">
+          • Sert le chat UI (HTML/CSS/JS)<br>
+          • WebSocket ↔ navigateur<br>
+          • Lance Claude Code via SDK<br>
+          • Filtre : passe uniquement les <strong>textes</strong> de l'orchestrateur<br>
+          • Ignore les tool calls (technique)
+        </div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;justify-content:center;font-size:20px">⇄</div>
+
+      <!-- Claude Code -->
+      <div style="flex:1.4;border:2px solid #8e44ad;border-radius:8px;padding:12px">
+        <div style="font-weight:bold;color:#8e44ad;margin-bottom:10px;font-size:12px">CLAUDE CODE SDK</div>
+
+        <div style="background:#f5eef8;border-radius:6px;padding:10px;margin-bottom:8px;font-size:12px">
+          <strong style="color:#8e44ad">🎯 Orchestrateur (nouveau agent)</strong><br>
+          <span style="font-size:11px;color:#666">Instruction clé dans son system prompt :<br>
+          <em>"Tu parles à un non-technicien. Jamais de noms de fichiers, jamais de code dans tes messages. Décris les actions en français simple."</em></span>
+        </div>
+
+        <div style="display:flex;gap:6px;font-size:11px">
+          <div style="flex:1;background:#eafaf1;border-radius:4px;padding:6px;text-align:center">
+            👨‍💻<br><strong>developer</strong><br><span style="color:#666">modifie les fichiers</span>
+          </div>
+          <div style="flex:1;background:#fef9e7;border-radius:4px;padding:6px;text-align:center">
+            🔍<br><strong>reviewer</strong><br><span style="color:#666">vérifie le code</span>
+          </div>
+          <div style="flex:1;background:#f0f3f4;border-radius:4px;padding:6px;text-align:center">
+            📝<br><strong>documenter</strong><br><span style="color:#666">documente</span>
+          </div>
+        </div>
+
+        <div style="margin-top:8px;font-size:11px;color:#888;border-top:1px solid #ddd;padding-top:8px">
+          ↑ Ces agents opèrent en <em>sous-contexte</em> — leur output technique reste invisible au user
+        </div>
+      </div>
+
+    </div>
+
+    <div style="margin-top:16px;background:#fef9e7;border-left:3px solid #f39c12;padding:12px;border-radius:4px;font-size:12px">
+      <strong>Pourquoi ça tient :</strong> quand l'orchestrateur dispatch un Task("developer", ...),
+      le résultat du developer revient dans le <em>contexte interne</em> de l'orchestrateur — pas en texte visible.
+      L'orchestrateur CHOISIT ensuite ce qu'il dit à l'utilisateur.
+      On lui impose de ne jamais exposer les détails techniques.
+    </div>
+  </div>
+</div>
+
+<div class="mockup">
+  <div class="mockup-header">Ce que le SDK permet de filtrer</div>
+  <div class="mockup-body" style="padding:14px;font-size:12px">
+    <div style="display:flex;gap:16px">
+      <div style="flex:1">
+        <div style="font-weight:bold;color:#e74c3c;margin-bottom:8px">❌ On ignore (tool calls)</div>
+        <div style="font-family:monospace;background:#fdf2f2;padding:8px;border-radius:4px;font-size:11px;line-height:1.6;color:#666">
+          tool_use: Read { path: "src/..." }<br>
+          tool_use: Edit { file: "Deal.ts" ... }<br>
+          tool_use: Task { agent: "developer" }<br>
+          tool_result: { verdict: "APPROVED" }
+        </div>
+      </div>
+      <div style="flex:1">
+        <div style="font-weight:bold;color:#27ae60;margin-bottom:8px">✅ On affiche (texte orchestrateur)</div>
+        <div style="background:#eafaf1;padding:8px;border-radius:4px;font-size:11px;line-height:1.6">
+          "Je demande à mon développeur d'ajouter le champ..."<br>
+          "Le code est en cours de vérification..."<br>
+          "✅ C'est fait ! Budget est maintenant disponible."
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

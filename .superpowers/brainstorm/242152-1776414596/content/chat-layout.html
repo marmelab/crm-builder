@@ -1,0 +1,76 @@
+<h2>Quel layout pour l'interface de chat ?</h2>
+<p class="subtitle">Le chat s'ouvre automatiquement au démarrage du conteneur. Comment veux-tu qu'il soit présenté ?</p>
+
+<div class="cards">
+
+  <div class="card" data-choice="fullscreen" onclick="toggleSelect(this)">
+    <div class="card-image" style="background:#1a1a2e;padding:16px;min-height:180px;display:flex;flex-direction:column;gap:8px">
+      <div style="background:#16213e;border-radius:6px;padding:8px 12px;display:flex;align-items:center;gap:8px">
+        <div style="width:8px;height:8px;border-radius:50%;background:#27ae60"></div>
+        <span style="color:#aaa;font-size:11px">Claude — Atomic CRM Assistant</span>
+      </div>
+      <div style="flex:1;display:flex;flex-direction:column;gap:6px;padding:4px">
+        <div style="background:#0f3460;border-radius:8px;padding:8px 10px;align-self:flex-end;color:white;font-size:10px;max-width:70%">Ajoute un champ Budget aux deals</div>
+        <div style="background:#16213e;border-radius:8px;padding:8px 10px;color:#aaa;font-size:10px;max-width:80%">Je demande à mon développeur de modifier le formulaire deal...</div>
+        <div style="background:#1a3a2e;border-radius:8px;padding:8px 10px;color:#2ecc71;font-size:10px;max-width:80%">✅ C'est fait ! Budget est maintenant disponible.</div>
+      </div>
+      <div style="background:#16213e;border-radius:6px;padding:6px 10px;display:flex;gap:6px">
+        <div style="flex:1;background:#0f3460;border-radius:4px;height:20px"></div>
+        <div style="background:#3498db;border-radius:4px;width:40px;height:20px;display:flex;align-items:center;justify-content:center;font-size:9px;color:white">↑</div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A — Plein écran</h3>
+      <p>Chat occupe toute la fenêtre. Minimaliste, focus total sur la conversation. Port dédié (ex: 8080).</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="split" onclick="toggleSelect(this)">
+    <div class="card-image" style="background:#f5f5f5;padding:10px;min-height:180px;display:flex;gap:8px">
+      <div style="flex:1;background:white;border-radius:6px;padding:8px;border:1px solid #ddd;display:flex;flex-direction:column;gap:4px">
+        <div style="font-size:9px;font-weight:bold;color:#333;border-bottom:1px solid #eee;padding-bottom:4px">💬 Assistant</div>
+        <div style="background:#e8f5e9;border-radius:4px;padding:5px;font-size:8px;color:#555">Bonjour ! Que souhaitez-vous modifier ?</div>
+        <div style="background:#e3f2fd;border-radius:4px;padding:5px;font-size:8px;color:#555;align-self:flex-end">Ajoute un champ Budget</div>
+        <div style="background:#e8f5e9;border-radius:4px;padding:5px;font-size:8px;color:#555">✅ Budget ajouté !</div>
+        <div style="margin-top:auto;background:#f0f0f0;border-radius:3px;height:14px"></div>
+      </div>
+      <div style="flex:1.2;background:white;border-radius:6px;padding:8px;border:1px solid #ddd">
+        <div style="font-size:9px;font-weight:bold;color:#333;border-bottom:1px solid #eee;padding-bottom:4px">📊 CRM — Deals</div>
+        <div style="display:flex;flex-direction:column;gap:3px;margin-top:4px">
+          <div style="background:#f9f9f9;padding:4px;border-radius:3px;font-size:8px;color:#666;display:flex;justify-content:space-between"><span>Deal Alpha</span><span style="color:#27ae60">€12k</span></div>
+          <div style="background:#f9f9f9;padding:4px;border-radius:3px;font-size:8px;color:#666;display:flex;justify-content:space-between"><span>Deal Beta</span><span style="color:#27ae60">€8k</span></div>
+          <div style="background:#f9f9f9;padding:4px;border-radius:3px;font-size:8px;color:#666;display:flex;justify-content:space-between"><span>Deal Gamma</span><span style="color:#e74c3c">—</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B — Split view</h3>
+      <p>Chat à gauche, CRM à droite. L'utilisateur voit l'effet de ses changements en temps réel. Nécessite d'intégrer les deux dans une même page.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="overlay" onclick="toggleSelect(this)">
+    <div class="card-image" style="background:#f5f5f5;padding:10px;min-height:180px;position:relative">
+      <div style="background:white;border-radius:6px;padding:8px;border:1px solid #ddd;height:100%">
+        <div style="font-size:9px;font-weight:bold;color:#333;border-bottom:1px solid #eee;padding-bottom:4px">📊 CRM — Contacts</div>
+        <div style="display:flex;flex-direction:column;gap:3px;margin-top:4px;opacity:0.4">
+          <div style="background:#f9f9f9;padding:4px;border-radius:3px;font-size:8px;color:#666">Alice Martin</div>
+          <div style="background:#f9f9f9;padding:4px;border-radius:3px;font-size:8px;color:#666">Bob Dupont</div>
+        </div>
+      </div>
+      <!-- Chat overlay -->
+      <div style="position:absolute;bottom:14px;right:14px;width:55%;background:white;border-radius:8px;box-shadow:0 4px 20px rgba(0,0,0,0.15);padding:10px;border:1px solid #ddd">
+        <div style="font-size:9px;font-weight:bold;color:#333;border-bottom:1px solid #eee;padding-bottom:4px;margin-bottom:6px">💬 Assistant</div>
+        <div style="background:#e8f5e9;border-radius:4px;padding:4px;font-size:8px;color:#555;margin-bottom:4px">✅ Budget ajouté !</div>
+        <div style="background:#f0f0f0;border-radius:3px;height:12px"></div>
+      </div>
+      <!-- FAB -->
+      <div style="position:absolute;bottom:14px;left:14px;background:#3498db;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:white;font-size:12px;box-shadow:0 2px 8px rgba(52,152,219,0.4)">💬</div>
+    </div>
+    <div class="card-body">
+      <h3>C — Overlay / widget</h3>
+      <p>CRM visible en arrière-plan, chat en popup flottant. Bouton pour ouvrir/fermer. L'utilisateur garde le contexte visuel du CRM.</p>
+    </div>
+  </div>
+
+</div>

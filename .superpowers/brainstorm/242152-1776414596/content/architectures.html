@@ -1,0 +1,132 @@
+<h2>3 architectures possibles pour le chat Claude</h2>
+<p class="subtitle">Comment le message de l'utilisateur arrive jusqu'à Claude — et comment la réponse revient</p>
+
+<div class="section">
+  <h3 style="color:#e67e22">Option A — Claude Code subprocess</h3>
+  <div class="mockup">
+    <div class="mockup-header">Flux de données — Option A</div>
+    <div class="mockup-body" style="padding:20px;font-family:monospace;font-size:13px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+        <div style="background:#3498db;color:white;padding:8px 14px;border-radius:6px">🧑 Utilisateur<br><small style="opacity:.8">tape dans le chat</small></div>
+        <div style="font-size:20px">→</div>
+        <div style="background:#2ecc71;color:white;padding:8px 14px;border-radius:6px">🌐 WebSocket<br><small style="opacity:.8">port 8080</small></div>
+        <div style="font-size:20px">→</div>
+        <div style="background:#e67e22;color:white;padding:8px 14px;border-radius:6px">⚙️ Backend Node.js<br><small style="opacity:.8">reçoit le message</small></div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;padding-left:40px">
+        <div style="font-size:20px">↓</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+        <div style="background:#9b59b6;color:white;padding:8px 14px;border-radius:6px;min-width:140px">🖥️ Spawn CLI<br><code style="font-size:11px">claude --skip-perms</code></div>
+        <div style="font-size:20px">←→</div>
+        <div style="background:#34495e;color:white;padding:8px 14px;border-radius:6px">📁 Fichiers CRM<br><small style="opacity:.8">/app/src/...</small></div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;padding-left:40px">
+        <div style="font-size:20px">↓ stdout brut (bruit technique)</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <div style="background:#e74c3c;color:white;padding:8px 14px;border-radius:6px">🤖 Agent présentateur<br><small style="opacity:.8">2ème appel Claude API<br>"résume ce que tu vois"</small></div>
+        <div style="font-size:20px">→</div>
+        <div style="background:#3498db;color:white;padding:8px 14px;border-radius:6px">🧑 Chat UI<br><small style="opacity:.8">message lisible</small></div>
+      </div>
+      <div style="margin-top:16px;padding:10px;background:#fef9e7;border-radius:6px;border-left:3px solid #f39c12;font-size:12px;color:#555">
+        <strong>Problème :</strong> le stdout de Claude Code ressemble à ça :<br>
+        <code style="color:#c0392b">⠋ Thinking... • Reading file src/App.tsx [1.2s]<br>
+        ─── Edit ───────────────────<br>
+        + import NewModule from './NewModule'<br>
+        ✓ Wrote 3 files • 847 tokens</code><br>
+        → L'agent présentateur doit parser ça et le traduire. Fragile.
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3 style="color:#27ae60">Option B — Claude API avec tools ✓ Recommandée</h3>
+  <div class="mockup">
+    <div class="mockup-header">Flux de données — Option B</div>
+    <div class="mockup-body" style="padding:20px;font-family:monospace;font-size:13px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+        <div style="background:#3498db;color:white;padding:8px 14px;border-radius:6px">🧑 Utilisateur<br><small style="opacity:.8">tape dans le chat</small></div>
+        <div style="font-size:20px">→</div>
+        <div style="background:#2ecc71;color:white;padding:8px 14px;border-radius:6px">🌐 SSE/WebSocket<br><small style="opacity:.8">port 8080</small></div>
+        <div style="font-size:20px">→</div>
+        <div style="background:#27ae60;color:white;padding:8px 14px;border-radius:6px">⚙️ Backend Node.js<br><small style="opacity:.8">Anthropic SDK</small></div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;padding-left:40px">
+        <div style="font-size:20px">↓ appel API avec streaming</div>
+      </div>
+      <div style="background:#f8f9fa;border:2px solid #27ae60;border-radius:8px;padding:14px;margin-bottom:12px">
+        <strong style="color:#27ae60">🤖 Claude (Sonnet/Opus)</strong> — un seul appel, deux rôles<br>
+        <div style="display:flex;gap:16px;margin-top:10px">
+          <div style="flex:1;background:#eafaf1;padding:8px;border-radius:6px;font-size:12px">
+            <strong>Il pense et communique :</strong><br>
+            "Je vais ajouter un champ Priorité.<br>Je commence par le modèle de données..."
+          </div>
+          <div style="font-size:20px;align-self:center">+</div>
+          <div style="flex:1;background:#eafaf1;padding:8px;border-radius:6px;font-size:12px">
+            <strong>Il agit avec des tools :</strong><br>
+            <code>edit_file("Contact.tsx", ...)</code><br>
+            <code>run_command("npm test")</code>
+          </div>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+        <div style="background:#34495e;color:white;padding:8px 14px;border-radius:6px">📁 Fichiers CRM<br><small style="opacity:.8">/app/src/...</small></div>
+        <div style="font-size:20px">←</div>
+        <div style="font-size:13px;color:#555">les tools modifient<br>directement les fichiers</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <div style="font-size:13px;color:#555">le texte stream en temps réel →</div>
+        <div style="font-size:20px">→</div>
+        <div style="background:#3498db;color:white;padding:8px 14px;border-radius:6px">🧑 Chat UI<br><small style="opacity:.8">messages lisibles<br>+ indicateurs de progression</small></div>
+      </div>
+      <div style="margin-top:16px;padding:10px;background:#eafaf1;border-radius:6px;border-left:3px solid #27ae60;font-size:12px;color:#555">
+        <strong>Ce que l'utilisateur voit en temps réel :</strong><br>
+        💬 "Je vais ajouter un champ Priorité aux contacts..."<br>
+        🔧 Modification de <em>Contact.tsx</em>...<br>
+        🔧 Modification de <em>ContactForm.tsx</em>...<br>
+        ✅ "C'est fait ! Le champ apparaît maintenant dans le formulaire. Recharge la page."
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3 style="color:#8e44ad">Option C — Claude Code SDK</h3>
+  <div class="mockup">
+    <div class="mockup-header">Flux de données — Option C</div>
+    <div class="mockup-body" style="padding:20px;font-family:monospace;font-size:13px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+        <div style="background:#3498db;color:white;padding:8px 14px;border-radius:6px">🧑 Utilisateur<br><small style="opacity:.8">tape dans le chat</small></div>
+        <div style="font-size:20px">→</div>
+        <div style="background:#8e44ad;color:white;padding:8px 14px;border-radius:6px">⚙️ Backend Node.js<br><small style="opacity:.8">@anthropic-ai/claude-code SDK</small></div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;padding-left:40px">
+        <div style="font-size:20px">↓</div>
+      </div>
+      <div style="background:#f8f9fa;border:2px solid #8e44ad;border-radius:8px;padding:14px;margin-bottom:12px">
+        <strong style="color:#8e44ad">Claude Code (SDK programmatique)</strong><br>
+        <div style="font-size:12px;margin-top:8px;color:#555">
+          Même moteur que l'Option A (Claude Code), mais piloté via une API JavaScript<br>
+          au lieu de pipes stdin/stdout.<br><br>
+          <code style="background:#f0e6ff;padding:4px 8px;border-radius:4px">
+            const result = await claude.run("ajoute un champ Priorité", &#123;<br>
+            &nbsp;&nbsp;cwd: "/app",<br>
+            &nbsp;&nbsp;onMessage: (msg) => streamToChat(msg)<br>
+            &#125;)
+          </code>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <div style="background:#34495e;color:white;padding:8px 14px;border-radius:6px">📁 Fichiers CRM<br><small style="opacity:.8">+ hooks .claude/ existants</small></div>
+        <div style="font-size:20px;color:#27ae60">✓</div>
+        <div style="font-size:13px;color:#555">les hooks / agents existants<br>continuent de fonctionner</div>
+      </div>
+      <div style="margin-top:16px;padding:10px;background:#f5eef8;border-radius:6px;border-left:3px solid #8e44ad;font-size:12px;color:#555">
+        <strong>Avantage vs A :</strong> pas de parsing de stdout, API propre<br>
+        <strong>Risque :</strong> SDK encore jeune (~2025), peut changer, moins documenté que l'API Anthropic
+      </div>
+    </div>
+  </div>
+</div>

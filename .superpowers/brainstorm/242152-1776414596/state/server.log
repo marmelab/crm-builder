@@ -1,0 +1,6 @@
+{"type":"server-started","port":63271,"host":"127.0.0.1","url_host":"localhost","url":"http://localhost:63271","screen_dir":"/home/jerome/Work/crm-builder/.superpowers/brainstorm/242152-1776414596/content","state_dir":"/home/jerome/Work/crm-builder/.superpowers/brainstorm/242152-1776414596/state"}
+{"type":"screen-added","file":"/home/jerome/Work/crm-builder/.superpowers/brainstorm/242152-1776414596/content/architectures.html"}
+{"type":"screen-added","file":"/home/jerome/Work/crm-builder/.superpowers/brainstorm/242152-1776414596/content/output-formats.html"}
+{"type":"screen-added","file":"/home/jerome/Work/crm-builder/.superpowers/brainstorm/242152-1776414596/content/orchestrator-flow.html"}
+{"type":"screen-added","file":"/home/jerome/Work/crm-builder/.superpowers/brainstorm/242152-1776414596/content/chat-layout.html"}
+{"type":"server-stopped","reason":"idle timeout"}
