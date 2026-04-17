@@ -26,16 +26,13 @@ if [ -n "${ANTHROPIC_API_KEY}" ]; then
 elif [ -f "${OAUTH_TOKEN_FILE}" ]; then
   echo -e "${GREEN}✓  Auth: OAuth token (claude login)${NC}"
 else
-  echo -e "${RED}❌  No authentication found!${NC}"
+  echo -e "${YELLOW}⚠️   No authentication found — starting terminal for claude login${NC}"
   echo ""
-  echo "    Option 1 — API key:"
-  echo "      docker run -e ANTHROPIC_API_KEY=sk-ant-... ..."
+  echo -e "${BOLD}  → Open http://localhost:7681 in your browser${NC}"
+  echo -e "  → Run: ${YELLOW}claude login${NC}"
+  echo -e "  → Then restart this container (Ctrl+C, then docker compose up again)"
   echo ""
-  echo "    Option 2 — OAuth (Claude Max/Teams):"
-  echo "      Start the container once, open http://localhost:7681"
-  echo "      and run: claude login"
-  echo "      Then restart — your token will persist via the claude-auth volume."
-  exit 1
+  exec /usr/local/bin/ttyd --port 7681 --writable --interface 0.0.0.0 /usr/local/bin/ttyd-session.sh
 fi
 
 cd ${APP_DIR}
