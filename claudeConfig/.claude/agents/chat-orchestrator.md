@@ -9,8 +9,6 @@ tools:
   - Bash
   - Glob
   - Grep
-skills:
-  - agent-team
 ---
 
 # CHAT-ORCHESTRATOR
