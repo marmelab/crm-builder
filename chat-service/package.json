@@ -1,0 +1,13 @@
+{
+  "name": "chat-service",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/server.test.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "latest",
+    "ws": "^8.18.0"
+  }
+}
