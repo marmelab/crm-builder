@@ -1,0 +1,54 @@
+claudeConfig/.claude/agents/chat-orchestrator.md
+  9805a41217e988f0 10-12,38,40,60-66,69-78,80-84,86-89,91
+claudeConfig/.claude/hooks/run-e2e-tests.sh
+  9805a41217e988f0 7-11
+docker-compose.yml
+  9805a41217e988f0 37-39
+claudeConfig/.claude/agents/developer.md
+  9805a41217e988f0 29-38,46-72
+claudeConfig/.claude/settings.json
+  9805a41217e988f0 71,73,77-80
+chat-service/tests/results/baseline.json
+  9805a41217e988f0 2-29,35-40,59-66,72-76,82-106
+chat-service/tests/cases.json
+  9805a41217e988f0 1-57
+.gitignore
+  9805a41217e988f0 2-4
+Dockerfile
+  9805a41217e988f0 67-70
+entrypoint.sh
+  9805a41217e988f0 51-53
+chat-service/tests/run.js
+  9805a41217e988f0 1-247
+chat-service/package.json
+  9805a41217e988f0 7-9
+chat-service/server.js
+  9805a41217e988f0 2-3,15,88,90,107-118,123-124,233-234,240,242,252,261-265
+claudeConfig/.claude/hooks/circuit-breaker.sh
+  9805a41217e988f0 3-4,6,8-20,23-24,29
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.0",
+  "base_commit_sha": "7992ee2b3b54992decc92631c22481391c342903",
+  "prompts": {
+    "9805a41217e988f0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ac2e66ab-6b0f-498d-8ac3-931e133375cb",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Jerome",
+      "messages": [],
+      "total_additions": 1229,
+      "total_deletions": 140,
+      "accepted_lines": 610,
+      "overriden_lines": 16
+    }
+  },
+  "humans": {
+    "h_84c0d888491a2d": {
+      "author": "Jerome"
+    }
+  }
+}
