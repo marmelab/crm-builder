@@ -23,13 +23,22 @@ const WELCOME_CHOICES = {
 async function loadSystemPrompt() {
   try {
     const raw = await readFile(ORCHESTRATOR_MD, 'utf8');
-    return raw.replace(/^---\n[\s\S]*?\n---\n/, '').trim();
+    const fm = raw.match(/^---\n([\s\S]*?)\n---\n/);
+    const model = fm?.[1].match(/^model:\s*(\S+)/m)?.[1] || null;
+    const toolsBlock = fm?.[1].match(/^tools:\n((?:[ \t]+-\s+\S+\n?)+)/m)?.[1];
+    const tools = toolsBlock
+      ? toolsBlock.split('\n').map((l) => l.replace(/^[ \t]+-\s+/, '').trim()).filter(Boolean)
+      : null;
+    const content = raw.replace(/^---\n[\s\S]*?\n---\n/, '').trim();
+    return { content, model, tools };
   } catch {
-    return '';
+    return { content: '', model: null, tools: null };
   }
 }
 
 let systemPrompt = '';
+let orchestratorModel = null;
+let orchestratorTools = null;
 
 const MIME_TYPES = {
   '.html': 'text/html',
@@ -81,9 +90,11 @@ function spawnClaude(userMessage, sessionId) {
     '--output-format', 'stream-json',
     '--verbose',
     '--dangerously-skip-permissions',
-    '-p', prompt,
   ];
+  if (orchestratorModel) args.push('--model', orchestratorModel);
+  if (orchestratorTools?.length) args.push('--tools', orchestratorTools.join(','));
   if (sessionId) args.push('--resume', sessionId);
+  args.push('-p', prompt);
   return spawn('claude', args, {
     env: { ...process.env, HOME: CLAUDE_HOME },
     cwd: CWD,
@@ -97,12 +108,35 @@ function safeSend(ws, payload) {
   }
 }
 
+function friendlyError({ exitCode, stderr, rateLimit, resultError }) {
+  if (rateLimit?.resetsAt) {
+    const minutes = Math.max(1, Math.ceil((rateLimit.resetsAt * 1000 - Date.now()) / 60000));
+    return `Usage limit reached. You can try again in about ${minutes} minute(s).`;
+  }
+  if (/invalid[_ ]api[_ ]key|authentication|unauthori[sz]ed|401/i.test(stderr)) {
+    return "Access has expired. Please contact your administrator to renew the session.";
+  }
+  if (/network|ECONNREFUSED|ENOTFOUND|ETIMEDOUT/i.test(stderr)) {
+    return "Unable to reach the service right now. Check your connection and try again.";
+  }
+  if (resultError) {
+    return "Something went wrong while processing your request. Want to try again?";
+  }
+  if (exitCode !== 0) {
+    return "An unexpected error occurred. Want to try again?";
+  }
+  return "I couldn't complete your request. Could you rephrase it?";
+}
+
 async function processMessage(ws, prompt) {
   const state = connections.get(ws);
   if (!state) return;
 
   safeSend(ws, { type: 'status', working: true });
+  const toolMap = new Map();
   let receivedText = false;
+  let rateLimit = null;
+  let resultError = false;
   try {
     const proc = spawnClaude(prompt, state.sessionId);
     let stderrBuf = '';
@@ -117,24 +151,48 @@ async function processMessage(ws, prompt) {
       try {
         const event = JSON.parse(line);
         if (event.session_id) state.sessionId = event.session_id;
+
+        // Always send raw event to debug
+        safeSend(ws, { type: 'debug_raw', event });
+
         const text = extractText(event);
-        if (text) { receivedText = true; safeSend(ws, { type: 'message', role: 'assistant', content: text }); }
+        if (text) {
+          receivedText = true;
+          safeSend(ws, { type: 'message', role: 'assistant', content: text });
+        }
+
         for (const tool of extractToolUses(event)) {
-          safeSend(ws, { type: 'debug', tool: tool.name, input: tool.input });
+          toolMap.set(tool.id, tool);
+        }
+
+        if (event.type === 'rate_limit_event' && event.rate_limit_info?.status === 'blocked') {
+          rateLimit = event.rate_limit_info;
+        }
+
+        if (event.type === 'result') {
+          if (event.is_error) resultError = true;
+          const u = event.usage || {};
+          state.stats.tokensIn += (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
+          state.stats.tokensOut += u.output_tokens || 0;
+          state.stats.costUsd += event.total_cost_usd || 0;
+          safeSend(ws, { type: 'stats', ...state.stats });
         }
       } catch {}
     }
     const exitCode = await new Promise((resolve) => proc.on('close', resolve));
-    if (exitCode !== 0 || !receivedText) {
-      const hint = stderrBuf.includes('OAuth') ? ' (OAuth not supported — try ANTHROPIC_API_KEY)' : '';
-      safeSend(ws, { type: 'message', role: 'assistant', content: `Something went wrong${hint}. Check container logs for details.` });
+    if (exitCode !== 0 || !receivedText || resultError || rateLimit) {
+      safeSend(ws, {
+        type: 'message',
+        role: 'assistant',
+        content: friendlyError({ exitCode, stderr: stderrBuf, rateLimit, resultError }),
+      });
     }
   } catch (err) {
     if (err?.name !== 'AbortError') {
       safeSend(ws, {
         type: 'message',
         role: 'assistant',
-        content: 'Something went wrong with this change. Want me to try a different approach?',
+        content: "Something went wrong. Want to try again?",
       });
     }
   } finally {
@@ -157,7 +215,12 @@ wss.on('error', (err) => console.error('WebSocket server error:', err));
 httpServer.on('error', (err) => console.error('HTTP server error:', err));
 
 wss.on('connection', (ws) => {
-  connections.set(ws, { sessionId: null, busy: false, queue: [] });
+  connections.set(ws, {
+    sessionId: null,
+    busy: false,
+    queue: [],
+    stats: { tokensIn: 0, tokensOut: 0, costUsd: 0 },
+  });
   safeSend(ws, WELCOME_CHOICES);
 
   ws.on('message', (data) => {
@@ -179,9 +242,12 @@ wss.on('connection', (ws) => {
 });
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  loadSystemPrompt().then((sp) => {
-    systemPrompt = sp;
-    console.log(sp ? 'Orchestrator system prompt loaded.' : 'No orchestrator prompt found, using default.');
+  loadSystemPrompt().then(({ content, model, tools }) => {
+    systemPrompt = content;
+    orchestratorModel = model;
+    orchestratorTools = tools;
+    const t = tools?.length ? tools.join(',') : 'default';
+    console.log(content ? `Orchestrator loaded (model: ${model || 'default'}, tools: ${t}).` : 'No orchestrator prompt, using default.');
   });
   httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`Chat service listening on port ${PORT}`);

@@ -38,6 +38,12 @@ fi
 
 # Always use the image's .claude config (volume may have stale copy)
 cp -f /root/.claude/settings.json /home/developer/.claude/settings.json 2>/dev/null || true
+for d in agents skills hooks rules; do
+  if [ -d "/root/.claude/$d" ]; then
+    mkdir -p "/home/developer/.claude/$d"
+    cp -rf "/root/.claude/$d/." "/home/developer/.claude/$d/" 2>/dev/null || true
+  fi
+done
 
 # Fix ownership — credentials written during bootstrap run as root
 chown -R developer:developer /home/developer/.claude 2>/dev/null || true

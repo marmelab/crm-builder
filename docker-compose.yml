@@ -30,6 +30,10 @@ services:
       - crm-source:/app/src
       - crm-worktrees:/worktrees
       - claude-auth:/home/developer/.claude
+      # DEV ONLY — bind mount pour itérer sur la config sans rebuild.
+      # Entrypoint sync ces fichiers vers /home/developer/.claude au boot.
+      # RETIRER avant release production (config doit vivre dans l'image).
+      - ./claudeConfig/.claude:/root/.claude:ro
 
   # ── Full mode — local Supabase, requires Docker socket ─────
   crm-full:
