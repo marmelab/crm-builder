@@ -1,0 +1,55 @@
+claudeConfig/.claude/agents/chat-orchestrator.md
+  9805a41217e988f0 100-101
+claudeConfig/.claude/skills/agent-team/SKILL.md
+  9805a41217e988f0 47,108
+claudeConfig/.claude/settings.json
+  9805a41217e988f0 16-31
+chat-service/tests/cases.json
+  h_84c0d888491a2d 51
+  9805a41217e988f0 52
+entrypoint.sh
+  9805a41217e988f0 43
+chat-service/public/chat.js
+  9805a41217e988f0 73-75
+chat-service/server.js
+  9805a41217e988f0 188-198,205-206,252
+CHANGELOG.md
+  9805a41217e988f0 1-201
+chat-service/tests/run.js
+  9805a41217e988f0 31-42
+chat-service/tests/results/baseline.json
+  9805a41217e988f0 89-113,115-117
+claudeConfig/.claude/agents/quality-reviewer.md
+  9805a41217e988f0 1-168
+claudeConfig/.claude/skills/playwright-testing/SKILL.md
+  9805a41217e988f0 1-477
+claudeConfig/.claude/agents/test-validator.md
+  9805a41217e988f0 3-4,49,53,72,93,107,156-159
+claudeConfig/.claude/agents/developer.md
+  9805a41217e988f0 12,18
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.0",
+  "base_commit_sha": "4313bbce01e6e93f620d06608e5ec964904a50ef",
+  "prompts": {
+    "9805a41217e988f0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ac2e66ab-6b0f-498d-8ac3-931e133375cb",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Jerome",
+      "messages": [],
+      "total_additions": 2451,
+      "total_deletions": 45,
+      "accepted_lines": 1042,
+      "overriden_lines": 1
+    }
+  },
+  "humans": {
+    "h_84c0d888491a2d": {
+      "author": "Jerome"
+    }
+  }
+}
