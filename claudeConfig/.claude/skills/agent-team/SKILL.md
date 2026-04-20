@@ -99,31 +99,17 @@ tasks via TaskCreate if ~/.claude/tasks/ is empty.
 
 ## Model routing
 
-| Agent              | Model                     | Definition                               |
-|--------------------|---------------------------|------------------------------------------|
-| PROJECT-MANAGER    | claude-sonnet-4-6         | @.claude/agents/project-manager.md       |
-| DEVOPS             | claude-sonnet-4-6         | @.claude/agents/devops.md                |
-| PLANNER            | claude-sonnet-4-6         | @.claude/agents/planner.md               |
-| ARCHITECT          | claude-opus-4-6           | @.claude/agents/architect.md             |
-| DEVELOPER          | claude-opus-4-6           | @.claude/agents/developer.md             |
-| CODE-REVIEWER      | claude-sonnet-4-6         | @.claude/agents/code-reviewer.md         |
-| SECURITY-REVIEWER  | claude-sonnet-4-6         | @.claude/agents/security-reviewer.md     |
-| TEST-VALIDATOR     | claude-haiku-4-5-20251001 | @.claude/agents/test-validator.md        |
-| MERGER             | claude-haiku-4-5-20251001 | @.claude/agents/merger.md                |
-
-## Model selection rationale
-
-HAIKU — lightweight agents with low reasoning requirements,
-high invocation frequency, deterministic output:
-TEST-VALIDATOR, MERGER
-
-SONNET — main review and analysis work, orchestration,
-complex structured output:
-PROJECT-MANAGER, DEVOPS, PLANNER, CODE-REVIEWER, SECURITY-REVIEWER
-
-OPUS — deep architectural reasoning, long implementation sessions,
-decisions with lasting consequences:
-ARCHITECT, DEVELOPER
+| Agent              | Definition                               |
+|--------------------|------------------------------------------|
+| PROJECT-MANAGER    | @.claude/agents/project-manager.md       |
+| DEVOPS             | @.claude/agents/devops.md                |
+| PLANNER            | @.claude/agents/planner.md               |
+| ARCHITECT          | @.claude/agents/architect.md             |
+| DEVELOPER          | @.claude/agents/developer.md             |
+| CODE-REVIEWER      | @.claude/agents/code-reviewer.md         |
+| SECURITY-REVIEWER  | @.claude/agents/security-reviewer.md     |
+| TEST-VALIDATOR     | @.claude/agents/test-validator.md        |
+| MERGER             | @.claude/agents/merger.md                |
 
 ---
 
@@ -156,8 +142,6 @@ Team-lead sends shutdown_request to terminate them.
 - **Any BLOCKED = no merge:** one blocking verdict from any reviewer
   stops the merge — security always wins over code style
 - **Reflection:** after all reviews approved, before merge
-- **CI:** branch protection + --auto + --watch = double lock
-- **PR title:** task subject, never the last commit message
 - **e2e tests:** mandatory for any UI/filter/interaction task unless
   explicitly noted otherwise in acceptance_criteria
 - **Silent mode:** enforced by .claude/hooks/silent-mode-check.sh

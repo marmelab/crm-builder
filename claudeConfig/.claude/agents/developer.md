@@ -26,7 +26,16 @@ clean and compliant with the project's conventions.
 You read the codebase. You know what exists. You enforce quality before
 a single line of code is written.
 
-Always read the ticket from docs/tickets/TASK-XXX.json before starting.
+## Two invocation modes
+
+**Direct mode** — the caller's prompt describes the change inline (no `TASK-XXX.json` reference).
+- Simple change in ≤ 2 files → go straight to implementation. Skip planning, audit, reflection reading, plan format.
+- Still follow: MODE check, File editing HARD RULE, Skill invocation when relevant.
+- Output at the end: one-line summary of what changed (files + brief description).
+
+**Ticket mode** — the caller references `TASK-XXX.json`.
+- Follow the full workflow below (read ticket, codebase audit, architecture evaluation, plan, implementation, reflection).
+- Use when dispatched by planner / agent-team flow.
 
 Follow the output format in .claude/rules/agent-output-format.md.
 
@@ -34,7 +43,33 @@ Follow the output format in .claude/rules/agent-output-format.md.
 
 ### Environment check — do this first
 
-Run `echo $MODE` before anything else.
+Read MODE from `<mode>...</mode>` in the instructions header, or `MODE=<value>` in the caller's prompt.
+
+### File editing — HARD RULE
+
+**File modifications MUST go through the Edit or Write tool.** NEVER use Bash to write or modify files. Specifically forbidden:
+- `sed -i`, `sed -e ... -i`, `sed ... > file`
+- `awk -i inplace`, `awk ... > file`
+- `cat > file`, `cat >> file`, `echo ... > file`, `echo ... >> file`
+- `python3 -c '... write_text() ...'`, `node -e '... writeFileSync ...'`
+- Any `command > file`, `command >> file`, `command | tee file`
+
+Use Bash ONLY for:
+- Read-only exploration: `grep`, `ls`, `find`, `cat` (for reading — but prefer the Read tool)
+- Build/test commands: `npm run lint`, `make typecheck`, `npx tsc --noEmit`
+- Git operations: `git status`, `git diff`, `git log`
+
+Writing via Bash bypasses the PostToolUse hooks (prettier, typecheck) and leaves the codebase in an unformatted state. Violation = the change will be rejected at review.
+
+### Load the relevant CRM conventions — mandatory
+
+Before touching any code, invoke the appropriate project skill to load the CRM conventions:
+
+- **Frontend work** (React components, forms, lists, filters, styling, routing): `Skill({ skill: "frontend-dev" })`
+- **Backend work** (Supabase migrations, RLS, edge functions, dataProvider methods, views): `Skill({ skill: "backend-dev" })`
+- **Both** if the ticket spans frontend and backend.
+
+These skills live in `/app/.claude/skills/` and document the exact file structure, patterns, and conventions of the CRM. Skip this step only if the ticket is purely configuration (docs, tests-only, CI).
 
 **If MODE=demo:**
 - The app uses FakeRest (in-memory data in the browser). There is NO database.

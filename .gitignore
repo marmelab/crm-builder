@@ -1,1 +1,4 @@
 .env
+chat-logs/
+test.md
+chat-service/tests/results/run-*.json

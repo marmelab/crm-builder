@@ -48,6 +48,10 @@ done
 # Fix ownership — credentials written during bootstrap run as root
 chown -R developer:developer /home/developer/.claude 2>/dev/null || true
 
+# Chat-service logs dir (bind-mounted in dev, needs developer write access)
+mkdir -p /chat-service/logs 2>/dev/null || true
+chmod 777 /chat-service/logs 2>/dev/null || true
+
 cd ${APP_DIR}
 
 # ── Select App.tsx variant based on mode ─────────────────────

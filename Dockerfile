@@ -64,7 +64,10 @@ RUN npm install
 # ── Playwright Chromium (for vitest browser mode) ─────────────
 # PLAYWRIGHT_BROWSERS_PATH=/ms-playwright → accessible to all users
 RUN npx playwright install chromium-headless-shell \
-    && chmod -R a+rx /ms-playwright
+    && chmod -R a+rwx /ms-playwright
+
+# TypeScript language server (required by typescript-lsp plugin for agents)
+RUN npm install -g typescript-language-server typescript
 
 # ── Git initialisation ────────────────────────────────────────
 # Required for agents to create worktrees:

@@ -68,39 +68,16 @@
                         "timeout": 120
                     }
                 ]
-            }
-        ],
-        "PostToolUse": [
+            },
             {
-                "matcher": "Edit|Write",
+                "matcher": "developer",
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/prettier-on-edit.sh"
-                    }
-                ]
-            }
-        ],
-        "TaskCompleted": [
-            {
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/typecheck-on-commit.sh"
-                    },
-                    {
-                        "type": "command",
-                        "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/test-on-complete.sh"
-                    }
-                ]
-            }
-        ],
-        "TeammateIdle": [
-            {
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/token-stats.sh"
+                        "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/typecheck-on-commit.sh",
+                        "asyncRewake": true,
+                        "rewakeMessage": "Type check failed after developer finished:",
+                        "timeout": 120
                     }
                 ]
             }

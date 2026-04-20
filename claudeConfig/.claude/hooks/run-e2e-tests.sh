@@ -4,6 +4,11 @@
 
 cd "$CLAUDE_PROJECT_DIR" || exit 0
 
+# Skip in demo mode — Supabase (localhost:54341) is not running
+if [ "${MODE:-demo}" = "demo" ]; then
+  exit 0
+fi
+
 if npx playwright test 2>&1; then
     exit 0
 else

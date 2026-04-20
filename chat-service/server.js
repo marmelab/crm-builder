@@ -1,5 +1,6 @@
 import { createServer } from 'http';
-import { readFile } from 'fs/promises';
+import { readFile, mkdir } from 'fs/promises';
+import { createWriteStream } from 'fs';
 import { extname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
@@ -11,6 +12,7 @@ const PORT = 8080;
 const CWD = '/app';
 const CLAUDE_HOME = '/home/developer';
 const ORCHESTRATOR_MD = `${CLAUDE_HOME}/.claude/agents/chat-orchestrator.md`;
+const LOG_DIR = '/chat-service/logs';
 const WELCOME_CHOICES = {
   type: 'choices',
   content: 'Hello! How can I help you today?',
@@ -83,8 +85,9 @@ const httpServer = createServer(async (req, res) => {
 });
 
 function spawnClaude(userMessage, sessionId) {
+  const mode = process.env.MODE || 'demo';
   const prompt = systemPrompt
-    ? `<instructions>\n${systemPrompt}\n</instructions>\n\n${userMessage}`
+    ? `<instructions>\n${systemPrompt}\n</instructions>\n\n<mode>${mode}</mode>\n\n${userMessage}`
     : userMessage;
   const args = [
     '--output-format', 'stream-json',
@@ -92,7 +95,6 @@ function spawnClaude(userMessage, sessionId) {
     '--dangerously-skip-permissions',
   ];
   if (orchestratorModel) args.push('--model', orchestratorModel);
-  if (orchestratorTools?.length) args.push('--tools', orchestratorTools.join(','));
   if (sessionId) args.push('--resume', sessionId);
   args.push('-p', prompt);
   return spawn('claude', args, {
@@ -102,10 +104,24 @@ function spawnClaude(userMessage, sessionId) {
   });
 }
 
+async function createSessionLog() {
+  await mkdir(LOG_DIR, { recursive: true }).catch(() => {});
+  const ts = new Date().toISOString().replace(/[:.]/g, '-');
+  const path = `${LOG_DIR}/session-${ts}.jsonl`;
+  const stream = createWriteStream(path, { flags: 'a' });
+  return {
+    path,
+    write: (dir, data) => stream.write(JSON.stringify({ ts: new Date().toISOString(), dir, ...data }) + '\n'),
+    close: () => stream.end(),
+  };
+}
+
 function safeSend(ws, payload) {
   if (ws.readyState === ws.OPEN) {
     ws.send(JSON.stringify(payload));
   }
+  const state = connections.get(ws);
+  state?.log?.write('out', payload);
 }
 
 function friendlyError({ exitCode, stderr, rateLimit, resultError }) {
@@ -214,13 +230,16 @@ const wss = new WebSocketServer({ server: httpServer });
 wss.on('error', (err) => console.error('WebSocket server error:', err));
 httpServer.on('error', (err) => console.error('HTTP server error:', err));
 
-wss.on('connection', (ws) => {
+wss.on('connection', async (ws) => {
+  const log = await createSessionLog().catch(() => null);
   connections.set(ws, {
     sessionId: null,
     busy: false,
     queue: [],
     stats: { tokensIn: 0, tokensOut: 0, costUsd: 0 },
+    log,
   });
+  if (log) console.log(`Session log: ${log.path}`);
   safeSend(ws, WELCOME_CHOICES);
 
   ws.on('message', (data) => {
@@ -230,6 +249,7 @@ wss.on('connection', (ws) => {
 
     const state = connections.get(ws);
     if (!state) return;
+    state.log?.write('in', { type: 'user_message', content: parsed.content });
     if (state.busy) {
       state.queue.push(parsed.content);
     } else {
@@ -238,7 +258,11 @@ wss.on('connection', (ws) => {
     }
   });
 
-  ws.on('close', () => connections.delete(ws));
+  ws.on('close', () => {
+    const s = connections.get(ws);
+    s?.log?.close();
+    connections.delete(ws);
+  });
 });
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
