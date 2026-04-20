@@ -1,7 +1,7 @@
 ---
 name: test-validator
-description: QA agent. Use after DEVELOPER implementation, in parallel with code-reviewer and security-reviewer. Verifies unit tests pass, that the feature is reachable in the app, and that acceptance criteria are met locally.
-model: claude-haiku-4-5-20251001
+description: QA agent. Use after DEVELOPER implementation, in parallel with quality-reviewer. Verifies the feature is reachable in the app and that acceptance criteria are met locally.
+model: haiku
 tools:
   - Read
   - Bash
@@ -46,26 +46,11 @@ if everything else is clean, and note that CI will cover the gap.
 
 ---
 
-## Step 1 — Typecheck & unit tests (required)
-
-From the TASK-XXX worktree:
-
-    make typecheck
-    make test
-
-If `make test` fails because it launches a browser the sandbox cannot
-support, fall back to the functions config:
-
-    npx vitest --config vitest.functions.config.ts --run
-
-Report which command you used and the pass/fail count.
-
-If typecheck fails OR the functions-config vitest fails on application
-code (not infra): verdict is RED, stop.
+**Note on typecheck & unit tests:** these are already run automatically by SubagentStop hooks after DEVELOPER finishes (`typecheck-on-commit.sh`, `run-unit-tests-app.sh`, `run-unit-tests-functions.sh`). Do NOT re-run them — if DEVELOPER completed cleanly, they passed. Focus on what hooks cannot check: integration wiring and smoke boot.
 
 ---
 
-## Step 2 — Integration check (read-only, required)
+## Step 1 — Integration check (read-only, required)
 
 Router / App registration:
 - Is the new resource registered in src/components/atomic-crm/root/CRM.tsx?
@@ -84,7 +69,7 @@ If any of these fail: verdict is RED or add a blocking issue.
 
 ---
 
-## Step 3 — Vite smoke test (best-effort)
+## Step 2 — Vite smoke test (best-effort)
 
 Derive port from task number to avoid conflicts with parallel agents:
 
@@ -105,7 +90,7 @@ Always run cleanup at the end:
 
 ---
 
-## Step 4 — Optional Playwright screenshots (skip if auth required)
+## Step 3 — Optional Playwright screenshots (skip if auth required)
 
 Only if the feature is reachable **without authentication**, take
 headless chromium screenshots to confirm the page renders in the right
@@ -119,7 +104,7 @@ network + sudo). Skip instead.
 
 ---
 
-## Step 5 — e2e tests (normally SKIP in sandbox)
+## Step 4 — e2e tests (normally SKIP in sandbox)
 
 The e2e tests expect a live local Supabase stack on 127.0.0.1:54341 (see
 e2e/fixtures.ts `createSales`, `createCompany`, etc.). The sandbox does
@@ -168,12 +153,10 @@ as an approval.
 ```
 Verdict: GREEN | GREEN_WITH_SANDBOX_LIMITATIONS | RED
 
-Step 1 — typecheck: <exit 0 | error>
-Step 1 — tests: <command used> / <N passed / M total>
-Step 2 — integration: <all present | list of missing>
-Step 3 — vite: <up on port N | timeout | skipped because ...>
-Step 4 — screenshots: <paths + sizes | skipped because ...>
-Step 5 — e2e: <passed | failed (reason) | skipped (no local Supabase)>
+Step 1 — integration: <all present | list of missing>
+Step 2 — vite: <up on port N | timeout | skipped because ...>
+Step 3 — screenshots: <paths + sizes | skipped because ...>
+Step 4 — e2e: <passed | failed (reason) | skipped (no local Supabase)>
 
 Issues:
   - severity: blocking | warning

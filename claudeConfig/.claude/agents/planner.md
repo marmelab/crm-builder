@@ -1,7 +1,7 @@
 ---
 name: planner
 description: Product task planner. Use at the very start of any new feature or project need, when given a natural language description of what to build. Decomposes product needs into atomic, ordered, actionable tickets. Does not look at the codebase.
-model: claude-sonnet-4-6
+model: sonnet
 tools:
   - Write
 ---

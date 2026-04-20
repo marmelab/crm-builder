@@ -70,7 +70,9 @@ ws.onmessage = (event) => {
   }
 
   if (msg.type === 'stats') {
-    stats.textContent = `${formatTokens(msg.tokensIn)} in · ${formatTokens(msg.tokensOut)} out · $${msg.costUsd.toFixed(3)}`;
+    const agents = msg.activeAgents || 0;
+    const agentsPart = agents > 0 ? `🤖 ${agents} · ` : '';
+    stats.textContent = `${agentsPart}${formatTokens(msg.tokensIn)} in · ${formatTokens(msg.tokensOut)} out · $${msg.costUsd.toFixed(3)}`;
     return;
   }
 

@@ -44,8 +44,7 @@ On session start, check if tasks exist in ~/.claude/tasks/:
          reads ticket from docs/tickets/TASK-XXX.json
 
     → parallel reviews (simultaneously):
-         CODE-REVIEWER      @.claude/agents/code-reviewer.md
-         SECURITY-REVIEWER  @.claude/agents/security-reviewer.md
+         QUALITY-REVIEWER   @.claude/agents/quality-reviewer.md
          TEST-VALIDATOR     @.claude/agents/test-validator.md
 
     All APPROVED:
@@ -106,8 +105,7 @@ tasks via TaskCreate if ~/.claude/tasks/ is empty.
 | PLANNER            | @.claude/agents/planner.md               |
 | ARCHITECT          | @.claude/agents/architect.md             |
 | DEVELOPER          | @.claude/agents/developer.md             |
-| CODE-REVIEWER      | @.claude/agents/code-reviewer.md         |
-| SECURITY-REVIEWER  | @.claude/agents/security-reviewer.md     |
+| QUALITY-REVIEWER   | @.claude/agents/quality-reviewer.md      |
 | TEST-VALIDATOR     | @.claude/agents/test-validator.md        |
 | MERGER             | @.claude/agents/merger.md                |
 

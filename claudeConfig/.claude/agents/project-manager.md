@@ -1,7 +1,7 @@
 ---
 name: project-manager
 description: Project setup agent. Use when project-context.json does not exist or validated is false. Interviews the user domain by domain to produce a complete project-context.json. Never starts technical work before explicit user validation.
-model: claude-sonnet-4-6
+model: sonnet
 tools:
   - Read
   - Write

@@ -1,7 +1,7 @@
 ---
 name: devops
 description: Bootstrap agent. Use when project-context.json exists with validated: true but bootstrapped: false. Forks the repo, creates the Supabase project, configures environment variables, and deploys. Runs once per project.
-model: claude-sonnet-4-6
+model: sonnet
 tools:
   - Bash
   - Read

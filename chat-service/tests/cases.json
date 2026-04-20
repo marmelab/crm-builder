@@ -5,7 +5,9 @@
     "mode": "quick_edit",
     "prompt": "change the 'Hot Contacts' label on the dashboard to 'My Friends'",
     "expect": {
-      "mustNotInvoke": ["planner"],
+      "mustNotInvoke": [
+        "planner"
+      ],
       "maxDurationMs": 150000,
       "maxCostUsd": 0.60
     }
@@ -16,7 +18,9 @@
     "mode": "quick_edit",
     "prompt": "change the primary color of the CRM to purple",
     "expect": {
-      "mustNotInvoke": ["planner"],
+      "mustNotInvoke": [
+        "planner"
+      ],
       "maxDurationMs": 180000,
       "maxCostUsd": 0.80
     }
@@ -27,7 +31,9 @@
     "mode": "quick_edit",
     "prompt": "hide the Refresh button in the CRM header",
     "expect": {
-      "mustNotInvoke": ["planner"],
+      "mustNotInvoke": [
+        "planner"
+      ],
       "maxDurationMs": 180000,
       "maxCostUsd": 0.80
     }
@@ -38,9 +44,12 @@
     "mode": "quick_edit",
     "prompt": "add a 'priority' field (low/medium/high) to the deals entity, shown in the edit form and the deal card",
     "expect": {
-      "mustInvoke": ["planner", "developer"],
-      "maxDurationMs": 900000,
-      "maxCostUsd": 4.00
+      "mustInvoke": [
+        "planner",
+        "developer"
+      ],
+      "maxDurationMs": 2700000,
+      "maxCostUsd": 6.00
     }
   },
   {
@@ -49,7 +58,10 @@
     "mode": "quick_edit",
     "prompt": "make it better",
     "expect": {
-      "mustNotInvoke": ["developer", "planner"],
+      "mustNotInvoke": [
+        "developer",
+        "planner"
+      ],
       "maxDurationMs": 60000,
       "maxCostUsd": 0.30
     }

@@ -40,6 +40,7 @@ fi
 cp -f /root/.claude/settings.json /home/developer/.claude/settings.json 2>/dev/null || true
 for d in agents skills hooks rules; do
   if [ -d "/root/.claude/$d" ]; then
+    rm -rf "/home/developer/.claude/$d" 2>/dev/null || true
     mkdir -p "/home/developer/.claude/$d"
     cp -rf "/root/.claude/$d/." "/home/developer/.claude/$d/" 2>/dev/null || true
   fi

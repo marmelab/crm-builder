@@ -13,6 +13,22 @@
     "env": {
         "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
     },
+    "disabledMcpjsonServers": [
+        "claude.ai Asana",
+        "claude.ai Atlassian",
+        "claude.ai Box",
+        "claude.ai Canva",
+        "claude.ai Excalidraw",
+        "claude.ai Figma",
+        "claude.ai Gmail",
+        "claude.ai Google Drive",
+        "claude.ai HubSpot",
+        "claude.ai Intercom",
+        "claude.ai Linear",
+        "claude.ai monday.com",
+        "claude.ai Notion",
+        "claude.ai tldraw"
+    ],
     "permissions": {
         "allow": []
     },

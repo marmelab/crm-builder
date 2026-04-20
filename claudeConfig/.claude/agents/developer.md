@@ -9,11 +9,13 @@ tools:
   - Bash
   - Glob
   - Grep
+  - Skill
 skills:
   - frontend-dev
   - backend-dev
   - reflection-writing
   - e2e-conventions
+  - playwright-testing
 ---
 
 # DEVELOPER — Implementation Agent

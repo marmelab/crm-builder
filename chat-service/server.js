@@ -185,12 +185,25 @@ async function processMessage(ws, prompt) {
           rateLimit = event.rate_limit_info;
         }
 
+        // Track active sub-agents (task_started / task_completed / task_notification)
+        if (event.type === 'system') {
+          if (event.subtype === 'task_started') {
+            state.stats.activeAgents++;
+            safeSend(ws, { type: 'stats', ...state.stats });
+          } else if (event.subtype === 'task_notification' && event.status === 'completed') {
+            state.stats.activeAgents = Math.max(0, state.stats.activeAgents - 1);
+            safeSend(ws, { type: 'stats', ...state.stats });
+          }
+        }
+
         if (event.type === 'result') {
           if (event.is_error) resultError = true;
           const u = event.usage || {};
           state.stats.tokensIn += (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
           state.stats.tokensOut += u.output_tokens || 0;
           state.stats.costUsd += event.total_cost_usd || 0;
+          // Reset active agents when turn ends (safety — sub-agents should all be done)
+          state.stats.activeAgents = 0;
           safeSend(ws, { type: 'stats', ...state.stats });
         }
       } catch {}
@@ -236,7 +249,7 @@ wss.on('connection', async (ws) => {
     sessionId: null,
     busy: false,
     queue: [],
-    stats: { tokensIn: 0, tokensOut: 0, costUsd: 0 },
+    stats: { tokensIn: 0, tokensOut: 0, costUsd: 0, activeAgents: 0 },
     log,
   });
   if (log) console.log(`Session log: ${log.path}`);

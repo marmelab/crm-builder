@@ -28,7 +28,18 @@ const flags = {
 
 function resetCrmSource() {
   try {
-    execSync('docker exec -u developer atomic-crm-demo git -C /app checkout -- src/', { stdio: 'pipe' });
+    // git checkout reverts src/ — but App.tsx in git is the Supabase-defaulted version,
+    // so we re-apply the mode-specific variant after checkout.
+    execSync(
+      'docker exec -u developer atomic-crm-demo sh -c "' +
+        'cd /app && git checkout -- src/ && ' +
+        'if [ \\"${MODE:-demo}\\" = \\"demo\\" ]; then ' +
+        '  cp /app-variants/App.fakerest.tsx src/App.tsx; ' +
+        'else ' +
+        '  cp /app-variants/App.supabase.tsx src/App.tsx; ' +
+        'fi"',
+      { stdio: 'pipe' }
+    );
   } catch {
     console.warn('  (warning: could not reset /app/src in container — continuing)');
   }

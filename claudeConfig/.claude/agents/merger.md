@@ -1,7 +1,7 @@
 ---
 name: merger
 description: Merge and CI watch agent. Use after all reviewers have approved. Creates the PR, enables auto-merge, and monitors CI. Reports failures to team-lead without fixing them.
-model: claude-haiku-4-5-20251001
+model: haiku
 tools:
   - Bash
   - Read

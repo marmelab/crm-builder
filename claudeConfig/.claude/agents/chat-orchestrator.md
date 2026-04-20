@@ -97,9 +97,8 @@ Examples that are COMPLEX even if they sound simple:
      TeamCreate({
        team_name: "reviews-TASK-XXX",
        agents: [
-         { subagent_type: "code-reviewer",     model: "sonnet", prompt: "..." },
-         { subagent_type: "security-reviewer", model: "sonnet", prompt: "..." },
-         { subagent_type: "test-validator",    model: "haiku",  prompt: "..." },
+         { subagent_type: "quality-reviewer", model: "sonnet", prompt: "..." },
+         { subagent_type: "test-validator",   model: "haiku",  prompt: "..." },
        ]
      })
      ```
