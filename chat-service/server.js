@@ -129,6 +129,17 @@ function safeSend(ws, payload) {
   state?.log?.write('out', payload);
 }
 
+function sendStats(ws) {
+  const state = connections.get(ws);
+  if (!state) return;
+  safeSend(ws, {
+    type: 'stats',
+    tokensUsed: state.stats.tokensUsed,
+    costUsd: state.stats.costUsd + state.stats.costUsdCurrentSpawn,
+    activeAgents: state.stats.activeAgents,
+  });
+}
+
 function friendlyError({ exitCode, stderr, rateLimit, resultError }) {
   if (rateLimit?.resetsAt) {
     const minutes = Math.max(1, Math.ceil((rateLimit.resetsAt * 1000 - Date.now()) / 60000));
@@ -194,22 +205,29 @@ async function processMessage(ws, prompt) {
         if (event.type === 'system') {
           if (event.subtype === 'task_started') {
             state.stats.activeAgents++;
-            safeSend(ws, { type: 'stats', ...state.stats });
+            sendStats(ws);
           } else if (event.subtype === 'task_notification' && event.status === 'completed') {
             state.stats.activeAgents = Math.max(0, state.stats.activeAgents - 1);
-            safeSend(ws, { type: 'stats', ...state.stats });
+            sendStats(ws);
           }
         }
 
         if (event.type === 'result') {
           if (event.is_error) resultError = true;
           const u = event.usage || {};
-          state.stats.tokensIn += (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
-          state.stats.tokensOut += u.output_tokens || 0;
-          state.stats.costUsd += event.total_cost_usd || 0;
+          // tokens: usage is per-turn, sum is correct. Exclude cache_read — it's
+          // re-hydrated cached context, facturé 10× moins et pas "consommé"
+          // depuis la limite utilisateur.
+          state.stats.tokensUsed +=
+            (u.input_tokens || 0) +
+            (u.cache_creation_input_tokens || 0) +
+            (u.output_tokens || 0);
+          // cost: total_cost_usd is cumulative within the current spawn — replace,
+          // don't add (summing cumulative values inflates massively).
+          state.stats.costUsdCurrentSpawn = event.total_cost_usd || 0;
           // Reset active agents when turn ends (safety — sub-agents should all be done)
           state.stats.activeAgents = 0;
-          safeSend(ws, { type: 'stats', ...state.stats });
+          sendStats(ws);
         }
       } catch {}
     }
@@ -230,6 +248,14 @@ async function processMessage(ws, prompt) {
       });
     }
   } finally {
+    // Commit this spawn's cumulative cost into the session total, reset for next spawn
+    const s0 = connections.get(ws);
+    if (s0) {
+      s0.stats.costUsd += s0.stats.costUsdCurrentSpawn;
+      s0.stats.costUsdCurrentSpawn = 0;
+      sendStats(ws);
+    }
+
     safeSend(ws, { type: 'status', working: false });
     const s = connections.get(ws);
     if (s && s.queue.length > 0) {
@@ -254,7 +280,17 @@ wss.on('connection', async (ws) => {
     sessionId: null,
     busy: false,
     queue: [],
-    stats: { tokensIn: 0, tokensOut: 0, costUsd: 0, activeAgents: 0 },
+    stats: {
+      // tokensUsed = fresh input + cache_creation + output (cache_read excluded:
+      // it's re-hydrated cached context, not "burned" from the user's budget)
+      tokensUsed: 0,
+      // costUsd = committed cost from finished spawns
+      costUsd: 0,
+      // costUsdCurrentSpawn = cumulative total_cost_usd from the in-progress spawn
+      // (Claude CLI emits this as cumulative-within-spawn, so we replace not add)
+      costUsdCurrentSpawn: 0,
+      activeAgents: 0,
+    },
     log,
   });
   if (log) console.log(`Session log: ${log.path}`);

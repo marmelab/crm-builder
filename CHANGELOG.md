@@ -305,9 +305,67 @@ Changes in `developer.md`:
 
 ---
 
+## Phase 20a — Persist tickets and reflections (2026-04-21)
+
+Discovered that `/app/docs/` (where planner writes tickets and developer writes reflections) **was not mounted** — files lived in the container's overlay filesystem and vanished at every `docker compose down` (no `-v` needed). This silently made the Phase 18 directive "read `docs/reflections/` files from the same domain — mandatory" a no-op, because the directory was always empty on a fresh container.
+
+Fix: added `./crm-docs:/app/docs` bind mount to both `demo` and `full` profiles in `docker-compose.yml`. Salvaged the 5 tickets + 2 reflections from test 4 into `./crm-docs/` before the mount took effect (they would have been lost otherwise). Added `crm-docs/` to `.gitignore` (runtime-generated, not source).
+
+The mount only becomes active after the next `docker compose down && up`. Existing container still uses the overlay filesystem for the current session.
+
+**Why**: the reflection accumulation loop (developer reads prior reflections in the same domain to build on them) only pays off if the reflections survive between runs. Phase 18 alone wasn't sufficient — it needed this persistence.
+
+---
+
+## Phase 20 — Model routing per complexity (2026-04-21)
+
+Per Claude Code docs, the `Agent` tool accepts a per-invocation `model` override that takes precedence over the sub-agent's frontmatter default. Resolution order: env var `CLAUDE_CODE_SUBAGENT_MODEL` > invocation `model` > frontmatter `model` > parent session model.
+
+Reused the existing Simple / Complex classification already in `chat-orchestrator.md` (lines 58-89) — no new heuristic, just switched the dispatched model:
+- **Simple change** (label swap, hide/show element, color tweak, config boolean) → `model: "sonnet"` (previously opus)
+- **Complex change** (schema, new feature, multi-file, business logic) → `model: "opus"` (unchanged, still the default)
+
+Safety net: if sonnet produces code that doesn't typecheck or violates prettier, the SubagentStop hooks catch it (Phase 15+19) and the rewake mechanism (Phase 17) lets sonnet self-correct in-context — same loop that opus benefits from.
+
+Expected impact on Simple cases like test 1 (hide Refresh button): **~5× cost reduction** ($0.35 → $0.07), **~2× faster** (1m30 → 45s). Complex cases like test 4 stay on opus → no change.
+
+---
+
+## Phase 21 — Stats counter fix + user message hygiene (2026-04-21)
+
+### Test 4 round 2 validated all prior phases
+Re-ran `medium-new-field` after phases 15-20. Detailed chronology saved to [docs/test4-round2-chronology.md](docs/test4-round2-chronology.md). Headline: **31 min / $8.05 / 3 tickets / 10 dispatches / 4 skill invocations / 0 stop-hook-error** vs baseline (before 15-20) of 35 min / $11.22 / 5 tickets / 14 dispatches / 0 skills / 6 stop-hook-errors.
+
+### Stats counter bug (cost inflated 13× vs reality)
+Observed while analyzing round 2: UI showed `$103` at end of run, but the real cumulative cost from Claude CLI was `$8.05`. Root cause: `total_cost_usd` in each `result` event is **cumulative-within-spawn**, not per-event. Our accumulator did `costUsd += event.total_cost_usd`, effectively summing cumulative snapshots repeatedly → inflation proportional to the number of result events (~13 in this run).
+
+Also redefined "tokens used" per user intent: the meaningful number is what counts against the user's budget, not the raw sum including cache_read. Cache_read tokens are re-hydrated from the prompt cache and billed 10× less; including them made the UI show 2.2M tokens for a run that really used ~40k of "fresh" tokens.
+
+Fixes in `chat-service/server.js`:
+- Replaced `tokensIn` / `tokensOut` with a single `tokensUsed = input + cache_creation + output` (cache_read excluded).
+- Split `costUsd` into `costUsd` (committed from past spawns) + `costUsdCurrentSpawn` (live from current spawn, replaced on each result event). UI receives `costUsd + costUsdCurrentSpawn` as the displayable total.
+- On `processMessage` close, commit `costUsdCurrentSpawn → costUsd` so multi-turn sessions accumulate correctly.
+- Refactored stats broadcast via `sendStats(ws)` helper to compute the displayable fields in one place.
+
+Fix in `chat-service/public/chat.js`:
+- UI line changed from `"N in · M out · $X.XXX"` to `"Y tokens · $X.XXX"` (single token count, no in/out split — the user doesn't care).
+
+### User-facing message leaks
+Chronology analysis caught the orchestrator emitting `"TASK-006 approuvé"`, `"TASK-007 approuvé"`, `"couche données"`, `"Les avertissements LinkedIn..."` in user-facing messages. These are all technical identifiers forbidden per `chat-orchestrator.md`'s own "Forbidden words" section — the rule was being skipped.
+
+Strengthened the rule in `chat-orchestrator.md`:
+- Explicitly added `ticket IDs (TASK-006, ...)`, `internal layer names ("couche données")`, `library names from the codebase (LinkedIn, fakerest, Supabase)` to the forbidden list.
+- Added 4 concrete ❌/✅ examples taken directly from round 2's leaks.
+- Instructed to refer to tickets / steps as "étape 1", "première étape", "étape finale" — never by ID.
+
+**Why**: the chat-orchestrator had a rule but it was vague ("code concepts, error messages, agent names"). Seeing the violations in a real run and adding them to the example block with explicit counter-examples is the simplest reinforcement.
+
+---
+
 ## Open items / known limits
 
 - **`medium-new-field` test** times out at 15 min (bumped to 35 min). Real agent-team flow on a multi-file feature naturally takes 20-30 min.
+- **Evaluate mgrep** (semantic code search, Mixedbread AI) if the codebase exploration phase remains a bottleneck after Phases 18-20. Claimed 2× token reduction vs grep on a 50-task benchmark, but Phases 18 (`files_to_modify` in tickets) and 19 (mandatory skill invocation) target the same problem from a different angle. Re-assess after the next test 4.
 - **Skill invocation enforcement** — all 5 skills now mandatory (Phases 18 + 19). Need to re-run test 4 to verify 0/7 → 7/7 adoption.
 - **Planner granularity** — coarse-over-fine rule added (Phase 18). Need to re-run test 4 to verify ≤ 3 tickets vs 5 previously.
 - **Orchestrator occasionally generates malformed `Agent({ subagent_type: None })` calls** when confused. Not blocking but wasteful.
@@ -315,4 +373,4 @@ Changes in `developer.md`:
 
 ---
 
-_Last updated: 2026-04-21 (Phase 19)_
+_Last updated: 2026-04-21 (Phase 21)_

@@ -37,6 +37,11 @@ services:
       # DEV ONLY — logs structurés des sessions chat pour review/analyse.
       # RETIRER avant release production.
       - ./chat-logs:/chat-service/logs
+      # Runtime-generated tickets + reflections. Persisted so the developer
+      # can read prior reflections (Phase 18 directive) across container
+      # restarts. Without this, /app/docs/ lives in the overlay and is wiped
+      # at each `docker compose down`.
+      - ./crm-docs:/app/docs
 
   # ── Full mode — local Supabase, requires Docker socket ─────
   crm-full:
@@ -55,6 +60,8 @@ services:
       - claude-auth:/home/developer/.claude
       - /var/run/docker.sock:/var/run/docker.sock # ⚠️ required
       - supabase-cache:/root/.docker              # cache pulled images
+      # Runtime-generated tickets + reflections (see demo profile comment).
+      - ./crm-docs:/app/docs
 
 volumes:
   crm-source:
