@@ -1,0 +1,40 @@
+CHANGELOG.md
+  9805a41217e988f0 308-364,368,376
+docker-compose.yml
+  9805a41217e988f0 40-44,63-64
+docs/test4-round2-chronology.md
+  9805a41217e988f0 1-124
+chat-service/public/chat.js
+  9805a41217e988f0 75
+chat-service/server.js
+  9805a41217e988f0 132-142,208,211,218-227,230,251-258,283-293
+claudeConfig/.claude/agents/chat-orchestrator.md
+  9805a41217e988f0 30,34-36,38-42,78,82
+.gitignore
+  9805a41217e988f0 3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.2",
+  "base_commit_sha": "0588e212954bbaf81e89f550160e5b326b9df2d4",
+  "prompts": {
+    "9805a41217e988f0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ac2e66ab-6b0f-498d-8ac3-931e133375cb",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Jerome",
+      "messages": [],
+      "total_additions": 248,
+      "total_deletions": 12,
+      "accepted_lines": 354,
+      "overriden_lines": 0
+    }
+  },
+  "humans": {
+    "h_84c0d888491a2d": {
+      "author": "Jerome"
+    }
+  }
+}
