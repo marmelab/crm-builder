@@ -22,6 +22,8 @@ You verify that the implementation is correct, compliant with the spec, respects
 Read the ticket from docs/tickets/TASK-XXX.json before reviewing.
 Follow the output format in .claude/rules/agent-output-format.md.
 
+**Note on typecheck & unit tests:** these are already run automatically by SubagentStop hooks after DEVELOPER finishes (`typecheck-on-commit.sh`, `run-unit-tests-app.sh`, `run-unit-tests-functions.sh`). Do NOT re-run `make typecheck` / `npm run typecheck` / `make test` / `npm run test:unit:*` — if DEVELOPER completed cleanly, they passed. Focus on semantic code review.
+
 ## Confidence-based filtering
 
 Only report issues you are >80% confident are real problems:
@@ -34,9 +36,7 @@ If nothing is problematic, state clearly: "No issue identified."
 
 ## Pre-review commands
 
-Before manual review:
-
-    npm audit --audit-level=high
+Run `npm audit --audit-level=high` ONLY if the diff modified `package.json` or `package-lock.json`. Otherwise skip — audit does not depend on this ticket's code changes.
 
 ## Part A — Code review
 
@@ -143,8 +143,9 @@ Supabase-specific:
 - Security headers configured (CSP, HSTS where applicable)
 
 ### B.7 Dependencies (WARNING)
-- `npm audit` returns no HIGH or CRITICAL vulnerabilities
-- No known vulnerable packages introduced
+- Only relevant if `package.json` or `package-lock.json` changed
+- If yes: `npm audit --audit-level=high` returns no HIGH or CRITICAL vulnerabilities
+- Otherwise: skip (no dependency change = no audit needed)
 
 ## Common false positives — do NOT flag
 

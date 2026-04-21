@@ -4,13 +4,13 @@
 //
 // To switch to Supabase: switch-mode full
 import { CRM } from "@/components/atomic-crm/root/CRM";
-import { dataProvider, authProvider } from "@/components/atomic-crm/providers/fakerest";
+import {
+  dataProvider,
+  authProvider,
+} from "@/components/atomic-crm/providers/fakerest";
 
 const App = () => (
-  <CRM
-    dataProvider={dataProvider}
-    authProvider={authProvider}
-  />
+  <CRM dataProvider={dataProvider} authProvider={authProvider} />
 );
 
 export default App;

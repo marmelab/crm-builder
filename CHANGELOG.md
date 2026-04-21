@@ -189,13 +189,130 @@ Discovery: sub-agents (developer, test-validator) never invoked `frontend-dev` /
 
 ---
 
+## Phase 14 — Test 4 forensic audit (2026-04-21)
+
+After the medium-new-field baseline (35 min / $11.22), a forensic analysis of the session log exposed several systemic inefficiencies. Full chronology saved to [docs/test4-chronology.md](docs/test4-chronology.md).
+
+Key findings:
+- **Sequential despite TeamCreate** — orchestrator announces parallelism but dispatches serially (14 Agent calls instead of ≤7).
+- **Skills `frontend-dev`/`backend-dev` never invoked** (0/7 developers) despite being announced in the system prompt. Root cause: `developer.md` prompt is too soft, nothing forces the invocation.
+- **6 `stop-hook-error` notifications** per run — hooks cassés à chaque frontière d'agent.
+- **Over-granular tickets** (5 tickets for one "add a field" feature).
+- **Edit→prettier loop** cost 4+ min twice — atomic-crm's PostToolUse format hook reformats after every Edit, developer re-reads different bytes, confusion.
+- **qrev + tval re-run typecheck/make test** that hooks should already catch.
+
+---
+
+## Phase 15 — Hook debugging & rewake fix (2026-04-21)
+
+Deep debug of the 6 `stop-hook-error` notifications. Five root causes, fixed in order:
+
+1. **`asyncRewake: true` + `rewakeMessage` were misused.** Per official docs (https://code.claude.com/docs/fr/hooks), `asyncRewake` is for **long-running background hooks** that only notify the parent orchestrator after the fact — it does NOT block a finished sub-agent. `rewakeMessage` is not even a documented field. The user intent ("developer reste vivant et corrige") requires a **synchronous** SubagentStop hook with exit 2 + stderr. Removed both fields from all 4 SubagentStop hook entries.
+2. **`typecheck-on-commit.sh` had no `cd "$CLAUDE_PROJECT_DIR"`** (the 3 others did). Added.
+3. **Hook paths resolved to nowhere.** Settings pointed to `"$CLAUDE_PROJECT_DIR"/.claude/hooks/typecheck-on-commit.sh` = `/app/.claude/hooks/...` — but our hooks live in `/home/developer/.claude/hooks/` (user scope, not project scope). `/app/.claude/hooks/` only contains atomic-crm's own `format-file.sh`. Replaced with absolute `/home/developer/.claude/hooks/...`.
+4. **`CLAUDE_PROJECT_DIR` and `MODE` were not in chat-service's env.** Supervisor passed only `HOME` + `ANTHROPIC_API_KEY`. Added explicit env vars in both `supervisord.{demo,full}.conf` and `server.js` spawn (belt + suspenders).
+5. **Plugin `hookify` (not in `enabledPlugins`) crashed its Stop hook** with `ImportError: No module named 'core'` — its hook fires regardless of enablement. Explicitly disabled `hookify` and `ralph-loop` by setting `false` in `enabledPlugins`.
+
+Result: test 1 (simple-hide) reruns with **0 `stop-hook-error`**, all 4 SubagentStop hooks fire in parallel and log to `chat-logs/hooks.log`:
+```
+e2e       EXIT=0 skipped_demo
+unit-fn   EXIT=0 OK (2s)
+typecheck EXIT=0 OK (32s)
+unit-app  EXIT=0 OK (39s)
+```
+
+Added **tracing to all 4 hooks**: every invocation logs start/end/exit + env to `/chat-service/logs/hooks.log` (bind-mounted to host).
+
+**Why**: the SubagentStop hooks are the backbone of the quality loop — if they fail silently, typecheck errors and test regressions slip past into quality-reviewer unchallenged (cf. TASK-003 in test 4 which required a separate dev-TASK-003fix dispatch to patch `ConfigurationContextValue`).
+
+---
+
+## Phase 16 — Reviewer consolidation round 2 (2026-04-21)
+
+Now that hooks reliably run typecheck + tests, the duplicated work in reviewers can go.
+
+- **`quality-reviewer.md`** — added note explicitly forbidding re-run of typecheck / unit tests (the hooks already did). Narrowed `npm audit` to "only when `package.json` / `package-lock.json` changed". Updated B.7 Dependencies accordingly.
+- **`test-validator.md`** — reinforced the existing "don't re-run" note to cover typecheck + unit tests + e2e + vite build. Removed Step 2 (Vite smoke test — was spending 40 s / ticket for zero new signal). Renumbered steps: 1 = integration check, 2 = screenshots, 3 = e2e spec sanity (no execution). Updated verdict matrix to drop typecheck from RED criteria (hooks handle that upstream).
+
+**Why**: in test 4, `tval-TASK-002-003` spent 5m17s re-running `make test` + `npx vite build` + `tsc --noEmit` + 5× `git diff` — all redundant with the hook layer. Removing those saves ~3 min per cycle × N tickets.
+
+---
+
+## Phase 17 — Rewake mechanism validated (2026-04-21)
+
+Synthetic test: introduced a deliberate TypeScript error in `/app/src/_rewake_test.ts` (`export const _rewake_broken: number = 'this is a string'`) before dispatching developer on a simple UI task.
+
+Observed behavior in `chat-logs/hooks.log`:
+1. Developer completes its task normally → SubagentStop fires the 4 hooks in parallel
+2. `typecheck-on-commit.sh` finds the pre-existing error → **exit 2 with stderr**
+3. Developer does NOT die — its session receives the stderr as a system reminder
+4. Developer investigates: `Read /app/src/_rewake_test.ts` → `Edit` to fix the type → `Bash npx tsc --noEmit` to verify → resumes its original task
+5. Developer re-stops → hooks fire again → typecheck passes → clean exit
+
+Hook log pattern (expected rewake signature):
+```
+11:34:50  typecheck EXIT=2 npm_exit=2   ← rewake triggered
+11:35:35  hooks batch 2 START           ← developer re-stops after fix
+11:36:08  typecheck EXIT=0 OK           ← clean
+```
+
+The single `stop-hook-error` notification still emitted at the rewake moment is benign — it is Claude Code's way of signalling "a Stop hook injected stderr" and is unrelated to the broken plugin errors of Phase 15.
+
+**Why**: confirms the core quality-loop contract end-to-end. Typecheck / unit test regressions caught by hooks will now be auto-corrected by the developer without involving quality-reviewer — no more TASK-003 → TASK-003fix split-dispatch waste.
+
+---
+
+## Phase 18 — Planner file paths + developer skill enforcement (2026-04-21)
+
+Two systemic fixes following test 4's forensic audit (Phase 14).
+
+### Planner now emits `files_to_modify` in each ticket
+- **Tools**: added `Read`, `Grep`, `Glob` to `planner.md` frontmatter (was `Write` only). Planner now does a light file-discovery pass — no reading, just path identification via 1-3 greps/globs per probable area.
+- **Ticket JSON schema**: new `files_to_modify` field, array of 2-6 best-guess paths per ticket.
+- **Coarse-over-fine rule**: added "prefer ≤ 3 tickets per user-visible feature. Merge data-layer tickets (type + seed + config) into one unless any exceeds ~150 LOC / 5 files." — directly addresses test 4's 5-ticket-for-1-feature over-granularity.
+- **Renumbered steps** (now 5 instead of 4, file discovery inserted as Step 2).
+
+### Developer MUST invoke a skill as first action
+- Moved Skill invocation from soft mid-document prose to a **MANDATORY FIRST ACTION** block right after the role description — first thing the reader (and the model) sees.
+- Explicit contract: "Before any Read / Grep / Glob / Edit / Bash call, your very first tool_use MUST be a `Skill` invocation." Reviewer rejects with "skill not loaded" if absent.
+- **`files_to_modify` usage wired into the workflow**: pre-plan checklist now says "Start from `files_to_modify` — read each one BEFORE exploring further". Saves the ~60-90s search phase that plagued every dev dispatch in test 4.
+- Removed the duplicated soft "Load the relevant CRM conventions" section from the middle of the document.
+
+**Why**: in test 4, 0/7 developers invoked `frontend-dev` or `backend-dev` even though both skills are declared in the frontmatter and announced in the system prompt. Evidence: dev-T004 did 7 Greps hunting for form/select conventions, dev-e2e-fix did 24 Reads exploring playwright setup — both would have been substantially reduced with a skill pre-load. Tests will tell whether the stronger wording + `files_to_modify` hint actually changes behavior.
+
+---
+
+## Phase 19 — Prettier on Stop + remaining skill enforcement (2026-04-21)
+
+### Replace atomic-crm's PostToolUse prettier with a Stop hook
+Atomic-crm's project-level `.claude/settings.json` had a `PostToolUse(Edit|Write|NotebookEdit)` hook running `format-file.sh` → `npx prettier --write "$file_path"` on every edit. Root cause of the edit/prettier loop observed in test 4 (dev-TASK-003 = 4m03s, dev-TASK-005 = 4m14s burning on this exact pattern): developer edits → hook silently reformats the file → developer re-reads different bytes than it wrote → doubts itself → re-edits → hook reformats → repeat.
+
+Changes:
+- **Disabled** atomic-crm's PostToolUse prettier hook. `entrypoint.sh` now writes `/app/.claude/settings.json` to `{"hooks": {}}` at every boot (the project-level file comes from the image; overwriting it is the simplest way without asking the user to patch the atomic-crm repo).
+- **New SubagentStop hook** `prettier-on-stop.sh`: runs `npm run prettier` (check mode, not write) after DEVELOPER stops. Exit 2 + stderr ("Prettier check failed — run 'npm run prettier:apply' to fix formatting:") if not clean. Developer rewakes, runs prettier:apply, retries Stop.
+- **Fixed `app-variants/App.fakerest.tsx`** which had 2 prettier violations (long import line + multi-line JSX) — this was the source of the `[warn] src/App.tsx` noise that confused developer in test 4's dev-T003 and dev-T005 (they thought they had caused the warning and wasted time chasing it).
+
+Post-fix `npm run prettier` output: **All matched files use Prettier code style!**
+
+### Complete skill-invocation coverage
+Phase 18 made `frontend-dev` / `backend-dev` mandatory as a FIRST ACTION. But 3 other skills in the developer frontmatter were still never invoked in test 4 (reflection-writing 0/2, e2e-conventions 0/1, playwright-testing 0/1). Same root cause: developer.md prose didn't say "invoke the Skill", only "read existing reflections" / "write an e2e spec".
+
+Changes in `developer.md`:
+- **Mode 2 (Reflection)** — step 1 is now explicitly "Invoke `Skill({ skill: "reflection-writing" })` as your first tool call in Mode 2". Reading existing reflections and writing the file follow.
+- **e2e test rule** — when writing an e2e spec, developer must first invoke both `Skill({ skill: "e2e-conventions" })` and `Skill({ skill: "playwright-testing" })`. Stated inline in the Implementation Rules section, not in a side paragraph.
+
+**Why**: test 4 showed all skills declared in frontmatter were effectively unused (0 calls across 7 developer dispatches for the first two, 0/2 and 0/1 for the others). Content quality was adequate because the developer.md prompt itself carries enough structural hints, but that's duplication — the skills exist precisely to centralize those hints. Forcing invocation aligns with the Phase 18 pattern and removes the duplication.
+
+---
+
 ## Open items / known limits
 
 - **`medium-new-field` test** times out at 15 min (bumped to 35 min). Real agent-team flow on a multi-file feature naturally takes 20-30 min.
-- **Skills `backend-dev`/`frontend-dev` still rarely invoked** even with `Skill` tool added — AGENTS.md content eclipses the need for most cases. Monitoring.
+- **Skill invocation enforcement** — all 5 skills now mandatory (Phases 18 + 19). Need to re-run test 4 to verify 0/7 → 7/7 adoption.
+- **Planner granularity** — coarse-over-fine rule added (Phase 18). Need to re-run test 4 to verify ≤ 3 tickets vs 5 previously.
 - **Orchestrator occasionally generates malformed `Agent({ subagent_type: None })` calls** when confused. Not blocking but wasteful.
 - **OAuth requires re-login after `docker compose down -v`** — expected behavior (volume removed).
 
 ---
 
-_Last updated: 2026-04-20_
+_Last updated: 2026-04-21 (Phase 19)_

@@ -46,7 +46,7 @@ if everything else is clean, and note that CI will cover the gap.
 
 ---
 
-**Note on typecheck & unit tests:** these are already run automatically by SubagentStop hooks after DEVELOPER finishes (`typecheck-on-commit.sh`, `run-unit-tests-app.sh`, `run-unit-tests-functions.sh`). Do NOT re-run them — if DEVELOPER completed cleanly, they passed. Focus on what hooks cannot check: integration wiring and smoke boot.
+**Note on typecheck, unit tests, e2e tests:** these are already run automatically by SubagentStop hooks after DEVELOPER finishes (`typecheck-on-commit.sh`, `run-unit-tests-app.sh`, `run-unit-tests-functions.sh`, `run-e2e-tests.sh`). Do NOT re-run them — if DEVELOPER completed cleanly, they passed. Do NOT run `make typecheck`, `npm run test:unit:*`, `npx tsc --noEmit`, `npx vite build`, or `npx playwright test`. Focus on what hooks cannot check: integration wiring and UI reachability.
 
 ---
 
@@ -69,28 +69,7 @@ If any of these fail: verdict is RED or add a blocking issue.
 
 ---
 
-## Step 2 — Vite smoke test (best-effort)
-
-Derive port from task number to avoid conflicts with parallel agents:
-
-    TASK_NUM=$(echo "$TASK_ID" | grep -oP '\d+')
-    PORT=$((5180 + TASK_NUM))
-
-Start Vite with fakerest:
-
-    VITE_DATA_PROVIDER=fakerest npx vite --port $PORT --host 0.0.0.0 &
-    npx wait-on http://localhost:$PORT --timeout 30000
-
-Confirm the server serves HTML. That tells you the build boots. If
-`wait-on` times out: note it and continue — not a hard blocker by itself.
-
-Always run cleanup at the end:
-
-    pkill -f "vite.*$PORT"
-
----
-
-## Step 3 — Optional Playwright screenshots (skip if auth required)
+## Step 2 — Optional Playwright screenshots (skip if auth required)
 
 Only if the feature is reachable **without authentication**, take
 headless chromium screenshots to confirm the page renders in the right
@@ -104,23 +83,13 @@ network + sudo). Skip instead.
 
 ---
 
-## Step 4 — e2e tests (normally SKIP in sandbox)
+## Step 3 — e2e spec sanity check
 
-The e2e tests expect a live local Supabase stack on 127.0.0.1:54341 (see
-e2e/fixtures.ts `createSales`, `createCompany`, etc.). The sandbox does
-not provide that. **Do not run `npx playwright test e2e/…` unless you have
-confirmed `curl http://127.0.0.1:54341/` responds** — otherwise you will
-waste cycles on `ERR_CONNECTION_REFUSED` errors that are infra, not code.
+Execution is handled by the `run-e2e-tests.sh` hook (in full mode only). Your job:
+- Verify the spec file exists if the ticket's acceptance criteria require it
+- Confirm the spec targets the right route/component (read-only)
 
-If a local Supabase is confirmed running, then run:
-
-    npx playwright test e2e/task-xxx-*.spec.ts --headless
-
-If no local Supabase:
-- Perform Step 2's integration check on the e2e spec file itself
-  (does it exist, does it typecheck via `tsc --noEmit e2e/task-xxx-*.spec.ts`).
-- Note that functional e2e validation happens in CI (`.github/workflows/check.yml`
-  job `e2e-test`).
+Do NOT run `npx playwright test` — the hook already did.
 
 ---
 
@@ -128,14 +97,13 @@ If no local Supabase:
 
 | Condition | Verdict |
 |---|---|
-| Typecheck fail OR integration missing OR functions-config vitest failing on app code | RED |
-| All steps clean, e2e executed & passed, screenshots captured | GREEN |
-| Code-level checks clean (steps 1 & 2) + Vite boots, but e2e / screenshots skipped due to no local Supabase / no display | GREEN_WITH_SANDBOX_LIMITATIONS |
+| Integration missing (Step 1) | RED |
+| All steps clean | GREEN |
+| Steps 1 + 3 clean, Step 2 screenshots skipped due to auth/no display | GREEN_WITH_SANDBOX_LIMITATIONS |
 
-`GREEN_WITH_SANDBOX_LIMITATIONS` is a **normal outcome in this project's
-sandbox**. It explicitly delegates functional e2e validation to CI. It
-does not require override or special handling — the team-lead treats it
-as an approval.
+Typecheck + unit tests + e2e failures are caught by SubagentStop hooks BEFORE you run — if DEVELOPER completed, those passed. Do not include them in your verdict.
+
+`GREEN_WITH_SANDBOX_LIMITATIONS` is a normal outcome when screenshots are not feasible. Team-lead treats it as approval.
 
 ---
 
@@ -154,9 +122,8 @@ as an approval.
 Verdict: GREEN | GREEN_WITH_SANDBOX_LIMITATIONS | RED
 
 Step 1 — integration: <all present | list of missing>
-Step 2 — vite: <up on port N | timeout | skipped because ...>
-Step 3 — screenshots: <paths + sizes | skipped because ...>
-Step 4 — e2e: <passed | failed (reason) | skipped (no local Supabase)>
+Step 2 — screenshots: <paths + sizes | skipped because ...>
+Step 3 — e2e spec: <exists + targets right route | missing | n/a>
 
 Issues:
   - severity: blocking | warning

@@ -1,17 +1,27 @@
 #!/bin/bash
-# Hook: run e2e tests after file edits
-# asyncRewake: exits 0 on success, 2 on failure (wakes Claude with stderr)
+# SubagentStop hook — e2e tests.
+# Exit 2 on failure → stderr injected, subagent stays alive.
 
-cd "$CLAUDE_PROJECT_DIR" || exit 0
+LOG=/chat-service/logs/hooks.log
+mkdir -p "$(dirname "$LOG")" 2>/dev/null
+STDIN=$(cat)
+echo "[$(date -Iseconds)] e2e START pwd=$(pwd) MODE=$MODE CLAUDE_PROJECT_DIR=$CLAUDE_PROJECT_DIR" >> "$LOG"
 
-# Skip in demo mode — Supabase (localhost:54341) is not running
+cd "$CLAUDE_PROJECT_DIR" || { echo "[$(date -Iseconds)] e2e EXIT=0 cd_failed" >> "$LOG"; exit 0; }
+
 if [ "${MODE:-demo}" = "demo" ]; then
+  echo "[$(date -Iseconds)] e2e EXIT=0 skipped_demo" >> "$LOG"
   exit 0
 fi
 
-if npx playwright test 2>&1; then
-    exit 0
-else
-    npx playwright test 2>&1 | tail -50 >&2
+OUTPUT=$(npx playwright test 2>&1)
+EXIT_CODE=$?
+
+if [ $EXIT_CODE -ne 0 ]; then
+    echo "$OUTPUT" | tail -50 >&2
+    echo "[$(date -Iseconds)] e2e EXIT=2 playwright_exit=$EXIT_CODE" >> "$LOG"
     exit 2
 fi
+
+echo "[$(date -Iseconds)] e2e EXIT=0 OK" >> "$LOG"
+exit 0

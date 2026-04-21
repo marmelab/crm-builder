@@ -32,7 +32,7 @@ a single line of code is written.
 
 **Direct mode** — the caller's prompt describes the change inline (no `TASK-XXX.json` reference).
 - Simple change in ≤ 2 files → go straight to implementation. Skip planning, audit, reflection reading, plan format.
-- Still follow: MODE check, File editing HARD RULE, Skill invocation when relevant.
+- Still follow: MANDATORY FIRST ACTION (Skill invocation), MODE check, File editing HARD RULE.
 - Output at the end: one-line summary of what changed (files + brief description).
 
 **Ticket mode** — the caller references `TASK-XXX.json`.
@@ -43,7 +43,21 @@ Follow the output format in .claude/rules/agent-output-format.md.
 
 ---
 
-### Environment check — do this first
+### MANDATORY FIRST ACTION — load the skill (no exceptions)
+
+**Before any Read / Grep / Glob / Edit / Bash call, your very first tool_use MUST be a `Skill` invocation:**
+
+- If the ticket touches React / UI / forms / lists / styling / routing → `Skill({ skill: "frontend-dev" })`
+- If the ticket touches Supabase / SQL / migrations / RLS / edge functions / dataProvider → `Skill({ skill: "backend-dev" })`
+- If it spans both → invoke both, one after the other, still before any other tool
+
+These skills load the CRM's file structure, patterns, gotchas, and conventions. Skipping this step forces you to re-discover them via Grep / Read, wasting ~60-90s and often producing code that doesn't match existing patterns.
+
+Only exception: the ticket is purely configuration (docs, tests-only, CI) — then skip and note "no skill relevant" in your first tool call's context.
+
+**If the reviewer sees no Skill call in your tool history, your result will be rejected with "skill not loaded".**
+
+### Environment check
 
 Read MODE from `<mode>...</mode>` in the instructions header, or `MODE=<value>` in the caller's prompt.
 
@@ -63,15 +77,7 @@ Use Bash ONLY for:
 
 Writing via Bash bypasses the PostToolUse hooks (prettier, typecheck) and leaves the codebase in an unformatted state. Violation = the change will be rejected at review.
 
-### Load the relevant CRM conventions — mandatory
-
-Before touching any code, invoke the appropriate project skill to load the CRM conventions:
-
-- **Frontend work** (React components, forms, lists, filters, styling, routing): `Skill({ skill: "frontend-dev" })`
-- **Backend work** (Supabase migrations, RLS, edge functions, dataProvider methods, views): `Skill({ skill: "backend-dev" })`
-- **Both** if the ticket spans frontend and backend.
-
-These skills live in `/app/.claude/skills/` and document the exact file structure, patterns, and conventions of the CRM. Skip this step only if the ticket is purely configuration (docs, tests-only, CI).
+### Mode-specific rules
 
 **If MODE=demo:**
 - The app uses FakeRest (in-memory data in the browser). There is NO database.
@@ -84,16 +90,17 @@ These skills live in `/app/.claude/skills/` and document the exact file structur
 
 ### Pre-plan checklist
 1. Read docs/tickets/TASK-XXX.json
-2. Extend existing code, don't recreate it
-Read docs/tickets/TASK-XXX.json and the relevant parts of the codebase,
-then answer:
+2. **Start from `files_to_modify`**: the planner has listed 2-6 probable file paths. Read each one BEFORE exploring further. These paths are best-guess hints — you may add, remove, or substitute, but use them as your first map.
+3. Extend existing code, don't recreate it
 
 ### Codebase audit
-Before validating, build a reuse registry:
+Using `files_to_modify` as starting point, build a reuse registry:
 - Existing entities in src/resources/
 - Reusable React components
 - Existing TypeScript types in src/types/
 - Relevant patterns already established in the codebase
+
+Only grep broadly if `files_to_modify` is missing or clearly incomplete for the ticket's scope.
 
 ### Architecture evaluation
 
@@ -109,7 +116,6 @@ Lazy loading where needed?
 Maintainability: Consistent with existing patterns? Easy to test?
 No magic or undocumented behavior?
 
-3. Read every file listed in files_to_modify before touching them
 4. Read docs/reflections/ files from the same domain — mandatory,
    not optional
 
@@ -159,6 +165,7 @@ to the team-lead first.
 - JSDoc on every non-trivial function
 - e2e tests in e2e/ if the task touches UI, filters, forms,
   or interactions — unless acceptance_criteria explicitly states otherwise.
+  **Before writing an e2e spec, invoke `Skill({ skill: "e2e-conventions" })` and `Skill({ skill: "playwright-testing" })`**. These skills encode where specs live, how to locate elements, fixture setup, and how to authenticate — skipping them produces brittle specs that re-invent patterns.
   Do NOT attempt to RUN e2e tests in the sandbox (they require a local
   Supabase on 127.0.0.1:54341 that is not available). Ship the spec file,
   CI handles execution.
@@ -169,8 +176,8 @@ to the team-lead first.
 
 ## Mode 2 — Reflection
 
-After all reviews are complete, write
-docs/reflections/TASK-XXX-reflection.md.
+After all reviews are complete:
 
-Read existing reflections in the same domain first — build on them,
-don't repeat them.
+1. **Invoke `Skill({ skill: "reflection-writing" })`** as your first tool call in Mode 2 — the skill defines the expected sections and level of detail. Skipping it produces reflections that drift from the intended format.
+2. Read existing reflections in the same domain (`docs/reflections/`) — build on them, don't repeat them.
+3. Write `docs/reflections/TASK-XXX-reflection.md`.

@@ -8,7 +8,9 @@
         "security-guidance@claude-plugins-official": true,
         "supabase@claude-plugins-official": true,
         "superpowers@claude-plugins-official": true,
-        "typescript-lsp@claude-plugins-official": true
+        "typescript-lsp@claude-plugins-official": true,
+        "hookify@claude-plugins-official": false,
+        "ralph-loop@claude-plugins-official": false
     },
     "env": {
         "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
@@ -39,11 +41,11 @@
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/silent-mode-check.sh"
+                        "command": "/home/developer/.claude/hooks/silent-mode-check.sh"
                     },
                     {
                         "type": "command",
-                        "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/circuit-breaker.sh"
+                        "command": "/home/developer/.claude/hooks/circuit-breaker.sh"
                     }
                 ]
             }
@@ -54,10 +56,9 @@
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/run-e2e-tests.sh",
-                        "asyncRewake": true,
-                        "rewakeMessage": "E2E tests failed after developer finished:",
-                        "timeout": 120
+                        "command": "/home/developer/.claude/hooks/run-e2e-tests.sh",
+                        "timeout": 120,
+                        "statusMessage": "Running e2e tests..."
                     }
                 ]
             },
@@ -66,10 +67,9 @@
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/run-unit-tests-app.sh",
-                        "asyncRewake": true,
-                        "rewakeMessage": "Unit tests (app) failed after developer finished:",
-                        "timeout": 120
+                        "command": "/home/developer/.claude/hooks/run-unit-tests-app.sh",
+                        "timeout": 120,
+                        "statusMessage": "Running unit tests (app)..."
                     }
                 ]
             },
@@ -78,10 +78,9 @@
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/run-unit-tests-functions.sh",
-                        "asyncRewake": true,
-                        "rewakeMessage": "Unit tests (functions) failed after developer finished:",
-                        "timeout": 120
+                        "command": "/home/developer/.claude/hooks/run-unit-tests-functions.sh",
+                        "timeout": 120,
+                        "statusMessage": "Running unit tests (functions)..."
                     }
                 ]
             },
@@ -90,10 +89,20 @@
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/typecheck-on-commit.sh",
-                        "asyncRewake": true,
-                        "rewakeMessage": "Type check failed after developer finished:",
-                        "timeout": 120
+                        "command": "/home/developer/.claude/hooks/typecheck-on-commit.sh",
+                        "timeout": 120,
+                        "statusMessage": "Running typecheck..."
+                    }
+                ]
+            },
+            {
+                "matcher": "developer",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "/home/developer/.claude/hooks/prettier-on-stop.sh",
+                        "timeout": 120,
+                        "statusMessage": "Checking prettier..."
                     }
                 ]
             }

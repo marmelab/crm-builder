@@ -53,6 +53,16 @@ chown -R developer:developer /home/developer/.claude 2>/dev/null || true
 mkdir -p /chat-service/logs 2>/dev/null || true
 chmod 777 /chat-service/logs 2>/dev/null || true
 
+# Disable atomic-crm project's PostToolUse format-file.sh hook — replaced by a
+# SubagentStop prettier hook in our crm-builder config. The PostToolUse variant
+# caused an edit/prettier loop (developer edits → hook reformats → developer
+# re-reads different bytes → confusion). The Stop-time hook checks cleanly
+# once, fails loudly if not clean, and lets the developer batch-fix with
+# `npm run prettier:apply` if needed.
+if [ -f /app/.claude/settings.json ]; then
+  printf '{\n  "hooks": {}\n}\n' > /app/.claude/settings.json
+fi
+
 cd ${APP_DIR}
 
 # ── Select App.tsx variant based on mode ─────────────────────

@@ -98,7 +98,12 @@ function spawnClaude(userMessage, sessionId) {
   if (sessionId) args.push('--resume', sessionId);
   args.push('-p', prompt);
   return spawn('claude', args, {
-    env: { ...process.env, HOME: CLAUDE_HOME },
+    env: {
+      ...process.env,
+      HOME: CLAUDE_HOME,
+      CLAUDE_PROJECT_DIR: CWD,
+      MODE: mode,
+    },
     cwd: CWD,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
