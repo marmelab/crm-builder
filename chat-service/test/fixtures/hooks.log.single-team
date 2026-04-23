@@ -1,0 +1,5 @@
+[2026-04-23T13:00:08+00:00] typecheck START pwd=/worktrees/TASK-100 MODE=demo
+[2026-04-23T13:00:09+00:00] typecheck OK wt=/worktrees/TASK-100
+[2026-04-23T13:00:09+00:00] typecheck EXIT=0 OK (all worktrees)
+[2026-04-23T13:00:09+00:00] unit-fn SKIP wt=/worktrees/TASK-100 (no changes)
+[2026-04-23T13:00:09+00:00] unit-fn EXIT=0 no_active_worktree

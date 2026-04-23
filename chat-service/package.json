@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test test/server.test.js",
+    "test": "node --test 'test/**/*.test.js'",
     "bench": "node tests/run.js",
     "bench:update": "node tests/run.js --update-baseline"
   },
