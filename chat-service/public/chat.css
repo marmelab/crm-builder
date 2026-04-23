@@ -100,6 +100,8 @@ body { height: 100vh; overflow: hidden; font-family: system-ui, sans-serif; back
   display: flex; flex-direction: column;
   overflow: hidden;
 }
+/* Explicit `display: flex` above would otherwise override the [hidden] attribute. */
+#chat-history-panel[hidden] { display: none; }
 #history-panel-header {
   display: flex; align-items: center; justify-content: space-between;
   padding: 10px 14px; border-bottom: 1px solid #2c2c2e;

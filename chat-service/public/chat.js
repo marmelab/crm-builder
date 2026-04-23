@@ -99,6 +99,11 @@ ws.onmessage = (event) => {
     return;
   }
 
+  if (msg.type === 'title') {
+    setDisplayedTitle(msg.title);
+    return;
+  }
+
   if (msg.type === 'status') {
     working = msg.working;
     send.disabled = working;
