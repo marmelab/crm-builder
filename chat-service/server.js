@@ -442,6 +442,7 @@ async function processMessage(ws, prompt) {
   let resultError = false;
   try {
     const proc = spawnClaude(prompt, state.sessionId);
+    state.currentProc = proc; // expose for the stop handler
     let stderrBuf = '';
     // Prevent unhandled 'error' from crashing the process (e.g. claude binary missing).
     const spawnError = new Promise((resolve) => proc.once('error', resolve));
@@ -525,7 +526,11 @@ async function processMessage(ws, prompt) {
         return -1;
       }),
     ]);
-    if (exitCode !== 0 || !receivedText || resultError || rateLimit) {
+    if (state.stopping) {
+      const stopText = '⏹ Discussion arrêtée.';
+      safeSend(ws, { type: 'message', role: 'assistant', content: stopText });
+      state.discussion?.recordMessage('assistant', stopText).catch(() => {});
+    } else if (exitCode !== 0 || !receivedText || resultError || rateLimit) {
       const errText = friendlyError({ exitCode, stderr: stderrBuf, rateLimit, resultError });
       safeSend(ws, { type: 'message', role: 'assistant', content: errText });
       state.discussion?.recordMessage('assistant', errText).catch(() => {});
@@ -542,15 +547,21 @@ async function processMessage(ws, prompt) {
     if (s0) {
       s0.stats.costUsd += s0.stats.costUsdCurrentSpawn;
       s0.stats.costUsdCurrentSpawn = 0;
+      s0.currentProc = null;
       sendStats(ws);
     }
 
     safeSend(ws, { type: 'status', working: false });
     const s = connections.get(ws);
-    if (s && s.queue.length > 0) {
+    // If the user pressed stop, drop any queued messages (their intent was
+    // "stop everything"), clear the flag, and don't auto-process the queue.
+    const wasStopped = !!s?.stopping;
+    if (s) s.stopping = false;
+    if (s && !wasStopped && s.queue.length > 0) {
       const next = s.queue.shift();
       processMessage(ws, next);
     } else if (s) {
+      if (wasStopped) s.queue = [];
       s.busy = false;
       // All queued turns processed and claude is idle → discussion is done
       // (until the user sends another message).
@@ -622,10 +633,27 @@ wss.on('connection', async (ws, req) => {
   ws.on('message', (data) => {
     let parsed;
     try { parsed = JSON.parse(data.toString()); } catch { return; }
-    if (!parsed.content?.trim()) return;
 
     const state = connections.get(ws);
     if (!state) return;
+
+    // Stop button: kill the running claude process and clear the queue.
+    if (parsed.type === 'stop') {
+      if (!state.busy) return;
+      state.stopping = true;
+      state.queue = [];
+      const p = state.currentProc;
+      if (p && !p.killed) {
+        try { p.kill('SIGTERM'); } catch {}
+        setTimeout(() => {
+          try { if (p && !p.killed) p.kill('SIGKILL'); } catch {}
+        }, 2000);
+      }
+      state.discussion?.logWrite('in', { type: 'stop_requested' });
+      return;
+    }
+
+    if (!parsed.content?.trim()) return;
     // `display` is an optional client-side label (e.g. for choice buttons) —
     // what the user actually saw. `content` is what we forward to claude.
     const displayed = typeof parsed.display === 'string' && parsed.display.trim()

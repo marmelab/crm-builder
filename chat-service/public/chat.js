@@ -15,6 +15,7 @@ const form     = document.getElementById('chat-form');
 const input    = document.getElementById('chat-input');
 const send     = document.getElementById('chat-send');
 const statusDots = document.getElementById('chat-status-dots');
+const stopBtn = document.getElementById('chat-stop');
 const messages = document.getElementById('chat-messages');
 const stats = document.getElementById('chat-stats');
 
@@ -137,6 +138,8 @@ function resetChatUi() {
   working = false;
   send.disabled = false;
   statusDots.style.display = 'none';
+  stopBtn.hidden = true;
+  stopBtn.disabled = false;
   historyPanel.hidden = true;
   stats.textContent = '';
 }
@@ -173,8 +176,20 @@ function handleWsMessage(event) {
 
   if (msg.type === 'status') {
     working = msg.working;
-    send.disabled = working;
+    // Don't disable the send button — allow queueing a 2nd message while the
+    // current turn is still running (server's `state.queue` handles it).
     statusDots.style.display = working ? 'inline-flex' : 'none';
+    stopBtn.hidden = !working;
+    stopBtn.disabled = false;
+    // working=true right after the previous turn closed means a queued message
+    // just started processing — promote the oldest queued bubble to normal.
+    if (working) {
+      const oldestQueued = messages.querySelector('.msg-queued');
+      if (oldestQueued) {
+        oldestQueued.classList.remove('msg-queued');
+        oldestQueued.querySelector('.queued-badge')?.remove();
+      }
+    }
     const existing = messages.querySelector('.msg-working');
     if (working && !existing) {
       const el = document.createElement('div');
@@ -275,10 +290,19 @@ function appendChoices(content, options, seq = ++seqCounter) {
   placeIntoMessages(wrap, seq);
 }
 
-function appendMessage(role, content, seq = ++seqCounter) {
+function appendMessage(role, content, seqOrOpts = ++seqCounter) {
+  const opts = typeof seqOrOpts === 'object' && seqOrOpts !== null ? seqOrOpts : {};
+  const seq = typeof seqOrOpts === 'number' ? seqOrOpts : (opts.seq ?? ++seqCounter);
+  const queued = !!opts.queued;
   const el = document.createElement('div');
-  el.className = `msg msg-${role}`;
+  el.className = `msg msg-${role}${queued ? ' msg-queued' : ''}`;
   el.textContent = content;
+  if (queued) {
+    const badge = document.createElement('span');
+    badge.className = 'queued-badge';
+    badge.textContent = '⏳ en attente';
+    el.appendChild(badge);
+  }
   placeIntoMessages(el, seq);
 }
 
@@ -531,6 +555,14 @@ historyBtn.addEventListener('click', () => {
 });
 historyClose.addEventListener('click', () => { historyPanel.hidden = true; });
 
+stopBtn.addEventListener('click', () => {
+  if (!working || stopBtn.disabled) return;
+  if (ws?.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'stop' }));
+  }
+  stopBtn.disabled = true; // re-enabled on next status flip
+});
+
 newBtn.addEventListener('click', () => {
   switchDiscussion(null);
 });
@@ -573,8 +605,8 @@ input.addEventListener('keydown', (e) => {
 form.addEventListener('submit', (e) => {
   e.preventDefault();
   const content = input.value.trim();
-  if (!content || working) return;
-  appendMessage('user', content);
+  if (!content) return;
+  appendMessage('user', content, { queued: working });
   ws.send(JSON.stringify({ content }));
   input.value = '';
   input.style.height = 'auto';

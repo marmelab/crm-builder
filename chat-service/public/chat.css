@@ -75,6 +75,14 @@ body { height: 100vh; overflow: hidden; font-family: system-ui, sans-serif; back
 #chat-debug:hover, #chat-expand:hover, #chat-history:hover, #chat-new:hover { color: #fff; }
 #chat-debug.debug-active { color: #3b82f6; background: rgba(59,130,246,.15); }
 
+#chat-stop {
+  background: rgba(244,63,94,.15); border: none; color: #f43f5e;
+  cursor: pointer; font-size: 13px; padding: 3px 8px; border-radius: 6px;
+  font-weight: 600; transition: background .15s, opacity .15s;
+}
+#chat-stop:hover:not(:disabled) { background: rgba(244,63,94,.28); }
+#chat-stop:disabled { opacity: .5; cursor: default; }
+
 /* Discussion state badge (derived from claude activity; read-only) */
 #chat-state {
   font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
@@ -166,6 +174,13 @@ body { height: 100vh; overflow: hidden; font-family: system-ui, sans-serif; back
   align-self: flex-end;
   background: linear-gradient(135deg, #3b82f6, #2563eb);
   border-bottom-right-radius: 4px;
+}
+.msg-queued { opacity: .65; }
+.queued-badge {
+  display: block;
+  margin-top: 6px;
+  font-size: 10px; font-weight: 600; opacity: .9;
+  text-transform: uppercase; letter-spacing: .03em;
 }
 .msg-assistant {
   align-self: flex-start;
