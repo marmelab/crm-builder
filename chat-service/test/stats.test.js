@@ -32,3 +32,18 @@ test('aggregateSession: skips malformed JSONL lines', async () => {
   assert.equal(out.startTs, '2026-04-23T14:00:00.000Z');
   assert.equal(out.endTs, '2026-04-23T14:00:01.000Z');
 });
+
+test('aggregateSession: computes summary totals from simple session', async () => {
+  const out = await aggregateSession({
+    sessionLogPath: fx('simple-quick-edit.jsonl'),
+    hooksLogPath: null,
+    sessionId: '00000000-0000-0000-0000-000000000002',
+  });
+  assert.equal(out.startTs, '2026-04-23T12:00:00.000Z');
+  assert.equal(out.endTs, '2026-04-23T12:00:03.100Z');
+  assert.equal(out.durationMs, 3100);
+  assert.equal(out.summary.totalMs, 3100);
+  assert.equal(out.summary.opsCount, 2);
+  assert.equal(out.summary.tokensTotal, 100 + 200 + 50);
+  assert.equal(out.summary.costUsd, 0.01);
+});
