@@ -1,18 +1,19 @@
 import { createServer } from 'http';
-import { readFile, mkdir } from 'fs/promises';
+import { readFile, writeFile, mkdir, readdir } from 'fs/promises';
 import { createWriteStream } from 'fs';
 import { extname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
 import { createInterface } from 'readline';
+import { randomUUID } from 'crypto';
 import { WebSocketServer } from 'ws';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
-const PORT = 8080;
+const PORT = Number(process.env.PORT) || 8080;
 const CWD = '/app';
 const CLAUDE_HOME = '/home/developer';
 const ORCHESTRATOR_MD = `${CLAUDE_HOME}/.claude/agents/chat-orchestrator.md`;
-const LOG_DIR = '/chat-service/logs';
+const LOG_DIR = process.env.CHAT_LOG_DIR || '/chat-service/logs';
 const WELCOME_CHOICES = {
   type: 'choices',
   content: 'Hello! How can I help you today?',
@@ -21,6 +22,8 @@ const WELCOME_CHOICES = {
     { id: 'QUICK_EDIT', label: '⚡ Make a quick change',          sublabel: 'Describe what you want to add or modify' },
   ],
 };
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 async function loadSystemPrompt() {
   try {
@@ -63,9 +66,217 @@ export function extractToolUses(msg) {
   return msg.message.content.filter((b) => b.type === 'tool_use');
 }
 
-// Static file server
+// ─── Discussion persistence ───────────────────────────────────
+// Single source of truth = log.jsonl (append-only stream of ws in/out events).
+// meta.json holds only lightweight metadata (title, timestamps, counts,
+// claudeSessionId) so the listing page doesn't have to parse every log.
+// Visible messages (user + assistant) are derived from log.jsonl on demand.
+
+function messagesFromLog(logText) {
+  const out = [];
+  for (const line of logText.split('\n')) {
+    if (!line) continue;
+    let entry;
+    try { entry = JSON.parse(line); } catch { continue; }
+    if (entry.dir === 'in' && entry.type === 'user_message') {
+      out.push({ role: 'user', content: entry.display || entry.content || '', ts: entry.ts });
+    } else if (entry.dir === 'out' && entry.type === 'message' && entry.role === 'assistant') {
+      out.push({ role: 'assistant', content: entry.content || '', ts: entry.ts });
+    }
+  }
+  return out;
+}
+
+async function readMessages(id) {
+  try {
+    const raw = await readFile(`${LOG_DIR}/${id}/log.jsonl`, 'utf8');
+    return messagesFromLog(raw);
+  } catch {
+    return [];
+  }
+}
+
+async function openDiscussion(requestedId) {
+  await mkdir(LOG_DIR, { recursive: true }).catch(() => {});
+  let id = requestedId && UUID_RE.test(requestedId) ? requestedId : null;
+  let meta = null;
+  let isNew = false;
+  let messages = [];
+
+  if (id) {
+    try {
+      meta = JSON.parse(await readFile(`${LOG_DIR}/${id}/meta.json`, 'utf8'));
+      messages = await readMessages(id);
+    } catch {
+      id = null;
+      meta = null;
+    }
+  }
+
+  if (!id) {
+    id = randomUUID();
+    isNew = true;
+    await mkdir(`${LOG_DIR}/${id}`, { recursive: true });
+    meta = {
+      id,
+      title: '',
+      state: 'en_cours',
+      createdAt: new Date().toISOString(),
+      lastMessageAt: null,
+      messageCount: 0,
+      claudeSessionId: null,
+    };
+    await writeFile(`${LOG_DIR}/${id}/meta.json`, JSON.stringify(meta, null, 2));
+  }
+
+  const logStream = createWriteStream(`${LOG_DIR}/${id}/log.jsonl`, { flags: 'a' });
+
+  const saveMeta = () =>
+    writeFile(`${LOG_DIR}/${id}/meta.json`, JSON.stringify(meta, null, 2));
+
+  return {
+    id,
+    isNew,
+    get meta() { return meta; },
+    messages,
+    logWrite: (dir, data) =>
+      logStream.write(JSON.stringify({ ts: new Date().toISOString(), dir, ...data }) + '\n'),
+    // Record that a visible message has just been appended to the log (meta side effects only).
+    recordMessage: async (role, content) => {
+      meta.lastMessageAt = new Date().toISOString();
+      meta.messageCount = (meta.messageCount || 0) + 1;
+      if (role === 'user' && !meta.title) {
+        meta.title = content.trim().replace(/\s+/g, ' ').slice(0, 60);
+      }
+      await saveMeta();
+    },
+    setClaudeSessionId: async (csid) => {
+      if (!csid || meta.claudeSessionId === csid) return;
+      meta.claudeSessionId = csid;
+      await saveMeta();
+    },
+    setState: async (newState) => {
+      if (!ALLOWED_STATES.has(newState) || meta.state === newState) return false;
+      meta.state = newState;
+      await saveMeta();
+      return true;
+    },
+    close: () => logStream.end(),
+  };
+}
+
+const ALLOWED_STATES = new Set(['en_cours', 'terminee']);
+
+async function listDiscussions() {
+  await mkdir(LOG_DIR, { recursive: true }).catch(() => {});
+  const entries = await readdir(LOG_DIR, { withFileTypes: true }).catch(() => []);
+  const out = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !UUID_RE.test(entry.name)) continue;
+    try {
+      const meta = JSON.parse(await readFile(`${LOG_DIR}/${entry.name}/meta.json`, 'utf8'));
+      const count = meta.messageCount || 0;
+      if (count === 0) continue;
+      out.push({
+        id: meta.id,
+        title: meta.title || '',
+        state: meta.state || 'en_cours',
+        createdAt: meta.createdAt,
+        lastMessageAt: meta.lastMessageAt,
+        messageCount: count,
+      });
+    } catch {}
+  }
+  out.sort((a, b) =>
+    (b.lastMessageAt || b.createdAt || '').localeCompare(a.lastMessageAt || a.createdAt || '')
+  );
+  return out;
+}
+
+async function getDiscussion(id) {
+  if (!UUID_RE.test(id)) return null;
+  try {
+    const meta = JSON.parse(await readFile(`${LOG_DIR}/${id}/meta.json`, 'utf8'));
+    const messages = await readMessages(id);
+    return { meta, messages };
+  } catch {
+    return null;
+  }
+}
+
+async function patchDiscussion(id, patch) {
+  if (!UUID_RE.test(id)) return null;
+  try {
+    const path = `${LOG_DIR}/${id}/meta.json`;
+    const meta = JSON.parse(await readFile(path, 'utf8'));
+    if (typeof patch.title === 'string') meta.title = patch.title.slice(0, 200);
+    if (typeof patch.state === 'string' && ALLOWED_STATES.has(patch.state)) meta.state = patch.state;
+    await writeFile(path, JSON.stringify(meta, null, 2));
+    return meta;
+  } catch {
+    return null;
+  }
+}
+
+function readJsonBody(req) {
+  return new Promise((resolve, reject) => {
+    let buf = '';
+    req.on('data', (chunk) => {
+      buf += chunk;
+      if (buf.length > 100_000) reject(new Error('payload too large'));
+    });
+    req.on('end', () => {
+      try { resolve(JSON.parse(buf || '{}')); } catch (e) { reject(e); }
+    });
+    req.on('error', reject);
+  });
+}
+
+// ─── HTTP server ──────────────────────────────────────────────
 const httpServer = createServer(async (req, res) => {
-  const urlPath = req.url === '/' ? '/index.html' : req.url;
+  // API: list discussions
+  if (req.url === '/api/discussions' && req.method === 'GET') {
+    const list = await listDiscussions();
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(list));
+    return;
+  }
+  // API: get / rename one discussion
+  const match = req.url.match(/^\/api\/discussions\/([0-9a-f-]+)$/i);
+  if (match) {
+    const id = match[1];
+    if (req.method === 'GET') {
+      const d = await getDiscussion(id);
+      if (!d) { res.writeHead(404); res.end('Not found'); return; }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(d));
+      return;
+    }
+    if (req.method === 'PATCH') {
+      try {
+        const body = await readJsonBody(req);
+        const hasTitle = typeof body.title === 'string';
+        const hasState = typeof body.state === 'string';
+        if (!hasTitle && !hasState) {
+          res.writeHead(400); res.end('title or state required'); return;
+        }
+        if (hasState && !ALLOWED_STATES.has(body.state)) {
+          res.writeHead(400); res.end(`state must be one of: ${[...ALLOWED_STATES].join(', ')}`); return;
+        }
+        const meta = await patchDiscussion(id, body);
+        if (!meta) { res.writeHead(404); res.end('Not found'); return; }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(meta));
+      } catch {
+        res.writeHead(400); res.end('Bad request');
+      }
+      return;
+    }
+  }
+
+  // Static file server
+  const pathOnly = (req.url || '/').split('?')[0];
+  const urlPath = pathOnly === '/' ? '/index.html' : pathOnly;
   const publicDir = join(__dirname, 'public');
   const filePath = join(publicDir, urlPath);
   if (!filePath.startsWith(publicDir + '/')) {
@@ -109,24 +320,12 @@ function spawnClaude(userMessage, sessionId) {
   });
 }
 
-async function createSessionLog() {
-  await mkdir(LOG_DIR, { recursive: true }).catch(() => {});
-  const ts = new Date().toISOString().replace(/[:.]/g, '-');
-  const path = `${LOG_DIR}/session-${ts}.jsonl`;
-  const stream = createWriteStream(path, { flags: 'a' });
-  return {
-    path,
-    write: (dir, data) => stream.write(JSON.stringify({ ts: new Date().toISOString(), dir, ...data }) + '\n'),
-    close: () => stream.end(),
-  };
-}
-
 function safeSend(ws, payload) {
   if (ws.readyState === ws.OPEN) {
     ws.send(JSON.stringify(payload));
   }
   const state = connections.get(ws);
-  state?.log?.write('out', payload);
+  state?.discussion?.logWrite('out', payload);
 }
 
 function sendStats(ws) {
@@ -160,10 +359,19 @@ function friendlyError({ exitCode, stderr, rateLimit, resultError }) {
   return "I couldn't complete your request. Could you rephrase it?";
 }
 
+async function transitionState(ws, newState) {
+  const s = connections.get(ws);
+  if (!s?.discussion) return;
+  const changed = await s.discussion.setState(newState).catch(() => false);
+  if (changed) safeSend(ws, { type: 'state', state: newState });
+}
+
 async function processMessage(ws, prompt) {
   const state = connections.get(ws);
   if (!state) return;
 
+  // Claude (re)starts → discussion is active again.
+  transitionState(ws, 'en_cours');
   safeSend(ws, { type: 'status', working: true });
   const toolMap = new Map();
   let receivedText = false;
@@ -172,6 +380,8 @@ async function processMessage(ws, prompt) {
   try {
     const proc = spawnClaude(prompt, state.sessionId);
     let stderrBuf = '';
+    // Prevent unhandled 'error' from crashing the process (e.g. claude binary missing).
+    const spawnError = new Promise((resolve) => proc.once('error', resolve));
     proc.stderr.on('data', (d) => {
       stderrBuf += d.toString();
       console.error('[claude]', d.toString().trim());
@@ -182,7 +392,10 @@ async function processMessage(ws, prompt) {
       if (!line.trim()) continue;
       try {
         const event = JSON.parse(line);
-        if (event.session_id) state.sessionId = event.session_id;
+        if (event.session_id) {
+          state.sessionId = event.session_id;
+          state.discussion?.setClaudeSessionId(event.session_id).catch(() => {});
+        }
 
         // Always send raw event to debug
         safeSend(ws, { type: 'debug_raw', event });
@@ -191,6 +404,7 @@ async function processMessage(ws, prompt) {
         if (text) {
           receivedText = true;
           safeSend(ws, { type: 'message', role: 'assistant', content: text });
+          state.discussion?.recordMessage('assistant', text).catch(() => {});
         }
 
         for (const tool of extractToolUses(event)) {
@@ -231,21 +445,23 @@ async function processMessage(ws, prompt) {
         }
       } catch {}
     }
-    const exitCode = await new Promise((resolve) => proc.on('close', resolve));
+    const exitCode = await Promise.race([
+      new Promise((resolve) => proc.on('close', resolve)),
+      spawnError.then((err) => {
+        stderrBuf += `\n${err?.message || err}`;
+        return -1;
+      }),
+    ]);
     if (exitCode !== 0 || !receivedText || resultError || rateLimit) {
-      safeSend(ws, {
-        type: 'message',
-        role: 'assistant',
-        content: friendlyError({ exitCode, stderr: stderrBuf, rateLimit, resultError }),
-      });
+      const errText = friendlyError({ exitCode, stderr: stderrBuf, rateLimit, resultError });
+      safeSend(ws, { type: 'message', role: 'assistant', content: errText });
+      state.discussion?.recordMessage('assistant', errText).catch(() => {});
     }
   } catch (err) {
     if (err?.name !== 'AbortError') {
-      safeSend(ws, {
-        type: 'message',
-        role: 'assistant',
-        content: "Something went wrong. Want to try again?",
-      });
+      const errText = "Something went wrong. Want to try again?";
+      safeSend(ws, { type: 'message', role: 'assistant', content: errText });
+      state.discussion?.recordMessage('assistant', errText).catch(() => {});
     }
   } finally {
     // Commit this spawn's cumulative cost into the session total, reset for next spawn
@@ -263,6 +479,9 @@ async function processMessage(ws, prompt) {
       processMessage(ws, next);
     } else if (s) {
       s.busy = false;
+      // All queued turns processed and claude is idle → discussion is done
+      // (until the user sends another message).
+      transitionState(ws, 'terminee');
     }
   }
 }
@@ -274,10 +493,18 @@ const wss = new WebSocketServer({ server: httpServer });
 wss.on('error', (err) => console.error('WebSocket server error:', err));
 httpServer.on('error', (err) => console.error('HTTP server error:', err));
 
-wss.on('connection', async (ws) => {
-  const log = await createSessionLog().catch(() => null);
+wss.on('connection', async (ws, req) => {
+  const urlObj = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+  const requestedId = urlObj.searchParams.get('discussion');
+  const discussion = await openDiscussion(requestedId).catch(() => null);
+  if (!discussion) {
+    ws.close();
+    return;
+  }
+
   connections.set(ws, {
-    sessionId: null,
+    sessionId: discussion.meta.claudeSessionId || null,
+    discussion,
     busy: false,
     queue: [],
     stats: {
@@ -291,10 +518,20 @@ wss.on('connection', async (ws) => {
       costUsdCurrentSpawn: 0,
       activeAgents: 0,
     },
-    log,
   });
-  if (log) console.log(`Session log: ${log.path}`);
-  safeSend(ws, WELCOME_CHOICES);
+  console.log(`Discussion ${discussion.isNew ? 'created' : 'resumed'}: ${discussion.id}`);
+
+  safeSend(ws, {
+    type: 'init',
+    discussionId: discussion.id,
+    title: discussion.meta.title,
+    state: discussion.meta.state || 'en_cours',
+    messages: discussion.messages,
+    isNew: discussion.isNew,
+  });
+  if (discussion.isNew) {
+    safeSend(ws, WELCOME_CHOICES);
+  }
 
   ws.on('message', (data) => {
     let parsed;
@@ -303,7 +540,13 @@ wss.on('connection', async (ws) => {
 
     const state = connections.get(ws);
     if (!state) return;
-    state.log?.write('in', { type: 'user_message', content: parsed.content });
+    // `display` is an optional client-side label (e.g. for choice buttons) —
+    // what the user actually saw. `content` is what we forward to claude.
+    const displayed = typeof parsed.display === 'string' && parsed.display.trim()
+      ? parsed.display
+      : parsed.content;
+    state.discussion.logWrite('in', { type: 'user_message', content: parsed.content, display: displayed });
+    state.discussion.recordMessage('user', displayed).catch(() => {});
     if (state.busy) {
       state.queue.push(parsed.content);
     } else {
@@ -314,7 +557,7 @@ wss.on('connection', async (ws) => {
 
   ws.on('close', () => {
     const s = connections.get(ws);
-    s?.log?.close();
+    s?.discussion?.close();
     connections.delete(ws);
   });
 });

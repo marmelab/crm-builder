@@ -3,6 +3,14 @@ const fab      = document.getElementById('chat-fab');
 const toggle   = document.getElementById('chat-toggle');
 const expandBtn = document.getElementById('chat-expand');
 const debugBtn = document.getElementById('chat-debug');
+const stateBtn = document.getElementById('chat-state');
+const historyBtn = document.getElementById('chat-history');
+const newBtn = document.getElementById('chat-new');
+const historyPanel = document.getElementById('chat-history-panel');
+const historyList = document.getElementById('history-list');
+const historyEmpty = document.getElementById('history-empty');
+const historyClose = document.getElementById('history-close');
+const chatTitle = document.getElementById('chat-title');
 const form     = document.getElementById('chat-form');
 const input    = document.getElementById('chat-input');
 const send     = document.getElementById('chat-send');
@@ -16,8 +24,36 @@ function formatTokens(n) {
   return String(n);
 }
 
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+
+function formatRelative(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const diff = Date.now() - d.getTime();
+  const min = Math.round(diff / 60_000);
+  if (min < 1) return "à l'instant";
+  if (min < 60) return `il y a ${min} min`;
+  const h = Math.round(min / 60);
+  if (h < 24) return `il y a ${h} h`;
+  const days = Math.round(h / 24);
+  if (days < 7) return `il y a ${days} j`;
+  return d.toLocaleDateString();
+}
+
 let working  = false;
 let debugMode = false;
+let currentDiscussionId = null;
+let currentTitle = '';
+let currentState = 'en_cours';
+
+const STATE_LABELS = {
+  en_cours: 'En cours',
+  terminee: 'Terminée',
+};
 
 const TOOL_LABELS = {
   orchestrator: '🎭 Orchestrator',
@@ -36,11 +72,32 @@ const TOOL_LABELS = {
   result:       '✅ Turn complete',
 };
 
-const ws = new WebSocket(`ws://${location.host}`);
+function buildWsUrl() {
+  const params = new URLSearchParams(location.search);
+  const id = params.get('discussion');
+  const qs = id ? `?discussion=${encodeURIComponent(id)}` : '';
+  return `ws://${location.host}${qs}`;
+}
+
+const ws = new WebSocket(buildWsUrl());
 
 ws.onmessage = (event) => {
   let msg;
   try { msg = JSON.parse(event.data); } catch { return; }
+
+  if (msg.type === 'init') {
+    currentDiscussionId = msg.discussionId;
+    setDisplayedTitle(msg.title || 'New discussion');
+    setDisplayedState(msg.state || 'en_cours');
+    messages.innerHTML = '';
+    (msg.messages || []).forEach((m) => appendMessage(m.role, m.content));
+    return;
+  }
+
+  if (msg.type === 'state') {
+    setDisplayedState(msg.state);
+    return;
+  }
 
   if (msg.type === 'status') {
     working = msg.working;
@@ -106,6 +163,20 @@ ws.onclose = () => {
   appendMessage('assistant', 'Connection lost. Please reload the page.');
 };
 
+function setDisplayedTitle(t) {
+  currentTitle = t;
+  chatTitle.textContent = t;
+}
+
+function setDisplayedState(s) {
+  currentState = s;
+  stateBtn.textContent = STATE_LABELS[s] || s;
+  stateBtn.className = `state-${s}`;
+  stateBtn.title = s === 'terminee'
+    ? 'Session Claude terminée — envoyez un message pour relancer'
+    : 'Claude est en cours…';
+}
+
 function appendChoices(content, options) {
   const wrap = document.createElement('div');
   wrap.className = 'msg-choices';
@@ -131,7 +202,7 @@ function appendChoices(content, options) {
     btn.addEventListener('click', () => {
       wrap.remove();
       appendMessage('user', label);
-      ws.send(JSON.stringify({ content: id }));
+      ws.send(JSON.stringify({ content: id, display: label }));
     });
     wrap.appendChild(btn);
   });
@@ -331,6 +402,89 @@ function appendRaw(event) {
   messages.appendChild(el);
   messages.scrollTop = messages.scrollHeight;
 }
+
+// ─── History panel ──────────────────────────────────────────
+async function openHistory() {
+  try {
+    const res = await fetch('/api/discussions');
+    const list = await res.json();
+    historyList.innerHTML = '';
+    if (list.length === 0) {
+      historyEmpty.hidden = false;
+    } else {
+      historyEmpty.hidden = true;
+      list.forEach((d) => historyList.appendChild(renderHistoryItem(d)));
+    }
+    historyPanel.hidden = false;
+  } catch (err) {
+    console.error('Failed to load history:', err);
+  }
+}
+
+function renderHistoryItem(d) {
+  const li = document.createElement('li');
+  li.className = 'history-item';
+  if (d.id === currentDiscussionId) li.classList.add('active');
+
+  const title = document.createElement('div');
+  title.className = 'history-title';
+  title.textContent = d.title || '(sans titre)';
+  li.appendChild(title);
+
+  const meta = document.createElement('div');
+  meta.className = 'history-meta';
+  const statePill = document.createElement('span');
+  const st = d.state || 'en_cours';
+  statePill.className = `history-state state-${st}`;
+  statePill.textContent = STATE_LABELS[st] || st;
+  meta.appendChild(statePill);
+  meta.appendChild(document.createTextNode(` · ${formatRelative(d.lastMessageAt || d.createdAt)} · ${d.messageCount} message${d.messageCount > 1 ? 's' : ''}`));
+  li.appendChild(meta);
+
+  li.addEventListener('click', () => {
+    if (d.id === currentDiscussionId) {
+      historyPanel.hidden = true;
+      return;
+    }
+    const url = new URL(location.href);
+    url.searchParams.set('discussion', d.id);
+    location.href = url.toString();
+  });
+  return li;
+}
+
+historyBtn.addEventListener('click', () => {
+  if (historyPanel.hidden) openHistory();
+  else historyPanel.hidden = true;
+});
+historyClose.addEventListener('click', () => { historyPanel.hidden = true; });
+
+newBtn.addEventListener('click', () => {
+  const url = new URL(location.href);
+  url.searchParams.delete('discussion');
+  location.href = url.toString();
+});
+
+// ─── Title rename ───────────────────────────────────────────
+chatTitle.addEventListener('click', async () => {
+  if (!currentDiscussionId) return;
+  const next = prompt('Renommer la discussion :', currentTitle);
+  if (next == null) return;
+  const trimmed = next.trim();
+  if (!trimmed || trimmed === currentTitle) return;
+  try {
+    const res = await fetch(`/api/discussions/${currentDiscussionId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: trimmed }),
+    });
+    if (!res.ok) throw new Error('rename failed');
+    const meta = await res.json();
+    setDisplayedTitle(meta.title || 'New discussion');
+  } catch (err) {
+    console.error('Rename failed:', err);
+  }
+});
 
 // Auto-resize textarea
 input.addEventListener('input', () => {

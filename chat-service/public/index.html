@@ -12,13 +12,24 @@
   <div id="chat-widget" class="chat-open">
     <div id="chat-header">
       <div id="chat-header-icon">✦</div>
-      <span id="chat-title">CRM Assistant</span>
+      <span id="chat-title" title="Click to rename">CRM Assistant</span>
+      <span id="chat-state" class="state-en_cours" aria-label="Discussion state"></span>
       <span id="chat-status-dots" style="display:none">
         <span></span><span></span><span></span>
       </span>
+      <button id="chat-history" title="History" aria-label="Discussion history">📂</button>
+      <button id="chat-new" title="New discussion" aria-label="New discussion">✚</button>
       <button id="chat-debug" title="Debug OFF" aria-label="Toggle debug">🔍</button>
       <button id="chat-expand" title="Expand" aria-label="Expand chat">⤢</button>
       <button id="chat-toggle" aria-label="Toggle chat">✕</button>
+    </div>
+    <div id="chat-history-panel" hidden>
+      <div id="history-panel-header">
+        <span>Discussions</span>
+        <button id="history-close" aria-label="Close history">✕</button>
+      </div>
+      <ul id="history-list"></ul>
+      <div id="history-empty" hidden>Aucune discussion sauvegardée.</div>
     </div>
     <div id="chat-messages"></div>
     <form id="chat-form">

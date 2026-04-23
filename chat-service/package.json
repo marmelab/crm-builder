@@ -5,6 +5,7 @@
   "scripts": {
     "start": "node server.js",
     "test": "node --test test/server.test.js",
+    "test:smoke": "node test/smoke-discussions.mjs",
     "bench": "node tests/run.js",
     "bench:update": "node tests/run.js --update-baseline"
   },
