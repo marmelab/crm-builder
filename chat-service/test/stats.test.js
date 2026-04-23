@@ -158,3 +158,17 @@ test('aggregateSession: blocking hooks marked blocking=true (parallel fixture)',
     if (h.blocking) assert.ok(allowed.includes(h.hookName));
   }
 });
+
+test('aggregateSession: aggregates skills and rules', async () => {
+  const out = await aggregateSession({
+    sessionLogPath: fx('skills-rules.jsonl'),
+    hooksLogPath: null,
+    sessionId: 'sess-sr',
+  });
+  assert.equal(out.skills.length, 1);
+  assert.equal(out.skills[0].skill, 'superpowers:test-driven-development');
+  assert.equal(out.skills[0].count, 2);
+  assert.equal(out.rules.length, 1);
+  assert.equal(out.rules[0].ruleFile, 'agent-output-format.md');
+  assert.equal(out.rules[0].reads, 2);
+});

@@ -368,6 +368,50 @@ function assignHookExecsToPhases(events, phases, hookAggregates) {
   }
 }
 
+function aggregateSkills(phases) {
+  const byName = new Map();
+  for (const phase of phases) {
+    for (const child of phase.children) {
+      if (child.kind !== 'skill') continue;
+      const row = byName.get(child.skill) ?? { skill: child.skill, count: 0, totalDurationMs: 0, invocations: [] };
+      row.count++;
+      row.totalDurationMs += child.approxDurationMs || 0;
+      row.invocations.push({ ts: child.ts, agentType: phase.agentType, phaseId: phase.phaseId });
+      byName.set(child.skill, row);
+    }
+  }
+  return [...byName.values()].sort((a, b) => b.count - a.count);
+}
+
+const RULE_PATH_RE = /\.claude\/rules\/([^/]+\.md)$/;
+
+function aggregateRules(events, phases) {
+  const agentPhases = phases.filter((p) => p.kind === 'agent');
+  const phaseByToolUseId = buildPhaseOwnerMap(events, agentPhases);
+  const byFile = new Map();
+  for (const rec of events) {
+    if (rec.type !== 'debug_raw' || rec.event?.type !== 'assistant') continue;
+    for (const b of extractToolUsesFromAssistant(rec.event)) {
+      if (b.name !== 'Read') continue;
+      const m = typeof b.input?.file_path === 'string' && b.input.file_path.match(RULE_PATH_RE);
+      if (!m) continue;
+      const ruleFile = m[1];
+      const owner = resolvePhase(rec.event, phaseByToolUseId);
+      const agentType = owner?.agentType ?? 'orchestrator';
+      const row = byFile.get(ruleFile) ?? { ruleFile, reads: 0, readers: new Map() };
+      row.reads++;
+      row.readers.set(agentType, (row.readers.get(agentType) || 0) + 1);
+      byFile.set(ruleFile, row);
+    }
+  }
+  return [...byFile.values()]
+    .map((r) => ({
+      ruleFile: r.ruleFile, reads: r.reads,
+      readers: [...r.readers].map(([agentType, count]) => ({ agentType, count })).sort((a, b) => b.count - a.count),
+    }))
+    .sort((a, b) => b.reads - a.reads);
+}
+
 export async function aggregateSession({ sessionLogPath, hooksLogPath, sessionId }) {
   const events = [];
   for await (const ev of readJsonl(sessionLogPath)) events.push(ev);
@@ -390,13 +434,16 @@ export async function aggregateSession({ sessionLogPath, hooksLogPath, sessionId
   }
 
   const orchestrator = buildOrchestratorPhase(events, agentPhases, startTs, endTs);
-  const phases = agentPhases.length > 0
-    ? [orchestrator, ...agentPhases].sort((a, b) => a.startTs.localeCompare(b.startTs))
-    : [];
+  const phases = [orchestrator, ...agentPhases].sort((a, b) => a.startTs.localeCompare(b.startTs));
   const timeBreakdown = agentPhases.length > 0 ? buildTimeBreakdown(orchestrator, agentPhases) : [];
 
   // Build phase children, tool counts, and leaderboards
   const { toolCounts, allToolCalls } = populateChildrenAndCounts(events, phases, orchestrator);
+
+  // Only keep phases if orchestrator has children or if there are agent phases
+  const hasOrchestratorWork = orchestrator.children.length > 0;
+  const finalPhases = (hasOrchestratorWork || agentPhases.length > 0) ? phases : [];
+
   const topAgents = buildTopAgents(agentPhases);
   const topToolCalls = buildTopToolCalls(allToolCalls);
 
@@ -404,6 +451,10 @@ export async function aggregateSession({ sessionLogPath, hooksLogPath, sessionId
   const hookLines = await readHooksLog(hooksLogPath, startTs, endTs);
   const hooks = aggregateHooks(hookLines);
   assignHookExecsToPhases(events, phases, hooks);
+
+  // Aggregate skills and rules
+  const skills = aggregateSkills(finalPhases);
+  const rules = aggregateRules(events, finalPhases);
 
   return {
     sessionId: sessionId ?? null,
@@ -422,10 +473,10 @@ export async function aggregateSession({ sessionLogPath, hooksLogPath, sessionId
       timeBreakdown,
     },
     teams: [...teams.values()],
-    phases,
+    phases: finalPhases,
     topAgents,
     topToolCalls,
     toolCounts,
-    skills: [], hooks, rules: [], errors: [], retries: [],
+    skills, hooks, rules, errors: [], retries: [],
   };
 }
