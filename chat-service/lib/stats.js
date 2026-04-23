@@ -126,6 +126,115 @@ function buildTimeBreakdown(orchestrator, agentPhases) {
   return [...byAgent].map(([agent, ms]) => ({ agent, ms })).sort((a, b) => b.ms - a.ms);
 }
 
+function buildPhaseOwnerMap(events, agentPhases) {
+  const phaseByToolUseId = new Map();
+  for (const p of agentPhases) if (p._toolUseId) phaseByToolUseId.set(p._toolUseId, p);
+  return phaseByToolUseId;
+}
+
+function resolvePhase(ev, phaseByToolUseId) {
+  const cursor = ev.parent_tool_use_id;
+  if (cursor && phaseByToolUseId.has(cursor)) return phaseByToolUseId.get(cursor);
+  return null;
+}
+
+function toolDetail(toolName, input) {
+  if (!input) return null;
+  const short = (s, n = 80) => (typeof s === 'string' && s.length > n) ? '…' + s.slice(-n) : s;
+  switch (toolName) {
+    case 'Read':
+    case 'Write':
+    case 'Edit': return short(input.file_path);
+    case 'Bash': return short(input.command, 80);
+    case 'Grep': return `"${input.pattern ?? ''}"${input.path ? ' in ' + input.path : ''}`;
+    case 'Glob': return input.pattern ?? null;
+    case 'Skill': return input.skill ?? null;
+    default: return null;
+  }
+}
+
+const SKIP_CHILD = new Set(['Agent', 'Task', 'TeamCreate', 'TeamDelete']);
+
+function populateChildrenAndCounts(events, phases, orchestrator) {
+  const agentPhases = phases.filter((p) => p.kind === 'agent');
+  const phaseByToolUseId = buildPhaseOwnerMap(events, agentPhases);
+  const toolCounts = new Map();
+  const allToolCalls = [];
+  const prevTsByPhase = new Map();
+
+  for (const rec of events) {
+    if (rec.type !== 'debug_raw' || rec.event?.type !== 'assistant') continue;
+    const owner = resolvePhase(rec.event, phaseByToolUseId) ?? orchestrator;
+    if (!owner) continue;
+    for (const b of extractToolUsesFromAssistant(rec.event)) {
+      if (SKIP_CHILD.has(b.name)) continue;
+      const prev = prevTsByPhase.get(owner.phaseId);
+      const approxDurationMs = prev ? msBetween(prev, rec.ts) : 0;
+      prevTsByPhase.set(owner.phaseId, rec.ts);
+      if (b.name === 'Skill') {
+        owner.children.push({
+          kind: 'skill',
+          skill: b.input?.skill || 'unknown',
+          ts: rec.ts,
+          approxDurationMs, isApprox: true,
+        });
+      } else {
+        owner.children.push({
+          kind: 'tool_use',
+          tool: b.name, detail: toolDetail(b.name, b.input),
+          ts: rec.ts,
+          approxDurationMs, isApprox: true,
+          agentType: owner.agentType,
+        });
+        const tc = toolCounts.get(b.name) || { tool: b.name, count: 0, totalDurationMs: 0, isApprox: true };
+        tc.count++; tc.totalDurationMs += approxDurationMs;
+        toolCounts.set(b.name, tc);
+        allToolCalls.push({
+          phaseId: owner.phaseId, tool: b.name, detail: toolDetail(b.name, b.input),
+          durationMs: approxDurationMs, isApprox: true,
+          teamName: owner.teamName ?? null,
+          flaggedSlow: approxDurationMs > 30000,
+          ts: rec.ts, _toolUseId: b.id,
+        });
+      }
+    }
+  }
+
+  // Refine Bash durations from local_bash task_notifications (they share tool_use_id)
+  const bashDurByToolUseId = new Map();
+  for (const rec of events) {
+    if (rec.type !== 'debug_raw' || !rec.event) continue;
+    const ev = rec.event;
+    if (ev.type === 'system' && ev.subtype === 'task_notification' && ev.task_type === 'local_bash' && ev.tool_use_id) {
+      bashDurByToolUseId.set(ev.tool_use_id, ev.usage?.duration_ms || 0);
+    }
+  }
+  for (const c of allToolCalls) {
+    if (c.tool === 'Bash' && c._toolUseId && bashDurByToolUseId.has(c._toolUseId)) {
+      const dur = bashDurByToolUseId.get(c._toolUseId);
+      if (dur > 0) {
+        c.durationMs = dur; c.isApprox = false; c.flaggedSlow = dur > 30000;
+      }
+    }
+    delete c._toolUseId;
+  }
+
+  return {
+    toolCounts: [...toolCounts.values()].sort((a, b) => b.count - a.count),
+    allToolCalls,
+  };
+}
+
+function buildTopAgents(agentPhases) {
+  return [...agentPhases].sort((a, b) => b.durationMs - a.durationMs).slice(0, 5)
+    .map((p) => ({ phaseId: p.phaseId, label: `${p.agentType} ${p.description}`.trim(), durationMs: p.durationMs, teamName: p.teamName }));
+}
+
+function buildTopToolCalls(allToolCalls) {
+  return [...allToolCalls].sort((a, b) => b.durationMs - a.durationMs).slice(0, 5)
+    .map(({ ts, ...rest }) => rest);
+}
+
 export async function aggregateSession({ sessionLogPath, hooksLogPath, sessionId }) {
   const events = [];
   for await (const ev of readJsonl(sessionLogPath)) events.push(ev);
@@ -147,10 +256,16 @@ export async function aggregateSession({ sessionLogPath, hooksLogPath, sessionId
     }
   }
 
+  const orchestrator = buildOrchestratorPhase(events, agentPhases, startTs, endTs);
   const phases = agentPhases.length > 0
-    ? [buildOrchestratorPhase(events, agentPhases, startTs, endTs), ...agentPhases].sort((a, b) => a.startTs.localeCompare(b.startTs))
+    ? [orchestrator, ...agentPhases].sort((a, b) => a.startTs.localeCompare(b.startTs))
     : [];
-  const timeBreakdown = agentPhases.length > 0 ? buildTimeBreakdown(buildOrchestratorPhase(events, agentPhases, startTs, endTs), agentPhases) : [];
+  const timeBreakdown = agentPhases.length > 0 ? buildTimeBreakdown(orchestrator, agentPhases) : [];
+
+  // Build phase children, tool counts, and leaderboards
+  const { toolCounts, allToolCalls } = populateChildrenAndCounts(events, phases, orchestrator);
+  const topAgents = buildTopAgents(agentPhases);
+  const topToolCalls = buildTopToolCalls(allToolCalls);
 
   return {
     sessionId: sessionId ?? null,
@@ -170,7 +285,9 @@ export async function aggregateSession({ sessionLogPath, hooksLogPath, sessionId
     },
     teams: [...teams.values()],
     phases,
-    topAgents: [], topToolCalls: [], toolCounts: [],
+    topAgents,
+    topToolCalls,
+    toolCounts,
     skills: [], hooks: [], rules: [], errors: [], retries: [],
   };
 }

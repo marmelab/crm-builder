@@ -86,3 +86,46 @@ test('aggregateSession: parallel-two-teams fixture has correct team assignments'
   const bootstrap = out.phases.find((p) => p.description === 'Bootstrap project context');
   assert.equal(bootstrap.teamName, null);
 });
+
+test('aggregateSession: orchestrator phase children exclude Agent/Task/Team* dispatches', async () => {
+  const out = await aggregateSession({
+    sessionLogPath: fx('single-team-single-ticket.jsonl'),
+    hooksLogPath: null,
+    sessionId: 'sess-single',
+  });
+  const orch = out.phases.find((p) => p.kind === 'orchestrator');
+  assert.equal(orch.children.filter((c) => c.kind === 'tool_use').length, 0);
+});
+
+test('aggregateSession: toolCounts ordered by count desc', async () => {
+  const out = await aggregateSession({
+    sessionLogPath: fx('simple-quick-edit.jsonl'),
+    hooksLogPath: null,
+    sessionId: 'sess-simple',
+  });
+  assert.equal(out.toolCounts.length, 2);
+  const names = out.toolCounts.map((t) => t.tool).sort();
+  assert.deepEqual(names, ['Edit', 'Read']);
+  for (const t of out.toolCounts) assert.equal(t.count, 1);
+});
+
+test('aggregateSession: topAgents sorted by durationMs desc', async () => {
+  const out = await aggregateSession({
+    sessionLogPath: fx('parallel-two-teams.jsonl'),
+    hooksLogPath: null,
+    sessionId: 'sess-parallel',
+  });
+  assert.ok(out.topAgents.length > 0 && out.topAgents.length <= 5);
+  for (let i = 1; i < out.topAgents.length; i++) {
+    assert.ok(out.topAgents[i - 1].durationMs >= out.topAgents[i].durationMs);
+  }
+});
+
+test('aggregateSession: topToolCalls flags ops >30s as flaggedSlow', async () => {
+  const out = await aggregateSession({
+    sessionLogPath: fx('parallel-two-teams.jsonl'),
+    hooksLogPath: fx('hooks.log.parallel-teams'),
+    sessionId: 'sess-parallel',
+  });
+  assert.ok(out.topToolCalls.filter((c) => c.flaggedSlow).length >= 1);
+});
