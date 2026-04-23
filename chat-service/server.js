@@ -544,7 +544,14 @@ async function processMessage(ws, prompt) {
       s.busy = false;
       // All queued turns processed and claude is idle → discussion is done
       // (until the user sends another message).
-      transitionState(ws, 'terminee');
+      await transitionState(ws, 'terminee');
+      // If the client disconnected while the turn was running, we kept the
+      // connection state alive so the log could still be written. Now that the
+      // turn is done, release it.
+      if (s.disconnected) {
+        s.discussion?.close();
+        connections.delete(ws);
+      }
     }
   }
 }
@@ -626,7 +633,16 @@ wss.on('connection', async (ws, req) => {
 
   ws.on('close', () => {
     const s = connections.get(ws);
-    s?.discussion?.close();
+    if (!s) return;
+    // If a turn is running, let it finish writing to log.jsonl before we
+    // tear down. Otherwise the user loses any assistant output that arrives
+    // after they switched discussions. processMessage's finally block reads
+    // this flag and cleans up itself.
+    if (s.busy) {
+      s.disconnected = true;
+      return;
+    }
+    s.discussion?.close();
     connections.delete(ws);
   });
 });
