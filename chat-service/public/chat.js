@@ -19,6 +19,32 @@ function formatTokens(n) {
 let working  = false;
 let debugMode = false;
 
+// Monotonic sequence assigned to every persistent message (user/assistant
+// text, choices, debug events). Used to interleave buffered debug events at
+// their original chronological position when debug mode is toggled on
+// mid-session — without it, replayed debug events would pile up at the end
+// of the message list regardless of when they actually arrived.
+let seqCounter = 0;
+
+// Buffer of every debug / debug_raw event received since the page loaded,
+// tagged with the seq assigned at arrival, so toggling debug on mid-session
+// can splice them in at the right position.
+const debugEventBuffer = [];
+
+function placeIntoMessages(el, seq) {
+  el.dataset.seq = seq;
+  for (const child of messages.children) {
+    const cs = Number(child.dataset.seq);
+    if (!Number.isNaN(cs) && cs > seq) {
+      messages.insertBefore(el, child);
+      messages.scrollTop = messages.scrollHeight;
+      return;
+    }
+  }
+  messages.appendChild(el);
+  messages.scrollTop = messages.scrollHeight;
+}
+
 const TOOL_LABELS = {
   orchestrator: '🎭 Orchestrator',
   Task:         '🤖 Agent',
@@ -77,21 +103,16 @@ ws.onmessage = (event) => {
   }
 
   if (msg.type === 'debug') {
-    if (debugMode) appendDebug(msg.tool, msg.input, msg.agent);
+    const s = ++seqCounter;
+    debugEventBuffer.push({ msg, seq: s });
+    if (debugMode) appendDebug(msg.tool, msg.input, msg.agent, s);
     return;
   }
 
   if (msg.type === 'debug_raw') {
-    if (debugMode) {
-      const ev = msg.event;
-      if (ev.type === 'rate_limit_event') return;
-      if (ev.type === 'system' && ev.subtype === 'init') return;
-      if (ev.type === 'assistant') {
-        const blocks = ev.message?.content || [];
-        if (blocks.length === 0 || blocks.every((b) => b.type === 'thinking')) return;
-      }
-      appendRaw(ev);
-    }
+    const s = ++seqCounter;
+    debugEventBuffer.push({ msg, seq: s });
+    if (debugMode) renderDebugRaw(msg, s);
     return;
   }
 
@@ -106,7 +127,7 @@ ws.onclose = () => {
   appendMessage('assistant', 'Connection lost. Please reload the page.');
 };
 
-function appendChoices(content, options) {
+function appendChoices(content, options, seq = ++seqCounter) {
   const wrap = document.createElement('div');
   wrap.className = 'msg-choices';
 
@@ -136,16 +157,14 @@ function appendChoices(content, options) {
     wrap.appendChild(btn);
   });
 
-  messages.appendChild(wrap);
-  messages.scrollTop = messages.scrollHeight;
+  placeIntoMessages(wrap, seq);
 }
 
-function appendMessage(role, content) {
+function appendMessage(role, content, seq = ++seqCounter) {
   const el = document.createElement('div');
   el.className = `msg msg-${role}`;
   el.textContent = content;
-  messages.appendChild(el);
-  messages.scrollTop = messages.scrollHeight;
+  placeIntoMessages(el, seq);
 }
 
 function toolDetail(toolName, input) {
@@ -179,7 +198,7 @@ function agentColor(label) {
   return '#8b5cf6';
 }
 
-function appendDebug(toolName, input, agentCtx) {
+function appendDebug(toolName, input, agentCtx, seq = ++seqCounter) {
   const label = TOOL_LABELS[toolName] || `🔧 ${toolName}`;
   const el = document.createElement('div');
   el.className = 'msg msg-debug';
@@ -270,8 +289,7 @@ function appendDebug(toolName, input, agentCtx) {
     }
   }
 
-  messages.appendChild(el);
-  messages.scrollTop = messages.scrollHeight;
+  placeIntoMessages(el, seq);
 }
 
 function summarizeEvent(ev) {
@@ -316,7 +334,7 @@ function summarizeEvent(ev) {
   return null;
 }
 
-function appendRaw(event) {
+function appendRaw(event, seq = ++seqCounter) {
   const summary = summarizeEvent(event);
   if (!summary) return;
   const el = document.createElement('details');
@@ -328,8 +346,20 @@ function appendRaw(event) {
   full.className = 'raw-full';
   full.textContent = JSON.stringify(event, null, 2);
   el.appendChild(full);
-  messages.appendChild(el);
-  messages.scrollTop = messages.scrollHeight;
+  placeIntoMessages(el, seq);
+}
+
+// Apply the debug_raw display filters and render. Called both from the live
+// WebSocket handler and from the replay on debug toggle ON.
+function renderDebugRaw(msg, seq = ++seqCounter) {
+  const ev = msg.event;
+  if (ev.type === 'rate_limit_event') return;
+  if (ev.type === 'system' && ev.subtype === 'init') return;
+  if (ev.type === 'assistant') {
+    const blocks = ev.message?.content || [];
+    if (blocks.length === 0 || blocks.every((b) => b.type === 'thinking')) return;
+  }
+  appendRaw(ev, seq);
 }
 
 // Auto-resize textarea
@@ -378,7 +408,18 @@ debugBtn.addEventListener('click', () => {
   debugMode = !debugMode;
   debugBtn.classList.toggle('debug-active', debugMode);
   debugBtn.title = debugMode ? 'Debug ON' : 'Debug OFF';
-  if (!debugMode) {
+  if (debugMode) {
+    // Replay every buffered debug event at its original seq so it is
+    // spliced in between the already-rendered user/assistant messages at
+    // the correct chronological position — not piled up at the end.
+    for (const entry of debugEventBuffer) {
+      if (entry.msg.type === 'debug') {
+        appendDebug(entry.msg.tool, entry.msg.input, entry.msg.agent, entry.seq);
+      } else if (entry.msg.type === 'debug_raw') {
+        renderDebugRaw(entry.msg, entry.seq);
+      }
+    }
+  } else {
     messages.querySelectorAll('.msg-debug').forEach((el) => el.remove());
   }
 });

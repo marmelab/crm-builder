@@ -6,3 +6,7 @@
 * mettre en place outupStyle ? https://code.claude.com/docs/en/output-styles
 
 * ajouter résultats attendus dans les cas de tests. Faire un diff pour baseline, puis pour chaque test un diff et faire un diff de diff à interpreter par un agent
+
+* clean logs hooks
+
+* refactor agents & skills (trop verbeux)

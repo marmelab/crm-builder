@@ -581,6 +581,35 @@ E2e hook untouched — already `skipped_demo` in demo mode, and reflection in fu
 
 ---
 
+## Phase 27 — Merger git reset was wiping App.tsx variant (2026-04-23)
+
+### Bug surfaced by a quick-edit
+After the Phase 25 fix, a quick-edit ("rename 'Hot Contacts' label to 'CHAUUUD'") ran its merger, which executed Step 2a's `git reset --hard HEAD` in `/app`. That reset silently reverted `/app/src/App.tsx` from the **FakeRest variant** (copied by `entrypoint.sh` at boot for `MODE=demo`) back to its **tracked upstream form** (just `<CRM />` with no data provider). The running vite dev server hot-reloaded and the demo UI broke — user reported *"je suis repassé en mode démo, pourquoi ?"* (actually it was IN demo mode but missing the FakeRest wiring).
+
+Root cause: the entrypoint modifies a **tracked** file (`src/App.tsx`) during container startup. `git reset --hard HEAD` faithfully undoes that modification because, from git's perspective, it's just an uncommitted dirty state — identical to the pollution the Phase 25 fix was designed to clean up.
+
+### Fix: extract the variant-copy into a shared helper, call it post-reset
+New script [`/entrypoint-helpers/apply-app-variant.sh`](entrypoint.sh) (written by `entrypoint.sh` at boot, then re-callable):
+
+```bash
+#!/bin/bash
+set -e
+MODE="${MODE:-demo}"
+if [ "$MODE" = "full" ]; then
+  cp /app-variants/App.supabase.tsx /app/src/App.tsx
+else
+  cp /app-variants/App.fakerest.tsx /app/src/App.tsx
+fi
+```
+
+- [`entrypoint.sh`](entrypoint.sh) — writes the helper to `/entrypoint-helpers/` at boot, then invokes it in place of the previous inline `cp` calls. Single source of truth.
+- [`merger.md`](claudeConfig/.claude/agents/merger.md) Step 2a — the reset command is now `git reset --hard HEAD && /entrypoint-helpers/apply-app-variant.sh`, with an explanatory comment about why chaining the variant re-application is necessary. Added the App.tsx-wipe incident to the "Why this matters" block so the rationale is traceable.
+
+### Manual recovery applied
+Copied `/app-variants/App.fakerest.tsx → /app/src/App.tsx` live in the running container and installed the helper script at `/entrypoint-helpers/apply-app-variant.sh` without restarting, so the user doesn't need to reload the dev server. Next container restart will regenerate the helper via the updated entrypoint.
+
+---
+
 ## Open items / known limits
 
 - **`medium-new-field` test** times out at 15 min (bumped to 35 min). Real agent-team flow on a multi-file feature naturally takes 20-30 min.
@@ -592,4 +621,4 @@ E2e hook untouched — already `skipped_demo` in demo mode, and reflection in fu
 
 ---
 
-_Last updated: 2026-04-23 (Phase 26)_
+_Last updated: 2026-04-23 (Phase 27)_

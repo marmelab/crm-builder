@@ -79,14 +79,33 @@ fi
 
 cd ${APP_DIR}
 
+# ── App.tsx variant helper (called here AND by merger after git reset) ─────
+# Extracted to a standalone script so the merger can re-apply it after
+# `git reset --hard HEAD` in /app (the reset silently reverts src/App.tsx to
+# the tracked upstream form, which has no data provider wiring).
+mkdir -p /entrypoint-helpers
+cat > /entrypoint-helpers/apply-app-variant.sh <<'HELPER'
+#!/bin/bash
+# Copy the mode-appropriate App.tsx variant into /app/src/App.tsx.
+# Reads MODE from env (default: demo). Idempotent.
+set -e
+MODE="${MODE:-demo}"
+if [ "$MODE" = "full" ]; then
+  cp /app-variants/App.supabase.tsx /app/src/App.tsx
+else
+  cp /app-variants/App.fakerest.tsx /app/src/App.tsx
+fi
+HELPER
+chmod +x /entrypoint-helpers/apply-app-variant.sh
+
 # ── Select App.tsx variant based on mode ─────────────────────
 if [ "$MODE" = "demo" ]; then
-  cp /app-variants/App.fakerest.tsx src/App.tsx
+  /entrypoint-helpers/apply-app-variant.sh
   echo -e "${GREEN}✓  Data provider: FakeRest${NC}"
   SUPERVISOR_CONF=/etc/supervisor/conf.d/demo.conf
 else
   # MODE=full
-  cp /app-variants/App.supabase.tsx src/App.tsx
+  /entrypoint-helpers/apply-app-variant.sh
   echo -e "${GREEN}✓  Data provider: Supabase${NC}"
 
   # Check Docker socket (required for Supabase)

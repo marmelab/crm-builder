@@ -49,12 +49,15 @@ git pull --ff-only 2>/dev/null || true   # no-op if no remote
 
 `/app`'s working tree is **not your workspace** — developers work in `/worktrees/TASK-XXX/`. Any modification to a tracked file in `/app` is stale debris from a previous session (a crash, an aborted run) and must be discarded before you merge.
 
+Run the provided helper (resets tracked files to HEAD, then re-applies the mode's `App.tsx` variant so the running vite dev server keeps its correct data provider):
+
 ```bash
-cd /app && git reset --hard HEAD
+cd /app && git reset --hard HEAD && /entrypoint-helpers/apply-app-variant.sh
 ```
 
-- Resets all tracked files to their committed state.
-- Leaves untracked files alone (`docs/tickets/*.json`, `docs/project-context.json` — these belong to other concurrent tickets and MUST survive).
+- `git reset --hard HEAD` resets every tracked file to its committed state — this is the "discard stale debris" step.
+- `apply-app-variant.sh` re-copies `/app-variants/App.fakerest.tsx` (MODE=demo) or `App.supabase.tsx` (MODE=full) over `src/App.tsx`. Without this, the reset silently reverts `src/App.tsx` to its tracked upstream form (which has no explicit data provider wiring) and the demo UI breaks until the next container restart.
+- Untracked files (`docs/tickets/*.json`, `docs/project-context.json`) survive — they belong to other concurrent tickets.
 - Run this **every time**, even if `git status` looks clean. It's cheap and idempotent.
 
 **Explicitly forbidden** — these commands rewrite history or fabricate commits on the base branch:
@@ -65,7 +68,9 @@ cd /app && git reset --hard HEAD
 - `git clean -fd` — would delete `docs/tickets/` and break concurrent tickets
 - `git checkout -- <file>` — overlaps with `git reset --hard` above; don't do it piecemeal
 
-**Why this matters** — past incident (session 2026-04-23): a merger saw stale priority-feature files in `/app` left from a previous test, ran `git add <files> && git commit -m "feat: add deal priority..."` with a message auto-generated from the stale files' contents, and pushed an unrelated commit onto `master` between two legitimate ticket merges. Recovery required a retry merger doing rebase conflict resolution (10 min). Never fabricate commits from working-tree state.
+**Why this matters** — two past incidents tied to this exact step:
+- 2026-04-23 (priority pollution): a merger saw stale priority-feature files in `/app` left from a previous test, ran `git add <files> && git commit -m "feat: add deal priority..."` with a message auto-generated from the stale files' contents, and pushed an unrelated commit onto `master` between two legitimate ticket merges. `git reset --hard HEAD` prevents that.
+- 2026-04-23 (App.tsx variant wipe): a merger ran `git reset --hard HEAD` (this fix) and inadvertently discarded the `App.fakerest.tsx → src/App.tsx` copy that the entrypoint places at container boot, leaving the running vite dev server with the upstream `<CRM />` stub and a broken demo UI. `apply-app-variant.sh` restores it.
 
 ### Step 3 — Merge the feature branch
 
