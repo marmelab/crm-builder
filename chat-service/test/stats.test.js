@@ -129,3 +129,32 @@ test('aggregateSession: topToolCalls flags ops >30s as flaggedSlow', async () =>
   });
   assert.ok(out.topToolCalls.filter((c) => c.flaggedSlow).length >= 1);
 });
+
+test('aggregateSession: correlates hooks.log with session window (single-team)', async () => {
+  const out = await aggregateSession({
+    sessionLogPath: fx('single-team-single-ticket.jsonl'),
+    hooksLogPath: fx('hooks.log.single-team'),
+    sessionId: 'sess-single',
+  });
+  const typecheck = out.hooks.find((h) => h.hookName === 'typecheck-on-commit.sh');
+  assert.ok(typecheck);
+  assert.equal(typecheck.runs, 1);
+  assert.equal(typecheck.okCount, 1);
+  assert.equal(typecheck.failCount, 0);
+  assert.equal(typecheck.blocking, false);
+  const unitFn = out.hooks.find((h) => h.hookName === 'run-unit-tests-functions.sh');
+  assert.ok(unitFn);
+  assert.equal(unitFn.skipCount, 1);
+});
+
+test('aggregateSession: blocking hooks marked blocking=true (parallel fixture)', async () => {
+  const out = await aggregateSession({
+    sessionLogPath: fx('parallel-two-teams.jsonl'),
+    hooksLogPath: fx('hooks.log.parallel-teams'),
+    sessionId: 'sess-parallel',
+  });
+  const allowed = ['block-bash-file-write.sh','block-bash-validation.sh','circuit-breaker.sh','silent-mode-check.sh'];
+  for (const h of out.hooks) {
+    if (h.blocking) assert.ok(allowed.includes(h.hookName));
+  }
+});

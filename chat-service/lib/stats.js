@@ -235,6 +235,139 @@ function buildTopToolCalls(allToolCalls) {
     .map(({ ts, ...rest }) => rest);
 }
 
+const HOOK_NAME_MAP = {
+  'typecheck': 'typecheck-on-commit.sh',
+  'unit-app':  'run-unit-tests-app.sh',
+  'unit-fn':   'run-unit-tests-functions.sh',
+  'e2e':       'run-e2e-tests.sh',
+  'prettier':  'prettier-on-stop.sh',
+  'block-bash-file-write': 'block-bash-file-write.sh',
+  'block-bash-validation': 'block-bash-validation.sh',
+  'circuit-breaker':       'circuit-breaker.sh',
+  'silent-mode-check':     'silent-mode-check.sh',
+};
+const BLOCKING_HOOKS = new Set([
+  'block-bash-file-write.sh','block-bash-validation.sh','circuit-breaker.sh','silent-mode-check.sh',
+]);
+
+function parseHookLine(line) {
+  const m = line.match(/^\[([^\]]+)\]\s+(\S+)\s+(\S+)(?:\s+(.*))?$/);
+  if (!m) return null;
+  const [, ts, shortName, state, rest = ''] = m;
+  const wtMatch = rest.match(/wt=(\S+)/);
+  const worktree = wtMatch ? wtMatch[1] : null;
+  let kind = null, exitCode = null;
+  if (state === 'START') kind = 'start';
+  else if (state === 'SKIP') kind = 'skip';
+  else if (state === 'OK') kind = 'ok';
+  else if (state.startsWith('EXIT=')) { kind = 'exit'; exitCode = Number(state.slice(5)); }
+  return { ts, shortName, kind, exitCode, worktree, rest };
+}
+
+async function readHooksLog(path, winStart, winEnd) {
+  if (!path) return [];
+  const raw = await readFile(path, 'utf8').catch(() => '');
+  const lines = raw.split('\n').filter(Boolean);
+  const out = [];
+  const ws = winStart ? new Date(winStart).getTime() : 0;
+  const we = winEnd ? new Date(winEnd).getTime() : Infinity;
+  for (const l of lines) {
+    const p = parseHookLine(l);
+    if (!p) continue;
+    const t = new Date(p.ts).getTime();
+    if (Number.isNaN(t) || t < ws || t > we) continue;
+    out.push(p);
+  }
+  return out;
+}
+
+function aggregateHooks(hookLines) {
+  const openByKey = new Map();
+  const execsByName = new Map();
+  for (const line of hookLines) {
+    const fullName = HOOK_NAME_MAP[line.shortName] || `${line.shortName}.sh`;
+    if (!execsByName.has(fullName)) execsByName.set(fullName, []);
+    const key = `${line.shortName}|${line.worktree ?? '-'}`;
+    if (line.kind === 'start') {
+      openByKey.set(key, line);
+    } else if (line.kind === 'exit') {
+      const start = openByKey.get(key) ?? openByKey.get(`${line.shortName}|-`);
+      const startTs = start?.ts ?? line.ts;
+      openByKey.delete(key);
+      execsByName.get(fullName).push({
+        ts: startTs, worktree: line.worktree ?? start?.worktree ?? null,
+        durationMs: msBetween(startTs, line.ts), exitCode: line.exitCode, tail: null,
+      });
+    } else if (line.kind === 'skip') {
+      execsByName.get(fullName).push({
+        ts: line.ts, worktree: line.worktree, durationMs: 0, exitCode: null, skip: true, tail: null,
+      });
+    }
+  }
+  const out = [];
+  for (const [fullName, execs] of execsByName) {
+    const runs = execs.filter((e) => !e.skip).length;
+    out.push({
+      hookName: fullName,
+      hookType: BLOCKING_HOOKS.has(fullName) ? 'PreToolUse' : 'SubagentStop',
+      runs,
+      totalDurationMs: execs.reduce((a, e) => a + (e.durationMs || 0), 0),
+      okCount: execs.filter((e) => !e.skip && e.exitCode === 0).length,
+      failCount: execs.filter((e) => !e.skip && e.exitCode !== 0 && e.exitCode !== null).length,
+      skipCount: execs.filter((e) => e.skip).length,
+      blocking: BLOCKING_HOOKS.has(fullName),
+      executions: execs,
+    });
+  }
+  return out.sort((a, b) => b.runs - a.runs);
+}
+
+function extractWorktreeFromAgentPrompt(prompt) {
+  if (typeof prompt !== 'string') return null;
+  const m = prompt.match(/WORKTREE_PATH=(\S+)/);
+  return m ? m[1] : null;
+}
+
+function assignHookExecsToPhases(events, phases, hookAggregates) {
+  const worktreeByPhaseId = new Map();
+  const toolUseIdToWorktree = new Map();
+  for (const rec of events) {
+    if (rec.type !== 'debug_raw' || rec.event?.type !== 'assistant') continue;
+    for (const b of extractToolUsesFromAssistant(rec.event)) {
+      if ((b.name === 'Agent' || b.name === 'Task') && b.input?.prompt) {
+        const wt = extractWorktreeFromAgentPrompt(b.input.prompt);
+        if (wt) toolUseIdToWorktree.set(b.id, wt);
+      }
+    }
+  }
+  for (const rec of events) {
+    if (rec.type !== 'debug_raw' || !rec.event) continue;
+    const ev = rec.event;
+    if (ev.type === 'system' && ev.subtype === 'task_started' && ev.tool_use_id && toolUseIdToWorktree.has(ev.tool_use_id)) {
+      worktreeByPhaseId.set(ev.task_id, toolUseIdToWorktree.get(ev.tool_use_id));
+    }
+  }
+  for (const agg of hookAggregates) {
+    for (const exec of agg.executions) {
+      if (!exec.worktree) continue;
+      const phaseId = [...worktreeByPhaseId.entries()].find(([, wt]) => wt === exec.worktree)?.[0];
+      if (!phaseId) continue;
+      const phase = phases.find((p) => p.phaseId === phaseId);
+      if (!phase) continue;
+      phase.children.push({
+        kind: 'hook',
+        hookName: agg.hookName, hookType: agg.hookType,
+        worktree: exec.worktree,
+        startTs: exec.ts,
+        endTs: exec.ts && exec.durationMs ? new Date(new Date(exec.ts).getTime() + exec.durationMs).toISOString() : exec.ts,
+        durationMs: exec.durationMs,
+        exitCode: exec.exitCode,
+        result: exec.skip ? 'skip' : (exec.exitCode === 0 ? 'ok' : 'fail'),
+      });
+    }
+  }
+}
+
 export async function aggregateSession({ sessionLogPath, hooksLogPath, sessionId }) {
   const events = [];
   for await (const ev of readJsonl(sessionLogPath)) events.push(ev);
@@ -267,6 +400,11 @@ export async function aggregateSession({ sessionLogPath, hooksLogPath, sessionId
   const topAgents = buildTopAgents(agentPhases);
   const topToolCalls = buildTopToolCalls(allToolCalls);
 
+  // Read and correlate hooks.log
+  const hookLines = await readHooksLog(hooksLogPath, startTs, endTs);
+  const hooks = aggregateHooks(hookLines);
+  assignHookExecsToPhases(events, phases, hooks);
+
   return {
     sessionId: sessionId ?? null,
     logPath: sessionLogPath,
@@ -288,6 +426,6 @@ export async function aggregateSession({ sessionLogPath, hooksLogPath, sessionId
     topAgents,
     topToolCalls,
     toolCounts,
-    skills: [], hooks: [], rules: [], errors: [], retries: [],
+    skills: [], hooks, rules: [], errors: [], retries: [],
   };
 }
