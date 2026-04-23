@@ -79,9 +79,50 @@ function buildWsUrl() {
   return `ws://${location.host}${qs}`;
 }
 
-const ws = new WebSocket(buildWsUrl());
+let ws;
+let switchingDiscussion = false;
 
-ws.onmessage = (event) => {
+function connectWs() {
+  ws = new WebSocket(buildWsUrl());
+  ws.onmessage = handleWsMessage;
+  ws.onclose = () => {
+    if (switchingDiscussion) { switchingDiscussion = false; return; }
+    appendMessage('assistant', 'Connection lost. Please reload the page.');
+  };
+}
+
+// Switch to another discussion (or start a fresh one with id=null) without
+// reloading the page — keeps the CRM iframe state intact.
+function switchDiscussion(id) {
+  switchingDiscussion = true;
+  try { ws?.close(); } catch {}
+  const url = new URL(location.href);
+  if (id) url.searchParams.set('discussion', id);
+  else url.searchParams.delete('discussion');
+  history.pushState({}, '', url);
+  resetChatUi();
+  connectWs();
+}
+
+function resetChatUi() {
+  messages.innerHTML = '';
+  currentDiscussionId = null;
+  currentTitle = '';
+  working = false;
+  send.disabled = false;
+  statusDots.style.display = 'none';
+  historyPanel.hidden = true;
+  stats.textContent = '';
+}
+
+window.addEventListener('popstate', () => {
+  switchingDiscussion = true;
+  try { ws?.close(); } catch {}
+  resetChatUi();
+  connectWs();
+});
+
+function handleWsMessage(event) {
   let msg;
   try { msg = JSON.parse(event.data); } catch { return; }
 
@@ -162,11 +203,9 @@ ws.onmessage = (event) => {
     if (existing) existing.remove();
     appendMessage('assistant', msg.content);
   }
-};
+}
 
-ws.onclose = () => {
-  appendMessage('assistant', 'Connection lost. Please reload the page.');
-};
+connectWs();
 
 function setDisplayedTitle(t) {
   currentTitle = t;
@@ -451,9 +490,7 @@ function renderHistoryItem(d) {
       historyPanel.hidden = true;
       return;
     }
-    const url = new URL(location.href);
-    url.searchParams.set('discussion', d.id);
-    location.href = url.toString();
+    switchDiscussion(d.id);
   });
   return li;
 }
@@ -465,9 +502,7 @@ historyBtn.addEventListener('click', () => {
 historyClose.addEventListener('click', () => { historyPanel.hidden = true; });
 
 newBtn.addEventListener('click', () => {
-  const url = new URL(location.href);
-  url.searchParams.delete('discussion');
-  location.href = url.toString();
+  switchDiscussion(null);
 });
 
 // ─── Title rename ───────────────────────────────────────────
