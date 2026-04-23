@@ -22,7 +22,24 @@ You verify that the implementation is correct, compliant with the spec, respects
 Read the ticket from docs/tickets/TASK-XXX.json before reviewing.
 Follow the output format in .claude/rules/agent-output-format.md.
 
-**Note on typecheck & unit tests:** these are already run automatically by SubagentStop hooks after DEVELOPER finishes (`typecheck-on-commit.sh`, `run-unit-tests-app.sh`, `run-unit-tests-functions.sh`). Do NOT re-run `make typecheck` / `npm run typecheck` / `make test` / `npm run test:unit:*` — if DEVELOPER completed cleanly, they passed. Focus on semantic code review.
+**Worktree scope** — the code you review lives in the ticket's worktree (`/worktrees/TASK-XXX/`), not `/app/src/`. Read `.claude/rules/worktree-scope.md` before any Read / Glob / Grep / Bash. Looking at `/app/src/...` shows you the *pre-ticket* code, which will make you think the feature wasn't implemented.
+
+## Validation commands — DO NOT RUN THEM (hooks own them)
+
+The following commands are **blocked by the `block-bash-validation` PreToolUse hook**. Running them wastes tool calls (each returns a block error) and, in the past, hung indefinitely when the Chromium-based vitest browser launched without a display.
+
+**Forbidden from this agent**:
+- typecheck: `make typecheck`, `npm run typecheck`, `npx tsc`, `npx tsc --noEmit`, `npx tsc --noEmit <file>`
+- prettier: `npm run prettier`, `npm run prettier:apply`, `npx prettier`
+- unit tests: `npm run test:unit:app`, `npm run test:unit:functions`, `npm test`, `npx vitest`
+- e2e: `npx playwright test`
+- lint: `npm run lint`, `npm run lint:typescript`, `make lint`
+
+**Why** — these are run automatically by `SubagentStop` hooks (`typecheck-on-commit.sh`, `run-unit-tests-app.sh`, `run-unit-tests-functions.sh`, `prettier-on-stop.sh`, `run-e2e-tests.sh`) after DEVELOPER finishes. If DEVELOPER's work reached you, those checks already passed — their output is in your context via the prior turn's stderr if there was a failure. Re-running is pure duplication.
+
+**What to do instead** — focus on **semantic review** (acceptance criteria, reuse, React/backend patterns, security) which hooks can't check. If you think typecheck or tests *must* have missed something, read the relevant source file with the `Read` tool and verify the TypeScript manually — don't run the compiler.
+
+Observed past behaviour (2026-04-23 session): quality-reviewer attempted 4+ validation commands that all got blocked by the hook. Save the tool calls.
 
 ## Confidence-based filtering
 

@@ -30,18 +30,21 @@ services:
       - crm-source:/app/src
       - crm-worktrees:/worktrees
       - claude-auth:/home/developer/.claude
-      # DEV ONLY — bind mount pour itérer sur la config sans rebuild.
+      # DEV ONLY — bind mounts pour itérer sur la config sans rebuild.
       # Entrypoint sync ces fichiers vers /home/developer/.claude au boot.
       # RETIRER avant release production (config doit vivre dans l'image).
       - ./claudeConfig/.claude:/root/.claude:ro
+      - ./entrypoint.sh:/entrypoint.sh:ro
+      - ./chat-service/server.js:/chat-service/server.js:ro
+      - ./chat-service/public:/chat-service/public:ro
       # DEV ONLY — logs structurés des sessions chat pour review/analyse.
       # RETIRER avant release production.
       - ./chat-logs:/chat-service/logs
-      # Runtime-generated tickets + reflections. Persisted so the developer
-      # can read prior reflections (Phase 18 directive) across container
-      # restarts. Without this, /app/docs/ lives in the overlay and is wiped
-      # at each `docker compose down`.
-      - ./crm-docs:/app/docs
+      # Runtime-generated tickets + reflections.
+      # Named volume (not bind): persists across `docker compose down` so
+      # reflections accumulate as a knowledge base, but wipes cleanly on
+      # `docker compose down -v` for fresh test runs.
+      - crm-docs:/app/docs
 
   # ── Full mode — local Supabase, requires Docker socket ─────
   crm-full:
@@ -61,10 +64,11 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock # ⚠️ required
       - supabase-cache:/root/.docker              # cache pulled images
       # Runtime-generated tickets + reflections (see demo profile comment).
-      - ./crm-docs:/app/docs
+      - crm-docs:/app/docs
 
 volumes:
   crm-source:
   crm-worktrees:
+  crm-docs:
   supabase-cache:
   claude-auth:

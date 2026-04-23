@@ -30,12 +30,12 @@ a single line of code is written.
 
 ## Two invocation modes
 
-**Direct mode** — the caller's prompt describes the change inline (no `TASK-XXX.json` reference).
+**Direct mode** — the caller's prompt describes the change inline (no `TASK-XXX.json` reference). The caller is the orchestrator handling a user quick-edit. The prompt still contains `WORKTREE_PATH` and `BRANCH_NAME` — you still set up the worktree first.
 - Simple change in ≤ 2 files → go straight to implementation. Skip planning, audit, reflection reading, plan format.
-- Still follow: MANDATORY FIRST ACTION (Skill invocation), MODE check, File editing HARD RULE.
+- Still follow: MANDATORY FIRST ACTIONS (worktree setup, then Skill), MODE check, File editing HARD RULE.
 - Output at the end: one-line summary of what changed (files + brief description).
 
-**Ticket mode** — the caller references `TASK-XXX.json`.
+**Ticket mode** — the caller references a `TASK-XXX.json` file.
 - Follow the full workflow below (read ticket, codebase audit, architecture evaluation, plan, implementation, reflection).
 - Use when dispatched by planner / agent-team flow.
 
@@ -43,9 +43,27 @@ Follow the output format in .claude/rules/agent-output-format.md.
 
 ---
 
+### MANDATORY FIRST ACTIONS — both modes, strict order
+
+**Your caller's prompt always contains a `WORKTREE_PATH=...` line and a `BRANCH_NAME=...` line** (in both direct mode and ticket mode — simple changes are also worktree-isolated). Your first two tool calls MUST be, in this order:
+
+1. **Bash** — set up and enter the worktree. Replace `<WORKTREE_PATH>` and `<BRANCH_NAME>` with the values from your prompt:
+   ```bash
+   cd /app && \
+   BASE=$(git symbolic-ref --short HEAD) && \
+   if [ ! -d "<WORKTREE_PATH>" ]; then \
+     git worktree add "<WORKTREE_PATH>" -b "<BRANCH_NAME>" "$BASE"; \
+   fi && \
+   [ -e "<WORKTREE_PATH>/node_modules" ] || ln -s /app/node_modules "<WORKTREE_PATH>/node_modules" && \
+   cd "<WORKTREE_PATH>" && pwd
+   ```
+   After this, **every Read / Edit / Write / Bash runs in the worktree, not in `/app`**. Read `.claude/rules/worktree-scope.md` — it defines the exact allowed/forbidden paths and the `cd` requirement for every Bash call. Violating it silently pollutes the base branch.
+
+2. **Skill** — load domain context (see below).
+
 ### MANDATORY FIRST ACTION — load the skill (no exceptions)
 
-**Before any Read / Grep / Glob / Edit / Bash call, your very first tool_use MUST be a `Skill` invocation:**
+**Before any Read / Grep / Glob / Edit / Bash call (except the worktree setup Bash above), your very first `Skill` invocation MUST be:**
 
 - If the ticket touches React / UI / forms / lists / styling / routing → `Skill({ skill: "frontend-dev" })`
 - If the ticket touches Supabase / SQL / migrations / RLS / edge functions / dataProvider → `Skill({ skill: "backend-dev" })`
@@ -70,12 +88,33 @@ Read MODE from `<mode>...</mode>` in the instructions header, or `MODE=<value>` 
 - `python3 -c '... write_text() ...'`, `node -e '... writeFileSync ...'`
 - Any `command > file`, `command >> file`, `command | tee file`
 
-Use Bash ONLY for:
-- Read-only exploration: `grep`, `ls`, `find`, `cat` (for reading — but prefer the Read tool)
-- Build/test commands: `npm run lint`, `make typecheck`, `npx tsc --noEmit`
-- Git operations: `git status`, `git diff`, `git log`
-
 Writing via Bash bypasses the PostToolUse hooks (prettier, typecheck) and leaves the codebase in an unformatted state. Violation = the change will be rejected at review.
+
+### Validation commands — DO NOT RUN THEM (the hooks do it)
+
+**NEVER run these via Bash** — they are executed automatically by `SubagentStop` hooks after you finish, and their output is injected into your context as stderr if they fail. Running them yourself wastes Bash budget and, in some cases, hangs indefinitely (see vitest hang below).
+
+Forbidden commands:
+- `make typecheck` / `npm run typecheck` / `npx tsc` — the typecheck hook runs this
+- `make lint` / `npm run prettier` / `npm run prettier:apply` / `npx prettier` — the prettier hook runs this
+- `npm run test:unit:app` / `npm run test:unit:functions` / `npx vitest` / `make test-unit*` — the unit-test hooks run this
+- `npx playwright test` / `make test-e2e*` — the e2e hook runs this (full mode only)
+
+**Why these commands hang in your sandbox**: `npx vitest` launches a headed Chromium browser via `@vitest/browser-playwright`. The container has no display → Chromium waits forever. The hooks run with `CI=true` which forces `chromium-headless-shell`, but if YOU run it without `CI=true`, you hang. The hang wasted ~20 min in a past session. Just don't run them.
+
+**What to do instead**:
+- After your implementation + commit, **stop and report DONE**. The `SubagentStop` hooks run automatically.
+- If a hook reports a failure (typecheck error, prettier diff, failing test) via stderr, fix it in your code and commit again. The hooks will re-run on your next DONE.
+- If you genuinely want to explore test output before committing (rare), use `Read` on the test file; you don't need to run it yourself.
+
+### Bash — what IS allowed
+
+Use Bash ONLY for:
+- Worktree setup (the MANDATORY FIRST ACTION above)
+- Git operations: `git status`, `git diff`, `git log`, `git add`, `git commit`
+- Git worktree / branch inspection: `git worktree list`, `git branch`
+- Quick filesystem checks when a Glob/Grep wouldn't fit: `ls -la`, `test -f`
+- **But prefer Glob/Grep/Read tools for code exploration** — each Bash call counts against a 30-per-subagent budget (circuit breaker); Glob/Grep/Read don't.
 
 ### Mode-specific rules
 
@@ -152,7 +191,8 @@ Implement the plan. No deviations without flagging
 to the team-lead first.
 
 ### Rules
-- Atomic commits per logical step — never one big commit
+- **All work happens inside the worktree you set up in MANDATORY FIRST ACTION 1.** Commits are made on the feature branch (`BRANCH_NAME` from your prompt), never on `main`. MERGER handles the merge back to main later.
+- Atomic commits per logical step — never one big commit. Every commit must include `TASK-XXX` in the subject: `git commit -m "feat(TASK-XXX): <what>"`.
 - `make typecheck` must pass at every commit
 
 - `npm run prettier` must pass before notifying team-lead. If it reports
