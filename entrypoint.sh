@@ -53,6 +53,20 @@ chown -R developer:developer /home/developer/.claude 2>/dev/null || true
 mkdir -p /chat-service/logs 2>/dev/null || true
 chmod 777 /chat-service/logs 2>/dev/null || true
 
+# Runtime-generated docs (tickets, reflections) — bind-mounted from host ./crm-docs.
+# On a fresh host, the directory may be empty and owned by root (if Docker runs as
+# root on Linux) or by a host UID that doesn't match developer's UID. Without this
+# chown the planner cannot write TASK-XXX.json and the whole flow silently
+# cascades into confusion — previously caused a full-session regression where
+# reviewers wandered because the ticket file they were reading never existed.
+mkdir -p /app/docs/tickets /app/docs/reflections 2>/dev/null || true
+chown -R developer:developer /app/docs 2>/dev/null || true
+
+# Worktrees root — same reasoning. Bind-mounted from host, needs developer write
+# access for `git worktree add /worktrees/TASK-XXX`.
+mkdir -p /worktrees 2>/dev/null || true
+chown -R developer:developer /worktrees 2>/dev/null || true
+
 # Disable atomic-crm project's PostToolUse format-file.sh hook — replaced by a
 # SubagentStop prettier hook in our crm-builder config. The PostToolUse variant
 # caused an edit/prettier loop (developer edits → hook reformats → developer
@@ -65,14 +79,33 @@ fi
 
 cd ${APP_DIR}
 
+# ── App.tsx variant helper (called here AND by merger after git reset) ─────
+# Extracted to a standalone script so the merger can re-apply it after
+# `git reset --hard HEAD` in /app (the reset silently reverts src/App.tsx to
+# the tracked upstream form, which has no data provider wiring).
+mkdir -p /entrypoint-helpers
+cat > /entrypoint-helpers/apply-app-variant.sh <<'HELPER'
+#!/bin/bash
+# Copy the mode-appropriate App.tsx variant into /app/src/App.tsx.
+# Reads MODE from env (default: demo). Idempotent.
+set -e
+MODE="${MODE:-demo}"
+if [ "$MODE" = "full" ]; then
+  cp /app-variants/App.supabase.tsx /app/src/App.tsx
+else
+  cp /app-variants/App.fakerest.tsx /app/src/App.tsx
+fi
+HELPER
+chmod +x /entrypoint-helpers/apply-app-variant.sh
+
 # ── Select App.tsx variant based on mode ─────────────────────
 if [ "$MODE" = "demo" ]; then
-  cp /app-variants/App.fakerest.tsx src/App.tsx
+  /entrypoint-helpers/apply-app-variant.sh
   echo -e "${GREEN}✓  Data provider: FakeRest${NC}"
   SUPERVISOR_CONF=/etc/supervisor/conf.d/demo.conf
 else
   # MODE=full
-  cp /app-variants/App.supabase.tsx src/App.tsx
+  /entrypoint-helpers/apply-app-variant.sh
   echo -e "${GREEN}✓  Data provider: Supabase${NC}"
 
   # Check Docker socket (required for Supabase)

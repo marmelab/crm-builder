@@ -478,13 +478,22 @@ async function processMessage(ws, prompt) {
           rateLimit = event.rate_limit_info;
         }
 
-        // Track active sub-agents (task_started / task_completed / task_notification)
+        // Track active sub-agents. Claude Code emits task_started events for
+        // many things (Bash calls, MCP tool calls, subagent dispatches, ...).
+        // We only count `task_type === "local_agent"` which is the actual
+        // "subagent spawned via Agent tool" signal. Previously we counted all
+        // task_started events, which caused the counter to drift to double-digit
+        // values (observed: UI showed 11 when only ~3 agents were active).
+        // Match completion via task_id — task_notification reuses the started
+        // event's task_id.
         if (event.type === 'system') {
-          if (event.subtype === 'task_started') {
-            state.stats.activeAgents++;
+          if (event.subtype === 'task_started' && event.task_type === 'local_agent' && event.task_id) {
+            state.stats.activeAgentIds.add(event.task_id);
+            state.stats.activeAgents = state.stats.activeAgentIds.size;
             sendStats(ws);
-          } else if (event.subtype === 'task_notification' && event.status === 'completed') {
-            state.stats.activeAgents = Math.max(0, state.stats.activeAgents - 1);
+          } else if (event.subtype === 'task_notification' && event.status === 'completed' && event.task_id && state.stats.activeAgentIds.has(event.task_id)) {
+            state.stats.activeAgentIds.delete(event.task_id);
+            state.stats.activeAgents = state.stats.activeAgentIds.size;
             sendStats(ws);
           }
         }
@@ -504,6 +513,7 @@ async function processMessage(ws, prompt) {
           state.stats.costUsdCurrentSpawn = event.total_cost_usd || 0;
           // Reset active agents when turn ends (safety — sub-agents should all be done)
           state.stats.activeAgents = 0;
+          state.stats.activeAgentIds.clear();
           sendStats(ws);
         }
       } catch {}
@@ -587,6 +597,12 @@ wss.on('connection', async (ws, req) => {
       // (Claude CLI emits this as cumulative-within-spawn, so we replace not add)
       costUsdCurrentSpawn: 0,
       activeAgents: 0,
+      // activeAgentIds tracks Claude Code task_ids for task_type="local_agent"
+      // events. The set's size IS activeAgents. Using a Set lets us properly
+      // match start/complete pairs by task_id (not all task_notifications have
+      // matching task_started events — e.g., MCP tools emit completion without
+      // our tracked start).
+      activeAgentIds: new Set(),
     },
   });
   console.log(`Discussion ${discussion.isNew ? 'created' : 'resumed'}: ${discussion.id}`);

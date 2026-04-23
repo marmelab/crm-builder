@@ -46,6 +46,14 @@
                     {
                         "type": "command",
                         "command": "/home/developer/.claude/hooks/circuit-breaker.sh"
+                    },
+                    {
+                        "type": "command",
+                        "command": "/home/developer/.claude/hooks/block-bash-file-write.sh"
+                    },
+                    {
+                        "type": "command",
+                        "command": "/home/developer/.claude/hooks/block-bash-validation.sh"
                     }
                 ]
             }
