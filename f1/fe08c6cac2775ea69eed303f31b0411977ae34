@@ -1,0 +1,75 @@
+docs/test-2026-04-22-complex-priority-analysis.md
+  9805a41217e988f0 1-226
+claudeConfig/.claude/hooks/circuit-breaker.sh
+  h_84c0d888491a2d 25
+  9805a41217e988f0 2-13,17-24,29-41,45,47,57-61,63,66
+entrypoint.sh
+  9805a41217e988f0 56-69
+claudeConfig/.claude/hooks/block-bash-file-write.sh
+  9805a41217e988f0 1-78
+docs/test-2026-04-23-parallel-tickets-analysis.md
+  9805a41217e988f0 1-251
+claudeConfig/.claude/hooks/prettier-on-stop.sh
+  9805a41217e988f0 2,10-11,13-15,17-47,51
+claudeConfig/.claude/hooks/block-bash-validation.sh
+  9805a41217e988f0 1-90
+CHANGELOG.md
+  9805a41217e988f0 365-534,538-541,546
+claudeConfig/.claude/agents/developer.md
+  9805a41217e988f0 33,35,38,46-63,66,93-118,194-195
+claudeConfig/.claude/skills/agent-team/SKILL.md
+  9805a41217e988f0 3-9,16,18-19,23-31,33-36,38,40,42-44,46,48,50,52-58,60,62-64,68-89,91,93,95-178,184,199,201-202,205,207,211,213-223,229-235
+claudeConfig/.claude/hooks/run-unit-tests-app.sh
+  9805a41217e988f0 2,10-11,13,15-17,20-48
+docker-compose.yml
+  9805a41217e988f0 33,37-39,43-47,67,72
+claudeConfig/.claude/settings.json
+  9805a41217e988f0 49-56
+test.md
+  h_84c0d888491a2d 6,8
+docs/test-2026-04-22-regression-analysis.md
+  9805a41217e988f0 1-245
+chat-service/server.js
+  9805a41217e988f0 204-211,213-215,217-219,239,303-308
+claudeConfig/.claude/hooks/typecheck-on-commit.sh
+  9805a41217e988f0 2,10-11,13-18,20-48,50-51,55
+claudeConfig/.claude/hooks/run-unit-tests-functions.sh
+  9805a41217e988f0 2,10-11,13,15-17,20-48
+claudeConfig/.claude/agents/quality-reviewer.md
+  9805a41217e988f0 25-26
+claudeConfig/.claude/agents/planner.md
+  9805a41217e988f0 82-83,88-108,135-139
+claudeConfig/.claude/agents/chat-orchestrator.md
+  9805a41217e988f0 21-22,34-45,51,56,58,78-80,82,85-87,92-131,133,135,137-141,144-155,159-174,176,182
+claudeConfig/.claude/rules/worktree-scope.md
+  9805a41217e988f0 1-66
+claudeConfig/.claude/agents/merger.md
+  9805a41217e988f0 3,10,14,16-21,27-53,55-57,59,61-65,67,69,71-73,75-78,80,82-97,99,101-108,114-120,124,126
+claudeConfig/.claude/agents/test-validator.md
+  9805a41217e988f0 28-29
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.2",
+  "base_commit_sha": "f1fe08c6cac2775ea69eed303f31b0411977ae34",
+  "prompts": {
+    "9805a41217e988f0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ac2e66ab-6b0f-498d-8ac3-931e133375cb",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Jerome",
+      "messages": [],
+      "total_additions": 2090,
+      "total_deletions": 513,
+      "accepted_lines": 1939,
+      "overriden_lines": 1
+    }
+  },
+  "humans": {
+    "h_84c0d888491a2d": {
+      "author": "Jerome"
+    }
+  }
+}
