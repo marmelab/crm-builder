@@ -53,6 +53,20 @@ chown -R developer:developer /home/developer/.claude 2>/dev/null || true
 mkdir -p /chat-service/logs 2>/dev/null || true
 chmod 777 /chat-service/logs 2>/dev/null || true
 
+# Runtime-generated docs (tickets, reflections) — bind-mounted from host ./crm-docs.
+# On a fresh host, the directory may be empty and owned by root (if Docker runs as
+# root on Linux) or by a host UID that doesn't match developer's UID. Without this
+# chown the planner cannot write TASK-XXX.json and the whole flow silently
+# cascades into confusion — previously caused a full-session regression where
+# reviewers wandered because the ticket file they were reading never existed.
+mkdir -p /app/docs/tickets /app/docs/reflections 2>/dev/null || true
+chown -R developer:developer /app/docs 2>/dev/null || true
+
+# Worktrees root — same reasoning. Bind-mounted from host, needs developer write
+# access for `git worktree add /worktrees/TASK-XXX`.
+mkdir -p /worktrees 2>/dev/null || true
+chown -R developer:developer /worktrees 2>/dev/null || true
+
 # Disable atomic-crm project's PostToolUse format-file.sh hook — replaced by a
 # SubagentStop prettier hook in our crm-builder config. The PostToolUse variant
 # caused an edit/prettier loop (developer edits → hook reformats → developer

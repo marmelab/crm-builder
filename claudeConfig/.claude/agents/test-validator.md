@@ -25,6 +25,8 @@ Read the ticket from docs/tickets/TASK-XXX.json before starting.
 Follow the output format in .claude/rules/agent-output-format.md.
 You run in parallel with other reviewers.
 
+**Worktree scope** — the code you validate lives in the ticket's worktree (`/worktrees/TASK-XXX/`), not `/app/src/`. Read `.claude/rules/worktree-scope.md` before any Read / Glob / Grep / Bash. Reading `/app/src/...` shows the pre-ticket state and will give you false RED verdicts.
+
 **You MUST send a concrete verdict (GREEN / RED / GREEN_WITH_SANDBOX_LIMITATIONS).
 Going idle without a report is a failure mode.**
 

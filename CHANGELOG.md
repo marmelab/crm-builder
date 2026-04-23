@@ -362,15 +362,185 @@ Strengthened the rule in `chat-orchestrator.md`:
 
 ---
 
+## Phase 22 — Worktree isolation + mandatory merger + per-subagent circuit breaker (2026-04-22)
+
+### Worktree per ticket (end of the "everyone edits /app directly" era)
+Prior sessions had developers editing `/app/src` directly and the merger was defined but never dispatched. This caused several regressions including 20+ unrelated files reformatted on `master` when a developer ran `npm run prettier:apply` without `cd` prefix.
+
+New flow (enforced via `.claude/rules/worktree-scope.md` + hook):
+- Each ticket gets `/worktrees/TASK-XXX/` with `node_modules` symlinked to `/app/node_modules`
+- Developer first Bash is worktree setup: `git worktree add + ln -s + cd`
+- Every subsequent Bash MUST start with `cd /worktrees/TASK-XXX && ...` (Bash shells are stateless — `cd` doesn't persist between tool calls)
+- Developer's file edits all go to `/worktrees/TASK-XXX/src/...`, not `/app/src/...`
+- After reviewers APPROVED, merger merges feature branch → base branch locally (no GitHub PR), removes worktree + branch
+- `TeamCreate` per ticket, `TeamDelete` after merger success
+
+Scope allowed for agents working on a ticket:
+| Path | Read | Write | Bash cwd |
+|---|---|---|---|
+| `/worktrees/TASK-XXX/**` | ✅ | ✅ | ✅ |
+| `/app/docs/tickets/TASK-XXX.json` | ✅ | ❌ | — |
+| `/app/docs/reflections/**` | ✅ | ⚠️ only Mode 2 reflection | — |
+| Everything else under `/app/` | ❌ | ❌ | ❌ |
+
+### Unified simple + complex path
+Previously, simple changes bypassed worktree/merger (direct dev on `/app`). Now both paths use TeamCreate + worktree + merger. Simple path just skips planner and reviewers — developer runs on sonnet (cheaper), merger on haiku. Same isolation as complex. Branch naming for simple uses a slugified request, e.g. user says *"remplace Dashboard par Accueil"* → branch `quick/rename-dashboard-to-accueil`.
+
+### Merger rewritten for local merge
+Dropped `gh pr create / gh pr merge` workflow from the old `merger.md`. New responsibilities:
+1. `git merge <branch> --no-ff -m "feat(TASK-XXX): <title>"`
+2. `git worktree remove` + `git branch -d`
+3. Update ticket JSON status to `"merged"`
+4. On conflict: `git merge --abort` + report BLOCKED (developer re-fix, not auto-resolve)
+
+Mandatory check before `TeamDelete`: merger success confirmed. No "session limit" or "I'll let the user do it" — the merger is fast (< 30s on haiku).
+
+### Hooks became worktree-aware
+All 4 SubagentStop hooks (typecheck, prettier, unit-app, unit-fn) now iterate on `/worktrees/*` only (not `/app`). Earlier version ran in `/app` too — which was broken because `/app` had orphan untracked files from prior sessions that made typecheck fail, causing the developer to "fix" unrelated issues in its worktree.
+
+### `agent_id`-keyed circuit breaker (per-subagent)
+Old circuit breaker keyed on `session_id` (shared across orchestrator + subagents) — a single chat session had a total budget of 30 Bash for everyone combined. Empirically inadequate: a single dev alone can do 15-25 legit Bash.
+
+Discovered via hook debug logging that the hook input JSON contains `agent_id` (present only in subagent contexts). New counter keyed on `sub-<agent_id>` for subagents, `orch-<session_id>` for the orchestrator. Each subagent gets its own 30-Bash budget. Verified: 3 parallel general-purpose subagents each have their own counter starting at 1.
+
+### `crm-docs` chown at boot (entrypoint)
+Fixed `EACCES: permission denied` when planner tries to write `/app/docs/tickets/TASK-XXX.json`. The dir is bind-mounted (`./crm-docs:/app/docs`) and owned by the host creator UID, not developer's UID. Entrypoint now:
+```bash
+mkdir -p /app/docs/tickets /app/docs/reflections
+chown -R developer:developer /app/docs
+chown -R developer:developer /worktrees
+```
+Idempotent: handles clean install (empty dir root-owned) and existing installs with wrong ownership.
+
+Also bind-mounted `entrypoint.sh`, `chat-service/server.js`, `chat-service/public` for dev iteration without image rebuild. Clearly marked `DEV ONLY — RETIRER avant release production`.
+
+### `crm-docs` switched from bind mount to named volume
+Previously `./crm-docs:/app/docs` on host — accumulated tickets/reflections across `docker compose down -v` (bind mounts aren't affected by `-v`). Confusing for testing because prior tickets polluted new runs.
+
+Now `crm-docs:/app/docs` as a named volume. Normal `down` preserves (reflections accumulate as a knowledge base), `down -v` wipes (fresh test). Matches user mental model.
+
+### TodoWrite + test chronologies saved
+All major test runs now get a forensic markdown analysis:
+- [test-2026-04-22-regression-analysis.md](docs/test-2026-04-22-regression-analysis.md) — couleur+tiktok regression (43 min, $6.52, 0 merged)
+- [test-2026-04-22-complex-priority-analysis.md](docs/test-2026-04-22-complex-priority-analysis.md) — priority baseline (22 min, $3.90, 2/2 merged)
+- [test-2026-04-23-parallel-tickets-analysis.md](docs/test-2026-04-23-parallel-tickets-analysis.md) — badge new + note count (hung, killed)
+
+---
+
+## Phase 23 — Orchestrator refactor + Mode 2 reflection + bash-write block (2026-04-23)
+
+### chat-orchestrator.md ↔ agent-team SKILL.md split
+Both files previously described the full Phase 2 workflow with dispatch templates — two sources of truth for the same content. Refactored:
+- **chat-orchestrator.md** (251 → 182 lines): UX contract only. Language, forbidden words, classification simple/complex, simple flow inline, a "Progress updates" table with templates of user-facing messages per phase (and the anti-pattern warning *"if you just said 'en parallèle', don't say 'je commence par la première' next"*), error handling. For complex: delegates to skill.
+- **agent-team/SKILL.md** (180 → 235 lines): all workflow details. Phase 0/1/2 steps, batching rule with ✅/❌ examples, every dispatch template (developer ticket, fix, Mode 2 reflection, reviewers, merger, TeamDelete), ticket format, model routing, global rules. Loaded only when complex change.
+
+Source of truth for each concern now lives in exactly one file. Orchestrator loads the skill on complex and follows it.
+
+### Mode 2 reflection step (NOT optional before merger)
+The old agent-team skill said *"after APPROVED, developer writes docs/reflections/TASK-XXX-reflection.md, then merger"* — but in practice the orchestrator skipped straight to merger. Two consecutive runs had zero reflections written.
+
+Fix: explicit step 8 in complex flow in `chat-orchestrator.md` and agent-team skill dispatch template: *"After all reviews APPROVED, dispatch developer in Mode 2 (reflection) BEFORE merger."* Reflection runs on sonnet (prose, not heavy reasoning), writes `/app/docs/reflections/TASK-XXX-reflection.md`, commits in the worktree, and the merger picks it up.
+
+### `block-bash-file-write` hook
+Past run (complex priority 2026-04-22) had a developer execute `cat > /tmp/task-002-update.json << 'EOF'` — left a 0-byte orphan file. The [developer.md](claudeConfig/.claude/agents/developer.md) HARD RULE forbids this but wasn't enforced.
+
+New PreToolUse hook [`block-bash-file-write.sh`](claudeConfig/.claude/hooks/block-bash-file-write.sh): blocks patterns `> file`, `>> file`, `sed -i`, `awk -i inplace`, `tee file`, `node -e '... writeFileSync'`. Allow list: `/dev/null`, `/chat-service/logs/`. Exit 2 with explicit reason "use Edit/Write tool instead. See developer.md HARD RULE".
+
+### Parallel dispatch batching rule made explicit
+Previous rule in chat-orchestrator.md said "emit in same assistant turn" — sonnet emitted in 4 separate messages anyway. Reformulated with concrete example of **4 `tool_use` blocks in ONE assistant response** + the **Forbidden pattern** showing the serialized version + a **rule of thumb**: *"if your next user message starts with 'je lance la première étape', you're about to serialize a parallel wave — change to 'je lance les étapes' and emit all dispatches in this response"*.
+
+Empirically: sonnet still emits in separate messages (3-4s gap between dispatches), but the parallelism DOES happen at the process level — Agent dispatch returns "Spawned successfully" in ~1s and the subagent runs in background. The cost of the cosmetic gap is ~10s per test, minor.
+
+---
+
+## Phase 24 — Parallel test analysis + hook-owned validation (2026-04-23)
+
+### 4-ticket parallel test revealed 3 new bugs
+Ran [test-2026-04-23-parallel-tickets-analysis.md](docs/test-2026-04-23-parallel-tickets-analysis.md) with prompt *"badge new + compteur notes"* — 2 tickets, no dependencies, both `parallel_safe: true`. Expected: 2 worktrees, 2 devs in parallel, 2 merges. Actual: hung after 40 min, killed manually, 0 tickets merged.
+
+Debug identified 3 bugs:
+1. **Circuit breaker at 30 Bash garrotted devs doing legitimate work** — each dev used 33 Bash (explore 11-14× + typecheck 3-6× + vitest 4-6× + prettier 2× + git 3× + worktree 1× + misc). The "legitimate" part was actually ~10 — the 20-25 wasted Bash were the dev redundantly running hook-owned commands.
+2. **`activeAgents` counter drift in chat-service**: UI showed "11 agents active" when the reality was 1-3. Server.js counted every `task_started` event (including each Bash tool call = task_started). Fixed to filter only `task_type === "local_agent"` and match completion via `task_id`.
+3. **Vitest hang in worktrees**: `npx vitest --run` in a worktree hangs forever without `process.env.CI`. Reason: `vitest.config.ts` uses `@vitest/browser-playwright` with chromium, and without `CI=true` it tries to launch a headed browser in a display-less container. Fixed upstream in atomic-crm (`headless: true` default) — pulled in this phase's image rebuild.
+
+### Hook-owned validation commands forbidden in dev
+The real cause of the Bash budget blow-up: developer was running `make typecheck`, `npm run test:unit:app`, `npm run prettier` **even though the SubagentStop hooks already do that automatically**. The hooks run these after dev finishes and inject stderr back into the dev's context if they fail. Dev should trust the hook output, not re-run.
+
+New [`block-bash-validation.sh`](claudeConfig/.claude/hooks/block-bash-validation.sh) PreToolUse hook blocks:
+- typecheck: `make typecheck`, `npm run typecheck`, `npx tsc`, `tsc --noEmit`
+- prettier: `npm run prettier[:apply]`, `npx prettier`, `make prettier`
+- unit tests: `npm run test[:unit:*]`, `npm test`, `npx vitest`, `make test(-unit)*`
+- e2e: `npx playwright test`, `make test-e2e*`
+- lint: `make lint`, `npm run lint`
+
+**Agent-type filtering in the hook** (not in settings.json — PreToolUse `matcher` only supports tool name per the docs): hook only fires for agents where the rule applies (`developer`, `quality-reviewer`, `test-validator`). Orchestrator, planner, merger, project-manager, architect are unaffected.
+
+Developer.md updated with a new "Validation commands — DO NOT RUN THEM" section listing what NOT to do, the vitest hang explanation, and the "what to do instead" (trust the hooks, report DONE after your code commits).
+
+### Circuit breaker reverted to 30
+After block-bash-validation enforces the "no hook-owned commands" rule, dev's real Bash budget becomes ~15-20 per ticket (worktree setup + git ops + fix retries). 30 is comfortable and still catches infinite loops (which hit 100+). Reverted from 60 → 30 with updated rationale comment.
+
+### Docker image rebuild (2026-04-23)
+Pulled latest atomic-crm (includes `headless: true` in vitest.config.ts — makes vitest safe even without `CI=true`). Rebuilt `atomic-crm-dev:latest` image with `docker compose build --no-cache` — plain `docker compose build` kept the cached `RUN wget ... atomic-crm-main.zip` layer so the upstream fix wasn't pulled. Adding a cache-busting ARG (date or git SHA) to the Dockerfile before the wget would make this more reliable, but not needed for this iteration.
+
+---
+
+## Open items / known limits
+
+## Phase 25 — Merger hardened against stale `/app` working tree (2026-04-23)
+
+### What the second parallel test revealed
+Re-ran the "badge new + compteur notes" parallel test after Phase 24's fixes. End-to-end success in 31 minutes: 2 devs in parallel (1s gap), 4 reviewers in parallel (3s), 2 Mode 2 reflections in parallel (2s), 2 mergers in parallel (1s). `block-bash-validation` blocked one dev attempt at `npm run typecheck` (hook did its job). Circuit breaker max hit was 22 — never tripped 30. Vitest never hung.
+
+**But:** one commit polluted master between the two ticket merges — `92cbdcf` *"feat: add deal priority field and badge on Kanban cards"*. This commit brought back the priority feature from the **previous** test session + regressed `.claude/settings.json` (`hooks: {}`) and `src/App.tsx` (older version).
+
+### Root cause: merger fabricating commits from stale working-tree state
+`/app/src/` is a Docker named volume (`crm-source`) that survives `docker compose build` and container restart. The previous priority test had left uncommitted modifications to tracked files in `/app/src/` that weren't cleaned up before the second test. When merger TASK-004 ran:
+
+```
+09:55:17  cd /app && git status && git stash list            # saw stale files
+09:55:21  git diff DealCard.tsx types.ts                     # two files happened to overlap with ticket
+09:55:29  git add DealCard.tsx DealInputs.tsx deals.ts \     # staged ALL modified files including App.tsx + .claude/settings.json
+          types.ts App.tsx .claude/settings.json && \
+          git commit -m "feat: add deal priority field..."    # message auto-generated from file contents
+```
+
+The merger read the overlap as "TASK-004-related modifications the dev forgot to stage" and committed them on `master`. Then the `git merge feature/deal-note-counter-TASK-004` conflicted against its own pollution, requiring a retry merger that took 10 minutes of rebase conflict resolution.
+
+### Fix: merger never fabricates commits
+[`claudeConfig/.claude/agents/merger.md`](claudeConfig/.claude/agents/merger.md) updated:
+
+- **New Step 2a (MANDATORY)**: `cd /app && git reset --hard HEAD` before every merge — discards stale tracked-file modifications idempotently. Does NOT run `git clean -fd` (would wipe `docs/tickets/` used by concurrent tickets in the same wave).
+- **Explicitly forbidden** commands in Step 2a and Constraints: `git add`, `git commit`, `git stash`, `git clean -fd`, `git checkout -- <file>`. Merger's only writes on `/app` are `git merge --no-ff` (self-generated commit) and `git reset --hard HEAD` (debris cleanup).
+- **Past incident note** embedded in the prompt so future mergers understand the reasoning when tempted by dirty-tree recovery paths.
+
+### Master cleanup (manual one-time)
+Rewound `master` to `44e6118` (post-TASK-003 merge) and re-merged TASK-004's original commits (`08b4808` + `3b06dbc`) via `--no-ff` → new merge commit `8893521`. Result: clean linear-plus-merges history, no priority pollution:
+
+```
+8893521  feat(TASK-004): Show note counter on each deal Kanban card   ← clean merge
+44e6118  feat(TASK-003): Show 'new' badge                              ← clean merge
+9fac7e8  docs(TASK-003): reflection
+8476d5a  docs(TASK-004): reflection
+8beff9f  Initial commit
+```
+
+Also removed stale untracked files from `/app`: `src/App.supabase.tsx` (3 days old), `docs/project-context.json`, and merged ticket JSONs.
+
+### Known merger minor bug (not fixed this phase)
+TASK-003 and TASK-004 ticket JSONs ended the run with `status: "pending"` instead of `"merged"`. Merger's Step 5 (update ticket status) didn't apply. Not a blocker — will investigate if it happens again, might be a race with concurrent mergers reading/writing the same tickets dir.
+
+---
+
 ## Open items / known limits
 
 - **`medium-new-field` test** times out at 15 min (bumped to 35 min). Real agent-team flow on a multi-file feature naturally takes 20-30 min.
-- **Evaluate mgrep** (semantic code search, Mixedbread AI) if the codebase exploration phase remains a bottleneck after Phases 18-20. Claimed 2× token reduction vs grep on a 50-task benchmark, but Phases 18 (`files_to_modify` in tickets) and 19 (mandatory skill invocation) target the same problem from a different angle. Re-assess after the next test 4.
-- **Skill invocation enforcement** — all 5 skills now mandatory (Phases 18 + 19). Need to re-run test 4 to verify 0/7 → 7/7 adoption.
-- **Planner granularity** — coarse-over-fine rule added (Phase 18). Need to re-run test 4 to verify ≤ 3 tickets vs 5 previously.
-- **Orchestrator occasionally generates malformed `Agent({ subagent_type: None })` calls** when confused. Not blocking but wasteful.
+- **Parallel developer dispatch still emits 4 tool_use in 4 separate assistant messages** (sonnet limitation). Parallelism works at the process level but the cosmetic "same message" batching fails. ~10s wasted per test, not a priority.
+- **No hang detection on stuck subagents**. If a dev gets stuck in a polling loop (e.g., `until grep` on a dead background task), the orchestrator waits forever. Need a watchdog: if no subagent activity for > 10 min, alert; > 20 min, TaskStop.
+- **Merger Step 5 (ticket status update) silently skipped** in Phase 25 test — ticket JSONs stayed `"pending"` post-merge. Low severity, investigate on recurrence.
+- **`task_notification` has no `task_type`** in the event, so matching completion to the started event relies on `task_id`. Works today but fragile if Claude Code changes event shape.
 - **OAuth requires re-login after `docker compose down -v`** — expected behavior (volume removed).
 
 ---
 
-_Last updated: 2026-04-21 (Phase 21)_
+_Last updated: 2026-04-23 (Phase 25)_

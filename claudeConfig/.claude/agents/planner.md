@@ -79,9 +79,32 @@ Ticket format:
     "src/components/atomic-crm/deals/DealInputs.tsx"
   ],
   "dependencies": ["TASK-000"],
+  "parallel_safe": true,
+  "branch_name": "feature/company-importance-type",
   "status": "pending"
 }
 ``````
+
+### Field semantics (critical for orchestrator)
+
+**`dependencies`**: list of ticket IDs that MUST be merged before this ticket can start. Two tickets in the same "wave" (no dep between them) can run **in parallel** in separate worktrees.
+
+**`parallel_safe`**: `false` only when the ticket modifies **shared infrastructure** that would cause race conditions if two tickets run in parallel:
+- `package.json` / `package-lock.json` / `pnpm-lock.yaml` (changes shared node_modules symlink)
+- `tsconfig.json` / `vite.config.ts` / build config
+- `.env` / `.env.*`
+- Database schema (in MODE=full)
+- Global CSS themes, tailwind.config
+
+For normal feature tickets (type / component / config prop) → `parallel_safe: true`.
+
+**`branch_name`**: short, filesystem-safe branch name. Format: `feature/<short-kebab>` or `fix/<short-kebab>`. Used by orchestrator to create the worktree: `git worktree add /worktrees/TASK-XXX -b <branch_name> main`.
+
+### Dependency declaration rules
+
+- If ticket B reads/uses a type, hook, or component created in ticket A → `B.dependencies = ["A"]`
+- If two tickets touch the same file → declare one dependent on the other (no silent conflict)
+- If uncertain → declare the dependency (false-positive costs a wave, false-negative costs a conflict during merge)
 
 `files_to_modify` is a **best guess**, not a contract. DEVELOPER may add, remove, or substitute paths based on what it finds. But giving it a starting point cuts search time significantly.
 
@@ -109,8 +132,11 @@ After producing all tickets:
 ### Step 5 — Order and summarize
 
 After all tickets are written and tasks created, produce:
-- A dependency graph (text form)
-- An estimated delivery order
+- A dependency graph (text form) — e.g. `TASK-001 → [TASK-002, TASK-003]`
+- **Execution waves** derived from the graph. A wave contains tickets with no unsatisfied dependencies at that point:
+  - Wave 1: all tickets with `dependencies: []`
+  - Wave N+1: tickets whose dependencies are all in ≤ wave N
+  - Tickets with `parallel_safe: false` get their own solo wave (never share with siblings)
 - Any ambiguities or risks flagged for the team-lead
 
 ## Environment constraints

@@ -22,6 +22,8 @@ You verify that the implementation is correct, compliant with the spec, respects
 Read the ticket from docs/tickets/TASK-XXX.json before reviewing.
 Follow the output format in .claude/rules/agent-output-format.md.
 
+**Worktree scope** — the code you review lives in the ticket's worktree (`/worktrees/TASK-XXX/`), not `/app/src/`. Read `.claude/rules/worktree-scope.md` before any Read / Glob / Grep / Bash. Looking at `/app/src/...` shows you the *pre-ticket* code, which will make you think the feature wasn't implemented.
+
 **Note on typecheck & unit tests:** these are already run automatically by SubagentStop hooks after DEVELOPER finishes (`typecheck-on-commit.sh`, `run-unit-tests-app.sh`, `run-unit-tests-functions.sh`). Do NOT re-run `make typecheck` / `npm run typecheck` / `make test` / `npm run test:unit:*` — if DEVELOPER completed cleanly, they passed. Focus on semantic code review.
 
 ## Confidence-based filtering

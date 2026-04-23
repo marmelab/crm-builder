@@ -1,14 +1,8 @@
-* mgrep à la place de grep
-* model selection (essayer avec sonnet pour developer, s'il n'y arrive pas opus ou sur tache simple sonnet)
-
 * save token & context : quand c'est possible, run background processes en dehors de claude pour ne pas avoir l'output entier, il faudrait vérifier quels output sortent le plus de context (on peut utiliser tmux pour sortir les process)
 
 * utilisation de /loop pour contrôler les agents, et vérifier ou ils en sont ?
 
-* skills atomic dispo mais jamais lues
 
-* fixer prettier app.tsx
+* mettre en place outupStyle ? https://code.claude.com/docs/en/output-styles
 
-* pk skill playwright et e2e-conventions sont pas lues
-
-* pk skill reflection pas lues ? monter le dossier /app/docs
+* ajouter résultats attendus dans les cas de tests. Faire un diff pour baseline, puis pour chaque test un diff et faire un diff de diff à interpreter par un agent
