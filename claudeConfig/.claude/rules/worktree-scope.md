@@ -61,6 +61,6 @@ Bash("npm run prettier:apply")
 
 You (almost) never do. Specific exceptions:
 - Reading the ticket JSON: `Read("/app/docs/tickets/TASK-XXX.json")` (source of truth, read-only)
-- Reading past reflections: `Read("/app/docs/reflections/TASK-NNN-reflection.md")` (research)
+- Reading past reflections: `Read("/app/docs/reflections/TASK-XXX-reflection.md")` (research)
 
 If you think you need something else from `/app/`, stop and flag it to the caller. Do not silently edit `/app/` or run commands there.
