@@ -35,6 +35,15 @@ for WT in $WORKTREES; do
     continue
   fi
 
+  # Skip if all changes (committed + uncommitted) only touch docs/reflections/**.
+  # Mode 2 reflection subagents write a single .md file there — typecheck is
+  # meaningless for doc-only changes and wastes ~10-20s per reflection.
+  DIFF_ALL=$( { git diff --name-only "$BASE..HEAD" 2>/dev/null; git status --porcelain | awk '{print $NF}'; } | sort -u | grep -v '^$' )
+  if [ -n "$DIFF_ALL" ] && [ -z "$(echo "$DIFF_ALL" | grep -v '^docs/reflections/')" ]; then
+    echo "[$(date -Iseconds)] typecheck SKIP wt=$WT (reflection-only)" >> "$LOG"
+    continue
+  fi
+
   OUTPUT=$(npm run typecheck 2>&1)
   EXIT_CODE=$?
   if [ $EXIT_CODE -ne 0 ]; then

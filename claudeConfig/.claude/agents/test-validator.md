@@ -48,7 +48,26 @@ if everything else is clean, and note that CI will cover the gap.
 
 ---
 
-**Note on typecheck, unit tests, e2e tests:** these are already run automatically by SubagentStop hooks after DEVELOPER finishes (`typecheck-on-commit.sh`, `run-unit-tests-app.sh`, `run-unit-tests-functions.sh`, `run-e2e-tests.sh`). Do NOT re-run them — if DEVELOPER completed cleanly, they passed. Do NOT run `make typecheck`, `npm run test:unit:*`, `npx tsc --noEmit`, `npx vite build`, or `npx playwright test`. Focus on what hooks cannot check: integration wiring and UI reachability.
+## Validation commands — DO NOT RUN THEM (hooks own them)
+
+The following commands are **blocked by the `block-bash-validation` PreToolUse hook**. Running them wastes tool calls (each returns a block error) and, in the past, hung indefinitely when the Chromium-based vitest browser launched without a display.
+
+**Forbidden from this agent**:
+- typecheck: `make typecheck`, `npm run typecheck`, `npx tsc`, `npx tsc --noEmit`, `npx tsc --noEmit <file>`
+- prettier: `npm run prettier`, `npx prettier`
+- unit tests: `npm run test:unit:app`, `npm run test:unit:functions`, `npm test`, `npx vitest`
+- e2e: `npx playwright test` (the `run-e2e-tests.sh` hook runs these in full mode only)
+- lint: `npm run lint`, `npm run lint:typescript`, `make lint`
+- build: `npx vite build`, `npm run build`
+
+**Why** — these are run automatically by `SubagentStop` hooks after DEVELOPER finishes. If DEVELOPER's work reached you, those checks already passed. Running them yourself adds nothing and burns tool budget.
+
+**What to do instead** — focus on what hooks cannot check:
+- **Integration wiring** (Step 1): router, resource registration, menu entry. Use `Read` / `Grep` only.
+- **UI reachability** (Step 2): screenshots if feature is unauth-accessible; else skip and mark `GREEN_WITH_SANDBOX_LIMITATIONS`.
+- **e2e spec presence** (Step 3): verify the file exists and targets the right route — do NOT run it.
+
+Observed past behaviour (2026-04-23 session): test-validator attempted 4+ validation commands that all got blocked by the hook. Save the tool calls.
 
 ---
 

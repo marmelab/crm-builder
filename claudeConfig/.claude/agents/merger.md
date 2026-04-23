@@ -5,6 +5,7 @@ model: haiku
 tools:
   - Bash
   - Read
+  - Edit
 ---
 
 # MERGER — Local Merge Agent
@@ -90,7 +91,21 @@ If `git worktree remove` fails because the worktree has leftover files, use `git
 
 ### Step 5 — Update ticket status (skip for quick-edits)
 
-If `TASK_ID` starts with `TASK-` (regular ticket): read `docs/tickets/<TASK_ID>.json`, change the `status` field from `in_progress` (or `pending`) to `merged`. Write it back via the Edit tool — never use `sed` or `echo >`.
+If `TASK_ID` starts with `TASK-` (regular ticket): update the ticket's `status` field in `docs/tickets/<TASK_ID>.json` to `"merged"`.
+
+**Use the Edit tool exactly like this** (do NOT use shell — `cat | jq > tmp && mv` is blocked by the `block-bash-file-write` hook and silently leaves the ticket at `pending`):
+
+```
+Edit(
+  file_path: "/app/docs/tickets/<TASK_ID>.json",
+  old_string: '"status": "pending"',
+  new_string: '"status": "merged"'
+)
+```
+
+If the current status is `in_progress` instead of `pending`, substitute accordingly. After the Edit, verify with `Read("/app/docs/tickets/<TASK_ID>.json")` that the status is now `"merged"`.
+
+**Past incident (2026-04-23)** — a merger tried `cat docs/tickets/TASK-003.json | jq '.status = "merged"' > /tmp/... && mv ...`, got blocked by the hook, and silently moved on. Both tickets ended the run at `status: "pending"` despite being merged. Always use the Edit tool.
 
 If `TASK_ID` starts with `quick-` (slug from a quick-edit, no ticket JSON exists): skip this step entirely. The merge commit itself is the record of what happened.
 

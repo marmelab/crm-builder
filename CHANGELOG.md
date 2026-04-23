@@ -532,15 +532,64 @@ TASK-003 and TASK-004 ticket JSONs ended the run with `status: "pending"` instea
 
 ---
 
+## Phase 26 — Reviewer + merger + reflection-hook polish (2026-04-23)
+
+Follow-ups from the [Phase 25 test analysis](docs/test-2026-04-23-parallel-v2-analysis.md) — three low-risk fixes targeting the P0 and P1 findings.
+
+### P0 — Merger Step 5 ticket status update
+
+Root cause of the "Known merger minor bug" from Phase 25: haiku merger used `cat docs/tickets/TASK-X.json | jq '.status = "merged"' > /tmp/... && mv ...`, which `block-bash-file-write` correctly blocked, but the merger silently moved on to Step 6 instead of retrying with the Edit tool.
+
+Fix in [merger.md](claudeConfig/.claude/agents/merger.md):
+- Added `Edit` to the merger's `tools:` frontmatter (was only `Bash` + `Read`).
+- Rewrote Step 5 with an explicit Edit tool invocation example (haiku follows patterns literally; the previous *"use the Edit tool — never use sed or echo >"* was too abstract).
+- Added verification step: `Read` the ticket after Edit to confirm `"status": "merged"`.
+- Embedded the 2026-04-23 incident note so future mergers see why this matters.
+
+### P1 — Reviewers ran validation commands (9 blocked in Phase 25 test)
+
+`quality-reviewer` and `test-validator` each attempted `npx tsc`, `npm run typecheck`, `npx eslint`, `npm run lint:typescript` — all correctly blocked by `block-bash-validation.sh`, but they wasted ~8 tool calls and ~500 tokens of block-response output each run.
+
+Fix: added full *"Validation commands — DO NOT RUN THEM"* sections (mirroring developer.md) to:
+- [quality-reviewer.md](claudeConfig/.claude/agents/quality-reviewer.md) — forbidden list + "what to do instead" (semantic review only, use `Read`/`Grep` not `npx tsc`).
+- [test-validator.md](claudeConfig/.claude/agents/test-validator.md) — same forbidden list + pointer to Steps 1/2/3 (integration wiring, screenshots, e2e spec presence — all read-only).
+
+Both sections reference the observed past behaviour ("attempted 4+ validation commands that all got blocked") so the reviewer understands why the rule exists.
+
+### P1 — Mode 2 reflection subagents triggered useless SubagentStop hooks
+
+Reflection subagents are dispatched as `subagent_type: developer`, so the `"matcher": "developer"` in settings.json made all 4 SubagentStop hooks fire after each reflection — typecheck, unit-app, unit-fn, e2e. Since reflections only touch `docs/reflections/*.md`, these hooks wasted ~30s per reflection doing nothing.
+
+Fix in the three expensive hooks ([typecheck-on-commit.sh](claudeConfig/.claude/hooks/typecheck-on-commit.sh), [run-unit-tests-app.sh](claudeConfig/.claude/hooks/run-unit-tests-app.sh), [run-unit-tests-functions.sh](claudeConfig/.claude/hooks/run-unit-tests-functions.sh)): new skip clause after the "no changes" early-exit:
+
+```bash
+DIFF_ALL=$( { git diff --name-only "$BASE..HEAD"; git status --porcelain | awk '{print $NF}'; } | sort -u | grep -v '^$' )
+if [ -n "$DIFF_ALL" ] && [ -z "$(echo "$DIFF_ALL" | grep -v '^docs/reflections/')" ]; then
+  echo "[...] typecheck SKIP wt=$WT (reflection-only)" >> "$LOG"
+  continue
+fi
+```
+
+Verified by shell simulation: pure reflection changes → SKIP; mixed changes → RUN. `prettier-on-stop.sh` intentionally kept unchanged — prettier formats markdown too, so reflection .md files still benefit.
+
+E2e hook untouched — already `skipped_demo` in demo mode, and reflection in full mode is rare enough to not warrant the complication.
+
+### Expected impact on next test run
+- Merger Step 5 will correctly set `status: "merged"` on both ticket JSONs.
+- Reviewers will skip validation attempts → ~15s + ~1k tokens saved per ticket.
+- Reflection subagents will finish ~30s faster each, no hook noise.
+
+---
+
 ## Open items / known limits
 
 - **`medium-new-field` test** times out at 15 min (bumped to 35 min). Real agent-team flow on a multi-file feature naturally takes 20-30 min.
 - **Parallel developer dispatch still emits 4 tool_use in 4 separate assistant messages** (sonnet limitation). Parallelism works at the process level but the cosmetic "same message" batching fails. ~10s wasted per test, not a priority.
 - **No hang detection on stuck subagents**. If a dev gets stuck in a polling loop (e.g., `until grep` on a dead background task), the orchestrator waits forever. Need a watchdog: if no subagent activity for > 10 min, alert; > 20 min, TaskStop.
-- **Merger Step 5 (ticket status update) silently skipped** in Phase 25 test — ticket JSONs stayed `"pending"` post-merge. Low severity, investigate on recurrence.
+- **Merger retry in Phase 25 test** hung for ~10 min with 8 tool calls (likely stdout buffering on `git merge | grep CONFLICT`). Watch for recurrence.
 - **`task_notification` has no `task_type`** in the event, so matching completion to the started event relies on `task_id`. Works today but fragile if Claude Code changes event shape.
 - **OAuth requires re-login after `docker compose down -v`** — expected behavior (volume removed).
 
 ---
 
-_Last updated: 2026-04-23 (Phase 25)_
+_Last updated: 2026-04-23 (Phase 26)_
