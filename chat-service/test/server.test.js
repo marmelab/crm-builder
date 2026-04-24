@@ -57,19 +57,19 @@ test('endsWithQuestion detects direct questions', () => {
 
 test('endsWithQuestion ignores mid-message questions with a later conclusion', () => {
   assert.equal(endsWithQuestion('Should I proceed? Yes, I will.'), false);
-  assert.equal(endsWithQuestion('Voici le plan:\n\n1. Étape 1\n2. Étape 2'), false);
+  assert.equal(endsWithQuestion('Here is the plan:\n\n1. Step 1\n2. Step 2'), false);
   assert.equal(endsWithQuestion('Done!'), false);
   assert.equal(endsWithQuestion(''), false);
 });
 
 test('endsWithQuestion handles markdown trailing punctuation and emphasis', () => {
   assert.equal(endsWithQuestion('Done.\n\nAnything else to add?'), true);
-  assert.equal(endsWithQuestion("J'ai terminé. **Questions?**"), true);
+  assert.equal(endsWithQuestion("I've finished. **Questions?**"), true);
 });
 
 test('endsWithQuestion does NOT fire when a code block is the last paragraph', () => {
   assert.equal(
-    endsWithQuestion('Dois-je procéder ?\n\n```js\nconst x = 1;\n```'),
+    endsWithQuestion('Should I proceed?\n\n```js\nconst x = 1;\n```'),
     false,
   );
 });
