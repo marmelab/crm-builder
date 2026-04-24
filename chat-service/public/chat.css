@@ -47,7 +47,13 @@ body { height: 100vh; overflow: hidden; font-family: system-ui, sans-serif; back
   display: flex; align-items: center; justify-content: center;
   font-size: 15px; flex-shrink: 0;
 }
-#chat-title { font-weight: 600; color: #fff; font-size: 15px; flex: 1; }
+#chat-title {
+  font-weight: 600; color: #fff; font-size: 15px; flex: 1;
+  cursor: pointer; padding: 2px 6px; border-radius: 6px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  transition: background .15s;
+}
+#chat-title:hover { background: rgba(255,255,255,.06); }
 /* Animated dots in header */
 #chat-status-dots {
   display: inline-flex; align-items: center; gap: 3px; margin-right: 4px;
@@ -68,6 +74,100 @@ body { height: 100vh; overflow: hidden; font-family: system-ui, sans-serif; back
 }
 #chat-debug:hover, #chat-expand:hover { color: #fff; }
 #chat-debug.debug-active { color: #3b82f6; background: rgba(59,130,246,.15); }
+
+/* Global session toolbar — lives outside #chat-widget so the ✚/📂 actions
+   aren't visually tied to the currently-displayed session. */
+#chat-actions {
+  position: fixed; bottom: 28px; right: calc(28px + 420px + 10px); z-index: 200;
+  display: flex; flex-direction: column; gap: 6px;
+  background: #1c1c1e; border: 1px solid #2c2c2e;
+  border-radius: 14px; padding: 6px;
+  box-shadow: 0 8px 30px rgba(0,0,0,.5);
+}
+#chat-actions button {
+  width: 38px; height: 38px;
+  background: none; border: none; color: #8e8e93;
+  cursor: pointer; font-size: 16px; border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  transition: background .15s, color .15s;
+}
+#chat-actions button:hover { background: #2c2c2e; color: #fff; }
+/* Hide the toolbar when the widget is closed (FAB takes over). */
+#chat-widget.chat-closed ~ #chat-actions { display: none; }
+/* Expanded mode: the widget covers the right half of the screen. */
+#chat-widget.chat-expanded ~ #chat-actions {
+  right: calc(50vw + 10px); bottom: 16px;
+}
+
+#chat-stop {
+  background: rgba(244,63,94,.15); border: none; color: #f43f5e;
+  cursor: pointer; font-size: 13px; padding: 3px 8px; border-radius: 6px;
+  font-weight: 600; transition: background .15s, opacity .15s;
+}
+#chat-stop:hover:not(:disabled) { background: rgba(244,63,94,.28); }
+#chat-stop:disabled { opacity: .5; cursor: default; }
+
+/* Session state badge (derived from claude activity; read-only) */
+#chat-state {
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+  padding: 3px 8px; border-radius: 999px;
+  user-select: none;
+}
+.state-in_progress { background: rgba(52,211,153,.15); color: #34d399; }
+.state-completed { background: rgba(99,99,102,.25); color: #a1a1a6; }
+
+.history-state {
+  display: inline-block;
+  font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+  padding: 1px 6px; border-radius: 999px;
+  margin-right: 2px;
+}
+
+/* History panel — popover anchored to the left of the #chat-actions toolbar.
+   Bottom-anchored so the list grows upward and stays within the viewport
+   regardless of how many sessions are loaded. */
+#chat-history-panel {
+  position: absolute; bottom: 0; right: calc(100% + 8px); z-index: 10;
+  width: 300px; max-height: 70vh;
+  background: #1c1c1e; border: 1px solid #3a3a3c; border-radius: 12px;
+  box-shadow: 0 8px 30px rgba(0,0,0,.6);
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+/* Explicit `display: flex` above would otherwise override the [hidden] attribute. */
+#chat-history-panel[hidden] { display: none; }
+#history-panel-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 14px; border-bottom: 1px solid #2c2c2e;
+  font-weight: 600; color: #f2f2f7; font-size: 13px;
+}
+#history-panel-header button {
+  background: none; border: none; color: #636366;
+  cursor: pointer; font-size: 14px; padding: 2px 4px;
+}
+#history-panel-header button:hover { color: #fff; }
+#history-list {
+  list-style: none; overflow-y: auto; padding: 6px 0; margin: 0;
+  flex: 1;
+}
+.history-item {
+  padding: 10px 14px; cursor: pointer;
+  border-bottom: 1px solid #2c2c2e;
+  transition: background .15s;
+}
+.history-item:last-child { border-bottom: none; }
+.history-item:hover { background: #2c2c2e; }
+.history-item.active { background: rgba(59,130,246,.12); }
+.history-title {
+  color: #f2f2f7; font-size: 13px; font-weight: 500;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.history-meta {
+  color: #636366; font-size: 11px; margin-top: 3px;
+}
+#history-empty {
+  padding: 18px; color: #636366; font-size: 12px; text-align: center;
+}
 
 /* Expanded mode */
 #chat-widget.chat-expanded {
@@ -100,6 +200,13 @@ body { height: 100vh; overflow: hidden; font-family: system-ui, sans-serif; back
   align-self: flex-end;
   background: linear-gradient(135deg, #3b82f6, #2563eb);
   border-bottom-right-radius: 4px;
+}
+.msg-queued { opacity: .65; }
+.queued-badge {
+  display: block;
+  margin-top: 6px;
+  font-size: 10px; font-weight: 600; opacity: .9;
+  text-transform: uppercase; letter-spacing: .03em;
 }
 .msg-assistant {
   align-self: flex-start;

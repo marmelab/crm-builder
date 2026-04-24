@@ -40,7 +40,7 @@ services:
       - ./chat-service/lib:/chat-service/lib:ro
       # DEV ONLY — logs structurés des sessions chat pour review/analyse.
       # RETIRER avant release production.
-      - ./chat-logs:/chat-service/logs
+      - ./sessions:/chat-service/logs
       # Runtime-generated tickets + reflections.
       # Named volume (not bind): persists across `docker compose down` so
       # reflections accumulate as a knowledge base, but wipes cleanly on

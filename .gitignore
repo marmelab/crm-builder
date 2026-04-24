@@ -1,5 +1,5 @@
 .env
-chat-logs/
+sessions/
 crm-docs/
 test.md
 chat-service/tests/results/run-*.json
