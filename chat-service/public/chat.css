@@ -325,3 +325,23 @@ body { height: 100vh; overflow: hidden; font-family: system-ui, sans-serif; back
 .sub-blocking { color: #a78bfa; font-style: italic; }
 .sub-empty { color: #636366; font-style: italic; font-size: 11px; padding: 4px 0; }
 .stats-note { font-size: 10px; color: #636366; font-style: italic; margin-top: 8px; }
+.err-row { margin-bottom: 4px; border-radius: 8px; background: #2c2c2e; }
+.err-row summary {
+  list-style: none; padding: 6px 10px;
+  display: grid; grid-template-columns: auto auto 1fr auto auto;
+  gap: 8px; align-items: center; font-size: 12px; cursor: pointer;
+}
+.err-row summary::before { content: '▸'; font-size: 9px; opacity: .5; }
+.err-row[open] summary::before { content: '▾'; }
+.err-time { color: #636366; font-variant-numeric: tabular-nums; font-size: 11px; }
+.err-summary { color: #f2f2f7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.err-meta { color: #8e8e93; font-size: 10px; }
+.err-meta.muted { color: #636366; }
+.err-error .err-icon { color: #f87171; }
+.err-retry .err-icon { color: #f59e0b; }
+.err-payload {
+  padding: 8px 12px; margin: 0;
+  background: #1c1c1e; font-size: 10px; color: #8e8e93;
+  overflow-x: auto; max-height: 240px; overflow-y: auto;
+  border-top: 1px solid #3a3a3c;
+}
