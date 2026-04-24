@@ -20,8 +20,6 @@
 
 * nouveau status "en attente" s'il veut poser une question
 
-* rename chat-logs/ to sessions/
-
 * si tu quitte la discussion avec un message en attente
         * le visuel de "en attente" n'est plus
         * points de suspensions non présents
