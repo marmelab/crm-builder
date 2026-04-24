@@ -3,7 +3,6 @@ import { STATE_LABELS } from './state-labels.js';
 export function initDisplay({ chatTitle, stateBtn, newBtn, switchSession, refreshHistoryIfOpen }) {
   let currentSessionId = null;
   let currentTitle = '';
-  let currentState = 'in_progress';
 
   function setDisplayedTitle(t) {
     currentTitle = t;
@@ -11,7 +10,6 @@ export function initDisplay({ chatTitle, stateBtn, newBtn, switchSession, refres
   }
 
   function setDisplayedState(s) {
-    currentState = s;
     stateBtn.textContent = STATE_LABELS[s] || s;
     stateBtn.className = `state-${s}`;
     if (s === 'cancelled') {
@@ -56,8 +54,5 @@ export function initDisplay({ chatTitle, stateBtn, newBtn, switchSession, refres
     setDisplayedState,
     getSessionId: () => currentSessionId,
     setSessionId: (id) => { currentSessionId = id; },
-    getTitle: () => currentTitle,
-    setTitle: (t) => { currentTitle = t; },
-    getState: () => currentState,
   };
 }

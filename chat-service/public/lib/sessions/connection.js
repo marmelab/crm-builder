@@ -1,6 +1,3 @@
-let ws;
-let switchingSession = false;
-
 function buildWsUrl() {
   const params = new URLSearchParams(location.search);
   const id = params.get('session');
@@ -9,6 +6,9 @@ function buildWsUrl() {
 }
 
 export function initConnection({ handleWsMessage, appendMessage, resetChatUi }) {
+  let ws;
+  let switchingSession = false;
+
   function connectWs() {
     ws = new WebSocket(buildWsUrl());
     ws.onmessage = handleWsMessage;

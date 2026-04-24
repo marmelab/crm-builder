@@ -98,7 +98,6 @@ const connection = initConnection({
 function resetChatUi() {
   messages.innerHTML = '';
   display.setSessionId(null);
-  display.setTitle('');
   working = false;
   send.disabled = false;
   statusDots.style.display = 'none';
