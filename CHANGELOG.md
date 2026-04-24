@@ -700,6 +700,26 @@ Fix in `server.js:545`: `await` the `recordMessage` call in the stop branch so t
 
 **Why**: the race was latent before Phase 29 because the prior code only called `transitionState('completed')` whether stopped or not — and the preceding `recordMessage('⏹ Session stopped.')` raced against `saveMeta('completed')` the same way, but the previous `meta.state` was already `in_progress` so `setState('completed')` was the only *effective* write. Adding the third state revealed the race. Alternatives considered: serializing all `saveMeta` via a per-session mutex — overkill for a 50-line server; writing via rename (tmp + `rename()` atomic swap) — defensible but adds complexity. `await` is the minimal fix that matches the existing pattern (`setState` / `setTitle` / `setClaudeSessionId` are all awaited at their call sites too).
 
+### `waiting` state when Claude asks a question
+
+Before: after a turn, the session went to `completed` whether Claude had actually finished the work or was asking the user a follow-up question ("Which color do you want?"). From the history panel, both looked the same — a gray "Completed" badge — and the user had no cue that Claude was idle *because it needed input*, not because the task was done.
+
+Added a fourth state `waiting`:
+
+- `ALLOWED_STATES` extended to `{in_progress, completed, cancelled, waiting}`.
+- `processMessage` now tracks `lastAssistantText` through the turn, and the finally block picks the next state via a small decision tree:
+  - `wasStopped` → `cancelled`
+  - `turnErrored` (non-zero exit, rate limit, result error, no text) → `completed`
+  - last assistant message ends with `?` → `waiting`
+  - else → `completed`
+- Detection helper `endsWithQuestion(text)` strips the trailing punctuation / closing fences / emojis from the last non-empty paragraph and checks for `?`. Last-paragraph scoping means a mid-message question followed by a conclusion does NOT trigger `waiting`; a question followed only by a code block or a closing emoji does.
+- `STATE_LABELS` adds `waiting: 'Waiting'`; `setDisplayedState` sets tooltip "Claude is waiting for your reply".
+- CSS badge `.state-waiting` in blue (`#60a5fa`) — visually distinct from green (in_progress), gray (completed), orange (cancelled).
+
+**Why a text heuristic and not a dedicated event**: Claude doesn't emit a structured "I'm asking a question" signal — the only explicit hook is the `choices` event, which is only used for the initial welcome buttons (`WELCOME_CHOICES`). Introducing a convention (e.g. orchestrator must emit `{type: 'question'}`) would require teaching the orchestrator prompt a new protocol and would likely be ignored half the time. The `?` heuristic piggy-backs on a natural-language convention Claude already follows ~100% of the time in both French and English, with near-zero false positives (statement sentences don't end in `?`).
+
+**Known limits**: (1) Questions embedded in markdown bullet lists get detected correctly (last-paragraph captures the final bullet), but a rhetorical question followed by a definitive answer in the SAME paragraph will trip the heuristic. (2) A Claude turn that ends with a tool call (no trailing text) keeps the previous text as `lastAssistantText`, which is fine — tool calls always continue the turn, so we're only evaluating at true turn-end.
+
 ---
 
 ## Open items / known limits

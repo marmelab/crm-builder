@@ -55,6 +55,7 @@ const STATE_LABELS = {
   in_progress: 'In progress',
   completed: 'Completed',
   cancelled: 'Cancelled',
+  waiting: 'Waiting',
 };
 
 // Monotonic sequence assigned to every persistent message (user/assistant
@@ -285,6 +286,8 @@ function setDisplayedState(s) {
   stateBtn.className = `state-${s}`;
   if (s === 'cancelled') {
     stateBtn.title = 'Session cancelled by user — send a message to restart';
+  } else if (s === 'waiting') {
+    stateBtn.title = 'Claude is waiting for your reply';
   } else if (s === 'completed') {
     stateBtn.title = 'Claude session ended — send a message to restart';
   } else {

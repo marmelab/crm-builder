@@ -18,7 +18,6 @@
 * tests/ et test/ -> à renommer
 
 ******************************************************************************
-* nouveau status "en attente" s'il veut poser une question
 * progress bar
 * message en cours au lieu des trois petits points
 ******************************************************************************

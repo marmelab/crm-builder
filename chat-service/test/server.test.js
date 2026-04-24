@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { extractText, extractToolUses } from '../server.js';
+import { extractText, extractToolUses, endsWithQuestion } from '../server.js';
 
 test('extractText returns text from assistant message', () => {
   const msg = {
@@ -48,4 +48,29 @@ test('extractText returns null when text is only whitespace', () => {
     message: { content: [{ type: 'text', text: '   \n  ' }] },
   };
   assert.equal(extractText(msg), null);
+});
+
+test('endsWithQuestion detects direct questions in FR and EN', () => {
+  assert.equal(endsWithQuestion('Quelle couleur préférez-vous ?'), true);
+  assert.equal(endsWithQuestion('Which color do you prefer?'), true);
+  assert.equal(endsWithQuestion("I've finished. Next?"), true);
+});
+
+test('endsWithQuestion ignores mid-message questions with a later conclusion', () => {
+  assert.equal(endsWithQuestion('Should I proceed? Yes, I will.'), false);
+  assert.equal(endsWithQuestion('Voici le plan:\n\n1. Étape 1\n2. Étape 2'), false);
+  assert.equal(endsWithQuestion('Done!'), false);
+  assert.equal(endsWithQuestion(''), false);
+});
+
+test('endsWithQuestion handles markdown trailing punctuation and emphasis', () => {
+  assert.equal(endsWithQuestion('Done.\n\nAnything else to add?'), true);
+  assert.equal(endsWithQuestion("J'ai terminé. **Questions?**"), true);
+});
+
+test('endsWithQuestion does NOT fire when a code block is the last paragraph', () => {
+  assert.equal(
+    endsWithQuestion('Dois-je procéder ?\n\n```js\nconst x = 1;\n```'),
+    false,
+  );
 });
