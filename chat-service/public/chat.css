@@ -305,3 +305,23 @@ body { height: 100vh; overflow: hidden; font-family: system-ui, sans-serif; back
 .top-meta { color: #636366; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .top-value { color: #8e8e93; font-variant-numeric: tabular-nums; }
 .top-empty { color: #636366; font-style: italic; list-style: none; }
+
+.stats-sub { margin-bottom: 16px; }
+.stats-sub h4 {
+  font-size: 11px; font-weight: 600; color: #8e8e93;
+  margin-bottom: 6px; text-transform: uppercase; letter-spacing: .04em;
+}
+.sub-row {
+  display: grid; grid-template-columns: 1fr auto auto;
+  gap: 10px; padding: 4px 0; font-size: 11px; align-items: center;
+  border-bottom: 1px solid #2c2c2e;
+}
+.sub-main { color: #f2f2f7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sub-count { color: #8e8e93; font-variant-numeric: tabular-nums; font-size: 10px; }
+.sub-meta { color: #636366; font-size: 10px; font-variant-numeric: tabular-nums; }
+.sub-ok { color: #34d399; }
+.sub-fail { color: #f87171; }
+.sub-skip { color: #8e8e93; }
+.sub-blocking { color: #a78bfa; font-style: italic; }
+.sub-empty { color: #636366; font-style: italic; font-size: 11px; padding: 4px 0; }
+.stats-note { font-size: 10px; color: #636366; font-style: italic; margin-top: 8px; }
