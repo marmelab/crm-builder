@@ -36,16 +36,8 @@ function updateStatsBtnVisibility() {
   statsBtn.disabled = working;
 }
 
-// Monotonic sequence assigned to every persistent message (user/assistant
-// text, choices, debug events). Used to interleave buffered debug events at
-// their original chronological position when debug mode is toggled on
-// mid-session — without it, replayed debug events would pile up at the end
-// of the message list regardless of when they actually arrived.
 let seqCounter = 0;
 
-// Buffer of every debug / debug_raw event received since the page loaded,
-// tagged with the seq assigned at arrival, so toggling debug on mid-session
-// can splice them in at the right position.
 const debugEventBuffer = [];
 
 function placeIntoMessages(el, seq) {
@@ -116,11 +108,6 @@ function resetChatUi() {
   stats.textContent = '';
 }
 
-// Sync the dots, stop button, and "Working on it..." bubble to the current
-// value of `working`. Called from both init (on reconnect) and the status
-// handler (on live transitions). Intentionally does NOT touch .msg-queued
-// bubbles — that demote logic is a false→true transition concern and lives
-// in the status handler.
 function renderWorkingUi() {
   statusDots.style.display = working ? 'inline-flex' : 'none';
   stopBtn.hidden = !working;
@@ -152,17 +139,12 @@ function handleWsMessage(event) {
     display.setDisplayedState(msg.state || 'in_progress');
     messages.innerHTML = '';
     const list = msg.messages || [];
-    // The last `queuedCount` user messages are still sitting in the server's
-    // queue — re-apply the "waiting" badge on reconnect.
     const queuedIdx = new Set();
     let remaining = msg.queuedCount || 0;
     for (let i = list.length - 1; i >= 0 && remaining > 0; i--) {
       if (list[i].role === 'user') { queuedIdx.add(i); remaining--; }
     }
     list.forEach((m, i) => appendMessage(m.role, m.content, { queued: queuedIdx.has(i) }));
-    // Re-hydrate the "working" visuals directly (not through the status
-    // handler) — going through the handler would interpret this as a new
-    // turn starting and demote the queued bubbles we just rendered.
     if (msg.working) {
       working = true;
       renderWorkingUi();
@@ -188,11 +170,6 @@ function handleWsMessage(event) {
   if (msg.type === 'status') {
     const wasWorking = working;
     working = msg.working;
-    // working=true coming out of an idle state means a queued message just
-    // started processing — promote the oldest queued bubble to normal. Only
-    // fire on a real false→true transition: `init` may set working=true
-    // already on reconnect, and demoting there would strip the badge off
-    // still-queued messages.
     if (!wasWorking && working) {
       const oldestQueued = messages.querySelector('.msg-queued');
       if (oldestQueued) {
@@ -475,8 +452,6 @@ function appendRaw(event, seq = ++seqCounter) {
   placeIntoMessages(el, seq);
 }
 
-// Apply the debug_raw display filters and render. Called both from the live
-// WebSocket handler and from the replay on debug toggle ON.
 function renderDebugRaw(msg, seq = ++seqCounter) {
   const ev = msg.event;
   if (ev.type === 'rate_limit_event') return;
@@ -547,9 +522,6 @@ debugBtn.addEventListener('click', () => {
   debugBtn.classList.toggle('debug-active', debugMode);
   debugBtn.title = debugMode ? 'Debug ON' : 'Debug OFF';
   if (debugMode) {
-    // Replay every buffered debug event at its original seq so it is
-    // spliced in between the already-rendered user/assistant messages at
-    // the correct chronological position — not piled up at the end.
     for (const entry of debugEventBuffer) {
       if (entry.msg.type === 'debug') {
         appendDebug(entry.msg.tool, entry.msg.input, entry.msg.agent, entry.seq);

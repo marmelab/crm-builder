@@ -2,9 +2,6 @@ import { STATE_LABELS } from './state-labels.js';
 import { formatRelative } from '../dom.js';
 
 export function initHistory({ historyPanel, historyList, historyEmpty, historyBtn, historyClose, getSessionId, switchSession }) {
-  // Debounced refresh for the open panel. Triggered by WS events that change
-  // list data (new message → messageCount/lastMessageAt, title/state changes)
-  // and by local sends (the server updates meta before we get any echo back).
   let historyRefreshTimer = null;
 
   function refreshHistoryIfOpen() {
