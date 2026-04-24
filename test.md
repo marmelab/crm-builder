@@ -10,3 +10,6 @@
 * clean logs hooks
 
 * refactor agents & skills (trop verbeux)
+
+* faire des bashs pour création/clean worktree, branche
+
