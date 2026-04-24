@@ -20,9 +20,8 @@
 * tests/ et test/ -> à renommer
 
 ******************************************************************************
-* nouveau status "cancelled"
-* nouveau status "en attente" s'il veut poser une question
 * progress bar
+* message en cours au lieu des trois petits points
 ******************************************************************************
 
 * to discuss with françois

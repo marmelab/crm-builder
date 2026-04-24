@@ -709,6 +709,51 @@ Implemented with the `superpowers:subagent-driven-development` skill — one com
 
 ---
 
+## Phase 30 — `cancelled` session state + saveMeta race fix (2026-04-24, branch `feat/progress-bar+new-status`)
+
+Previously, pressing ⏹ STOP transitioned the session to `completed` — indistinguishable from a natural end-of-turn. The history panel couldn't show "user-interrupted" vs "done" at a glance.
+
+### New `cancelled` state
+- `ALLOWED_STATES` in `chat-service/server.js` extended to `{'in_progress', 'completed', 'cancelled'}`.
+- `processMessage` finally block now transitions to `cancelled` when `wasStopped`, else `completed` (previously always `completed`).
+- `STATE_LABELS` in `chat.js` adds `cancelled: 'Cancelled'`; `setDisplayedState` gives it a dedicated tooltip.
+- CSS badge `.state-cancelled` in orange (`#fb923c`) to distinguish from green (in_progress) and gray (completed). Applies to both the session state pill and the history panel items.
+
+### Concurrent `writeFile` race on `meta.json` — root cause of "sessions disappearing"
+After adding `cancelled`, cancelled sessions stopped showing up in the history list. Investigation found their `meta.json` ended with `}}` (two closing braces) — invalid JSON, silently dropped by `listSessions()`'s `JSON.parse` try/catch.
+
+Trace:
+1. Stop branch at line 541 calls `runtime.session?.recordMessage('assistant', '⏹ Session stopped.')` **without `await`** (fire-and-forget) — mutates `meta.messageCount++` + `lastMessageAt`, issues `writeFile(meta.json)`.
+2. Finally block immediately runs `await transitionState(runtime, 'cancelled')` — mutates `meta.state = 'cancelled'`, issues a second `writeFile(meta.json)`.
+3. Both `writeFile` calls open with `O_TRUNC | O_WRONLY` and write concurrently. Kernel-level interleaving of the two write streams produces a file that is roughly one JSON body followed by the trailing `}` of the other.
+4. `listSessions` swallows the parse error → session silently drops from the list.
+
+Fix in `server.js:545`: `await` the `recordMessage` call in the stop branch so the two writes serialize. Every other `recordMessage` call site is already isolated from `saveMeta` via idle turns, so no changes elsewhere. Two existing corrupt `meta.json` files (`f57dc412-…`, `5a0db60d-…`) manually repaired by stripping the trailing `}`.
+
+**Why**: the race was latent before Phase 30 because the prior code only called `transitionState('completed')` whether stopped or not — and the preceding `recordMessage('⏹ Session stopped.')` raced against `saveMeta('completed')` the same way, but the previous `meta.state` was already `in_progress` so `setState('completed')` was the only *effective* write. Adding the third state revealed the race. Alternatives considered: serializing all `saveMeta` via a per-session mutex — overkill for a 50-line server; writing via rename (tmp + `rename()` atomic swap) — defensible but adds complexity. `await` is the minimal fix that matches the existing pattern (`setState` / `setTitle` / `setClaudeSessionId` are all awaited at their call sites too).
+
+### `waiting` state when Claude asks a question
+
+Before: after a turn, the session went to `completed` whether Claude had actually finished the work or was asking the user a follow-up question ("Which color do you want?"). From the history panel, both looked the same — a gray "Completed" badge — and the user had no cue that Claude was idle *because it needed input*, not because the task was done.
+
+Added a fourth state `waiting`:
+
+- `ALLOWED_STATES` extended to `{in_progress, completed, cancelled, waiting}`.
+- `processMessage` now tracks `lastAssistantText` through the turn, and the finally block picks the next state via a small decision tree:
+  - `wasStopped` → `cancelled`
+  - `turnErrored` (non-zero exit, rate limit, result error, no text) → `completed`
+  - last assistant message ends with `?` → `waiting`
+  - else → `completed`
+- Detection helper `endsWithQuestion(text)` strips the trailing punctuation / closing fences / emojis from the last non-empty paragraph and checks for `?`. Last-paragraph scoping means a mid-message question followed by a conclusion does NOT trigger `waiting`; a question followed only by a code block or a closing emoji does.
+- `STATE_LABELS` adds `waiting: 'Waiting'`; `setDisplayedState` sets tooltip "Claude is waiting for your reply".
+- CSS badge `.state-waiting` in blue (`#60a5fa`) — visually distinct from green (in_progress), gray (completed), orange (cancelled).
+
+**Why a text heuristic and not a dedicated event**: Claude doesn't emit a structured "I'm asking a question" signal — the only explicit hook is the `choices` event, which is only used for the initial welcome buttons (`WELCOME_CHOICES`). Introducing a convention (e.g. orchestrator must emit `{type: 'question'}`) would require teaching the orchestrator prompt a new protocol and would likely be ignored half the time. The `?` heuristic piggy-backs on a natural-language convention Claude already follows ~100% of the time in both French and English, with near-zero false positives (statement sentences don't end in `?`).
+
+**Known limits**: (1) Questions embedded in markdown bullet lists get detected correctly (last-paragraph captures the final bullet), but a rhetorical question followed by a definitive answer in the SAME paragraph will trip the heuristic. (2) A Claude turn that ends with a tool call (no trailing text) keeps the previous text as `lastAssistantText`, which is fine — tool calls always continue the turn, so we're only evaluating at true turn-end.
+
+---
+
 ## Open items / known limits
 
 - **`medium-new-field` test** times out at 15 min (bumped to 35 min). Real agent-team flow on a multi-file feature naturally takes 20-30 min.
@@ -722,4 +767,4 @@ Implemented with the `superpowers:subagent-driven-development` skill — one com
 
 ---
 
-_Last updated: 2026-04-24 (Phase 29)_
+_Last updated: 2026-04-24 (Phase 30)_

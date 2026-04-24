@@ -115,6 +115,8 @@ body { height: 100vh; overflow: hidden; font-family: system-ui, sans-serif; back
 }
 .state-in_progress { background: rgba(52,211,153,.15); color: #34d399; }
 .state-completed { background: rgba(99,99,102,.25); color: #a1a1a6; }
+.state-cancelled { background: rgba(251,146,60,.15); color: #fb923c; }
+.state-waiting { background: rgba(96,165,250,.15); color: #60a5fa; }
 
 .history-state {
   display: inline-block;

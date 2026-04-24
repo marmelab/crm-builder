@@ -171,7 +171,21 @@ async function openSession(requestedId) {
   };
 }
 
-const ALLOWED_STATES = new Set(['in_progress', 'completed']);
+const ALLOWED_STATES = new Set(['in_progress', 'completed', 'cancelled', 'waiting']);
+
+// Heuristic: Claude's final message ends with a question → session is waiting
+// for a user reply (e.g. "Quelle couleur préférez-vous ?"). We look at the last
+// non-empty paragraph so a mid-message question followed by a conclusion does
+// not trigger; a question followed by a trailing code block still falls
+// through to 'completed' since the code block becomes the last paragraph.
+// Exported for unit testing.
+export function endsWithQuestion(text) {
+  if (!text) return false;
+  const paragraphs = text.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
+  const lastPara = paragraphs[paragraphs.length - 1] || '';
+  const trimmed = lastPara.replace(/[\s)\]*_`'"]+$/, '');
+  return trimmed.endsWith('?');
+}
 
 async function listSessions() {
   await mkdir(LOG_DIR, { recursive: true }).catch(() => {});
@@ -482,6 +496,8 @@ async function processMessage(runtime, prompt) {
   let receivedText = false;
   let rateLimit = null;
   let resultError = false;
+  let lastAssistantText = '';
+  let exitCode = null;
   try {
     const proc = spawnClaude(prompt, runtime.claudeSessionId);
     runtime.currentProc = proc; // expose for the stop handler
@@ -509,6 +525,7 @@ async function processMessage(runtime, prompt) {
         const text = extractText(event);
         if (text) {
           receivedText = true;
+          lastAssistantText = text;
           broadcast(runtime, { type: 'message', role: 'assistant', content: text });
           runtime.session?.recordMessage('assistant', text).catch(() => {});
         }
@@ -561,7 +578,7 @@ async function processMessage(runtime, prompt) {
         }
       } catch {}
     }
-    const exitCode = await Promise.race([
+    exitCode = await Promise.race([
       new Promise((resolve) => proc.on('close', resolve)),
       spawnError.then((err) => {
         stderrBuf += `\n${err?.message || err}`;
@@ -571,17 +588,19 @@ async function processMessage(runtime, prompt) {
     if (runtime.stopping) {
       const stopText = '⏹ Session stopped.';
       broadcast(runtime, { type: 'message', role: 'assistant', content: stopText });
-      runtime.session?.recordMessage('assistant', stopText).catch(() => {});
+      await runtime.session?.recordMessage('assistant', stopText).catch(() => {});
     } else if (exitCode !== 0 || !receivedText || resultError || rateLimit) {
       const errText = friendlyError({ exitCode, stderr: stderrBuf, rateLimit, resultError });
       broadcast(runtime, { type: 'message', role: 'assistant', content: errText });
-      runtime.session?.recordMessage('assistant', errText).catch(() => {});
+      // Await: the finally block below writes meta.json right after; a
+      // fire-and-forget here would race with that write and corrupt the file.
+      await runtime.session?.recordMessage('assistant', errText).catch(() => {});
     }
   } catch (err) {
     if (err?.name !== 'AbortError') {
       const errText = "Something went wrong. Want to try again?";
       broadcast(runtime, { type: 'message', role: 'assistant', content: errText });
-      runtime.session?.recordMessage('assistant', errText).catch(() => {});
+      await runtime.session?.recordMessage('assistant', errText).catch(() => {});
     }
   } finally {
     // Commit this spawn's cumulative cost into the runtime total, reset for next spawn
@@ -601,9 +620,16 @@ async function processMessage(runtime, prompt) {
     } else {
       if (wasStopped) runtime.queue = [];
       runtime.busy = false;
-      // All queued turns processed and claude is idle → session is done
-      // (until the user sends another message).
-      await transitionState(runtime, 'completed');
+      // Pick the next state:
+      //   - user pressed STOP → 'cancelled'
+      //   - turn errored (non-zero exit, rate limit, result error, no text) → 'completed'
+      //   - last assistant message ends with '?' → 'waiting' (Claude asked a
+      //     question and expects a reply before continuing)
+      //   - otherwise → 'completed'
+      const turnErrored = exitCode !== 0 || !receivedText || resultError || rateLimit;
+      const asksQuestion = !wasStopped && !turnErrored && endsWithQuestion(lastAssistantText);
+      const nextState = wasStopped ? 'cancelled' : asksQuestion ? 'waiting' : 'completed';
+      await transitionState(runtime, nextState);
       // If no client is currently viewing this session, release the runtime
       // now that the turn is done. A later reconnect will re-open it.
       if (runtime.clients.size === 0) {
