@@ -151,6 +151,32 @@ window.addEventListener('popstate', () => {
   connectWs();
 });
 
+// Sync the dots, stop button, and "Working on it..." bubble to the current
+// value of `working`. Called from both init (on reconnect) and the status
+// handler (on live transitions). Intentionally does NOT touch .msg-queued
+// bubbles — that demote logic is a false→true transition concern and lives
+// in the status handler.
+function renderWorkingUi() {
+  statusDots.style.display = working ? 'inline-flex' : 'none';
+  stopBtn.hidden = !working;
+  stopBtn.disabled = false;
+  const existing = messages.querySelector('.msg-working');
+  if (working && !existing) {
+    const el = document.createElement('div');
+    el.className = 'msg msg-working';
+    const spinner = document.createElement('div');
+    spinner.className = 'spinner';
+    const label = document.createElement('span');
+    label.textContent = 'Working on it...';
+    el.appendChild(spinner);
+    el.appendChild(label);
+    messages.appendChild(el);
+    messages.scrollTop = messages.scrollHeight;
+  } else if (!working && existing) {
+    existing.remove();
+  }
+}
+
 function handleWsMessage(event) {
   let msg;
   try { msg = JSON.parse(event.data); } catch { return; }
@@ -160,7 +186,22 @@ function handleWsMessage(event) {
     setDisplayedTitle(msg.title || 'New discussion');
     setDisplayedState(msg.state || 'en_cours');
     messages.innerHTML = '';
-    (msg.messages || []).forEach((m) => appendMessage(m.role, m.content));
+    const list = msg.messages || [];
+    // The last `queuedCount` user messages are still sitting in the server's
+    // queue — re-apply the "en attente" badge on reconnect.
+    const queuedIdx = new Set();
+    let remaining = msg.queuedCount || 0;
+    for (let i = list.length - 1; i >= 0 && remaining > 0; i--) {
+      if (list[i].role === 'user') { queuedIdx.add(i); remaining--; }
+    }
+    list.forEach((m, i) => appendMessage(m.role, m.content, { queued: queuedIdx.has(i) }));
+    // Re-hydrate the "working" visuals directly (not through the status
+    // handler) — going through the handler would interpret this as a new
+    // turn starting and demote the queued bubbles we just rendered.
+    if (msg.working) {
+      working = true;
+      renderWorkingUi();
+    }
     refreshHistoryIfOpen();
     return;
   }
@@ -178,36 +219,21 @@ function handleWsMessage(event) {
   }
 
   if (msg.type === 'status') {
+    const wasWorking = working;
     working = msg.working;
-    // Don't disable the send button — allow queueing a 2nd message while the
-    // current turn is still running (server's `state.queue` handles it).
-    statusDots.style.display = working ? 'inline-flex' : 'none';
-    stopBtn.hidden = !working;
-    stopBtn.disabled = false;
-    // working=true right after the previous turn closed means a queued message
-    // just started processing — promote the oldest queued bubble to normal.
-    if (working) {
+    // working=true coming out of an idle state means a queued message just
+    // started processing — promote the oldest queued bubble to normal. Only
+    // fire on a real false→true transition: `init` may set working=true
+    // already on reconnect, and demoting there would strip the badge off
+    // still-queued messages.
+    if (!wasWorking && working) {
       const oldestQueued = messages.querySelector('.msg-queued');
       if (oldestQueued) {
         oldestQueued.classList.remove('msg-queued');
         oldestQueued.querySelector('.queued-badge')?.remove();
       }
     }
-    const existing = messages.querySelector('.msg-working');
-    if (working && !existing) {
-      const el = document.createElement('div');
-      el.className = 'msg msg-working';
-      const spinner = document.createElement('div');
-      spinner.className = 'spinner';
-      const label = document.createElement('span');
-      label.textContent = 'Working on it...';
-      el.appendChild(spinner);
-      el.appendChild(label);
-      messages.appendChild(el);
-      messages.scrollTop = messages.scrollHeight;
-    } else if (!working && existing) {
-      existing.remove();
-    }
+    renderWorkingUi();
     return;
   }
 
