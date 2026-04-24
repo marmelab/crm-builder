@@ -113,8 +113,8 @@ body { height: 100vh; overflow: hidden; font-family: system-ui, sans-serif; back
   padding: 3px 8px; border-radius: 999px;
   user-select: none;
 }
-.state-en_cours { background: rgba(52,211,153,.15); color: #34d399; }
-.state-terminee { background: rgba(99,99,102,.25); color: #a1a1a6; }
+.state-in_progress { background: rgba(52,211,153,.15); color: #34d399; }
+.state-completed { background: rgba(99,99,102,.25); color: #a1a1a6; }
 
 .history-state {
   display: inline-block;

@@ -16,13 +16,8 @@
 * tests/ et test/ -> à renommer
 
 ******************************************************************************
-* fr -> en
-
 * nouveau status "en attente" s'il veut poser une question
-
-* si tu quitte la discussion avec un message en attente
-        * le visuel de "en attente" n'est plus
-        * points de suspensions non présents
+* progress bar
 ******************************************************************************
 
 * to discuss with françois

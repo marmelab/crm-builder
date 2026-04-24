@@ -120,7 +120,7 @@ async function openDiscussion(requestedId) {
     meta = {
       id,
       title: '',
-      state: 'en_cours',
+      state: 'in_progress',
       createdAt: new Date().toISOString(),
       lastMessageAt: null,
       messageCount: 0,
@@ -171,7 +171,7 @@ async function openDiscussion(requestedId) {
   };
 }
 
-const ALLOWED_STATES = new Set(['en_cours', 'terminee']);
+const ALLOWED_STATES = new Set(['in_progress', 'completed']);
 
 async function listDiscussions() {
   await mkdir(LOG_DIR, { recursive: true }).catch(() => {});
@@ -186,7 +186,7 @@ async function listDiscussions() {
       out.push({
         id: meta.id,
         title: meta.title || '',
-        state: meta.state || 'en_cours',
+        state: meta.state || 'in_progress',
         createdAt: meta.createdAt,
         lastMessageAt: meta.lastMessageAt,
         messageCount: count,
@@ -446,7 +446,7 @@ async function processMessage(session, prompt) {
   if (!session) return;
 
   // Claude (re)starts → discussion is active again.
-  transitionState(session, 'en_cours');
+  transitionState(session, 'in_progress');
   broadcast(session, { type: 'status', working: true });
   const toolMap = new Map();
   let receivedText = false;
@@ -515,8 +515,8 @@ async function processMessage(session, prompt) {
           if (event.is_error) resultError = true;
           const u = event.usage || {};
           // tokens: usage is per-turn, sum is correct. Exclude cache_read — it's
-          // re-hydrated cached context, facturé 10× moins et pas "consommé"
-          // depuis la limite utilisateur.
+          // re-hydrated cached context, billed 10× less and not "consumed"
+          // against the user's limit.
           session.stats.tokensUsed +=
             (u.input_tokens || 0) +
             (u.cache_creation_input_tokens || 0) +
@@ -539,7 +539,7 @@ async function processMessage(session, prompt) {
       }),
     ]);
     if (session.stopping) {
-      const stopText = '⏹ Discussion arrêtée.';
+      const stopText = '⏹ Discussion stopped.';
       broadcast(session, { type: 'message', role: 'assistant', content: stopText });
       session.discussion?.recordMessage('assistant', stopText).catch(() => {});
     } else if (exitCode !== 0 || !receivedText || resultError || rateLimit) {
@@ -573,7 +573,7 @@ async function processMessage(session, prompt) {
       session.busy = false;
       // All queued turns processed and claude is idle → discussion is done
       // (until the user sends another message).
-      await transitionState(session, 'terminee');
+      await transitionState(session, 'completed');
       // If no client is currently viewing this discussion, release the session
       // now that the turn is done. A later reconnect will re-open it.
       if (session.clients.size === 0) {
@@ -662,10 +662,10 @@ wss.on('connection', async (ws, req) => {
     type: 'init',
     discussionId: session.discussion.id,
     title: session.discussion.meta.title,
-    state: session.discussion.meta.state || 'en_cours',
+    state: session.discussion.meta.state || 'in_progress',
     messages: freshMessages,
     // Messages currently waiting in the queue are persisted in the log like
-    // any other user message; the "en attente" badge is a pure client-side
+    // any other user message; the "waiting" badge is a pure client-side
     // marker. Tell the joining tab how many of the tail user messages are
     // still queued so it can re-apply the badge.
     queuedCount: session.queue.length,

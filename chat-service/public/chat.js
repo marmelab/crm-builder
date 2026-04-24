@@ -36,12 +36,12 @@ function formatRelative(iso) {
   const d = new Date(iso);
   const diff = Date.now() - d.getTime();
   const min = Math.round(diff / 60_000);
-  if (min < 1) return "à l'instant";
-  if (min < 60) return `il y a ${min} min`;
+  if (min < 1) return 'just now';
+  if (min < 60) return `${min} min ago`;
   const h = Math.round(min / 60);
-  if (h < 24) return `il y a ${h} h`;
+  if (h < 24) return `${h} h ago`;
   const days = Math.round(h / 24);
-  if (days < 7) return `il y a ${days} j`;
+  if (days < 7) return `${days} d ago`;
   return d.toLocaleDateString();
 }
 
@@ -49,11 +49,11 @@ let working  = false;
 let debugMode = false;
 let currentDiscussionId = null;
 let currentTitle = '';
-let currentState = 'en_cours';
+let currentState = 'in_progress';
 
 const STATE_LABELS = {
-  en_cours: 'En cours',
-  terminee: 'Terminée',
+  in_progress: 'In progress',
+  completed: 'Completed',
 };
 
 // Monotonic sequence assigned to every persistent message (user/assistant
@@ -184,11 +184,11 @@ function handleWsMessage(event) {
   if (msg.type === 'init') {
     currentDiscussionId = msg.discussionId;
     setDisplayedTitle(msg.title || 'New discussion');
-    setDisplayedState(msg.state || 'en_cours');
+    setDisplayedState(msg.state || 'in_progress');
     messages.innerHTML = '';
     const list = msg.messages || [];
     // The last `queuedCount` user messages are still sitting in the server's
-    // queue — re-apply the "en attente" badge on reconnect.
+    // queue — re-apply the "waiting" badge on reconnect.
     const queuedIdx = new Set();
     let remaining = msg.queuedCount || 0;
     for (let i = list.length - 1; i >= 0 && remaining > 0; i--) {
@@ -282,9 +282,9 @@ function setDisplayedState(s) {
   currentState = s;
   stateBtn.textContent = STATE_LABELS[s] || s;
   stateBtn.className = `state-${s}`;
-  stateBtn.title = s === 'terminee'
-    ? 'Session Claude terminée — envoyez un message pour relancer'
-    : 'Claude est en cours…';
+  stateBtn.title = s === 'completed'
+    ? 'Claude session ended — send a message to restart'
+    : 'Claude is working…';
 }
 
 function appendChoices(content, options, seq = ++seqCounter) {
@@ -331,7 +331,7 @@ function appendMessage(role, content, seqOrOpts = ++seqCounter) {
   if (queued) {
     const badge = document.createElement('span');
     badge.className = 'queued-badge';
-    badge.textContent = '⏳ en attente';
+    badge.textContent = '⏳ waiting';
     el.appendChild(badge);
   }
   placeIntoMessages(el, seq);
@@ -567,13 +567,13 @@ function renderHistoryItem(d) {
 
   const title = document.createElement('div');
   title.className = 'history-title';
-  title.textContent = d.title || '(sans titre)';
+  title.textContent = d.title || '(untitled)';
   li.appendChild(title);
 
   const meta = document.createElement('div');
   meta.className = 'history-meta';
   const statePill = document.createElement('span');
-  const st = d.state || 'en_cours';
+  const st = d.state || 'in_progress';
   statePill.className = `history-state state-${st}`;
   statePill.textContent = STATE_LABELS[st] || st;
   meta.appendChild(statePill);
@@ -611,7 +611,7 @@ newBtn.addEventListener('click', () => {
 // ─── Title rename ───────────────────────────────────────────
 chatTitle.addEventListener('click', async () => {
   if (!currentDiscussionId) return;
-  const next = prompt('Renommer la discussion :', currentTitle);
+  const next = prompt('Rename discussion:', currentTitle);
   if (next == null) return;
   const trimmed = next.trim();
   if (!trimmed || trimmed === currentTitle) return;
