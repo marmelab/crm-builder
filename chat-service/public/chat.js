@@ -37,6 +37,18 @@ function formatTokens(n) {
   return String(n);
 }
 
+function formatDuration(ms) {
+  if (ms < 1000) return `${ms}ms`;
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rs = s % 60;
+  if (m < 60) return rs ? `${m}m ${rs}s` : `${m}m`;
+  const h = Math.floor(m / 60);
+  const rm = m % 60;
+  return rm ? `${h}h ${rm}m` : `${h}h`;
+}
+
 let working  = false;
 let debugMode = false;
 let hasUserMessage = false;
@@ -499,9 +511,42 @@ statsBtn.addEventListener('click', () => {
   if (statsMode) exitStatsMode(); else enterStatsMode();
 });
 
-// Placeholder until Tasks 11-15 fill in the sections
 function renderStatsPanel(data) {
-  const pre = el('pre', { style: { fontSize: '11px', color: '#636366', overflow: 'auto' } });
-  pre.textContent = JSON.stringify(data, null, 2);
-  statsPanel.replaceChildren(pre);
+  statsPanel.replaceChildren(renderSummarySection(data));
+}
+
+function renderSummarySection(data) {
+  const kpi = el('div', { className: 'stats-kpi-line' },
+    el('span', null, `⏱️ ${formatDuration(data.summary.totalMs)} total`),
+    el('span', null, `🤖 ${data.summary.agentsCount} agents`),
+    el('span', null, `🔧 ${data.summary.opsCount} ops`),
+    el('span', null, `🪙 ${formatTokens(data.summary.tokensTotal)} tokens`),
+    el('span', null, `💵 $${data.summary.costUsd.toFixed(3)}`),
+    el('span', { className: 'kpi-warn' }, `⚠️ ${data.summary.errorsCount} erreurs`),
+    el('span', { className: 'kpi-warn' }, `🔁 ${data.summary.retriesCount} retries`),
+  );
+
+  const teamRow = data.teams.length
+    ? el('div', { className: 'stats-team-row' },
+        ...data.teams.map((t) => {
+          const pill = el('span', { className: 'stats-team-pill', style: { borderColor: t.color, color: t.color } });
+          pill.textContent = `👥 ${t.team_name.replace(/^ticket-/, '')} · ${formatDuration(t.durationMs)} · ${t.agentsCount} agents${t.errorsCount ? ' · ⚠️ ' + t.errorsCount : ''}`;
+          return pill;
+        }))
+    : null;
+
+  const totalMs = data.summary.totalMs || 1;
+  const breakdown = el('div', { className: 'stats-breakdown' },
+    ...data.summary.timeBreakdown.map((row) => {
+      const pct = Math.max(2, Math.round((row.ms / totalMs) * 100));
+      const seg = el('span', {
+        className: 'stats-breakdown-seg',
+        style: { flex: String(pct) },
+        title: `${row.agent} · ${formatDuration(row.ms)} (${pct}%)`,
+      });
+      seg.textContent = pct > 8 ? `${row.agent} ${formatDuration(row.ms)}` : '';
+      return seg;
+    }));
+
+  return el('section', { className: 'stats-section stats-summary' }, kpi, teamRow, breakdown);
 }
