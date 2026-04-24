@@ -35,7 +35,37 @@ function mergeIntervals(intervals) {
   return out;
 }
 
-const AGENT_PROCESSING_THRESHOLD_MS = 1000;
+const STREAM_GAP_THRESHOLD_MS = 1000;
+
+function buildEventTsIndex(events) {
+  // Only substantive stream content — assistant/user messages. task_progress fires at every
+  // tool_use boundary as metadata and would falsely inflate activity counts for silent waits.
+  const arr = [];
+  for (const rec of events) {
+    if (rec.type !== 'debug_raw' || !rec.ts) continue;
+    const t = rec.event?.type;
+    if (t === 'assistant' || t === 'user') arr.push(new Date(rec.ts).getTime());
+  }
+  arr.sort((a, b) => a - b);
+  return arr;
+}
+
+function countEventsStrictlyBetween(tsIndex, startTs, endTs) {
+  const s = new Date(startTs).getTime();
+  const e = new Date(endTs).getTime();
+  let lo = 0, hi = tsIndex.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (tsIndex[mid] <= s) lo = mid + 1; else hi = mid;
+  }
+  const left = lo;
+  lo = 0; hi = tsIndex.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (tsIndex[mid] < e) lo = mid + 1; else hi = mid;
+  }
+  return lo - left;
+}
 
 function computeSummary(events) {
   let opsCount = 0, tokensTotal = 0, costUsd = 0;
@@ -205,6 +235,7 @@ function populateChildrenAndCounts(events, phases, orchestrator) {
   const agentPhases = phases.filter((p) => p.kind === 'agent');
   const phaseByToolUseId = buildPhaseOwnerMap(events, agentPhases);
   const toolResultTsByToolUseId = buildToolResultMap(events);
+  const eventTsIndex = buildEventTsIndex(events);
   const toolCounts = new Map();
   const allToolCalls = [];
   const lastToolResultTsByPhase = new Map();
@@ -246,9 +277,13 @@ function populateChildrenAndCounts(events, phases, orchestrator) {
       const lastTR = lastToolResultTsByPhase.get(owner.phaseId);
       if (lastTR) {
         const gapMs = msBetween(lastTR, rec.ts);
-        if (gapMs >= AGENT_PROCESSING_THRESHOLD_MS) {
+        if (gapMs >= STREAM_GAP_THRESHOLD_MS) {
           const preview = previewFromBuffer(thinkingBufferByPhase.get(owner.phaseId));
-          owner.children.push({ kind: 'agent_processing', ts: lastTR, durationMs: gapMs, preview });
+          const eventsDuringGap = countEventsStrictlyBetween(eventTsIndex, lastTR, rec.ts);
+          owner.children.push({
+            kind: 'stream_gap', ts: lastTR, durationMs: gapMs,
+            eventsDuringGap, preview,
+          });
         }
       }
       thinkingBufferByPhase.set(owner.phaseId, []);

@@ -138,36 +138,53 @@ test('aggregateSession: tool durations come from tool_use_id → tool_result pai
   assert.deepEqual(greps.map((g) => g.durationMs).sort((a, b) => a - b), [250, 450]);
 });
 
-test('aggregateSession: attaches thinking/text preview to agent_processing rows when available', async () => {
+test('aggregateSession: attaches thinking/text preview to stream_gap rows when available', async () => {
   const out = await aggregateSession({
     sessionLogPath: fx('tool-timings-with-gaps.jsonl'),
     hooksLogPath: null,
     sessionId: 'sess-gaps',
   });
-  const processing = out.phases[0].children.filter((c) => c.kind === 'agent_processing');
+  const processing = out.phases[0].children.filter((c) => c.kind === 'stream_gap');
   const withPreview = processing.find((p) => p.preview);
-  assert.ok(withPreview, 'expected at least one agent_processing row with preview');
+  assert.ok(withPreview, 'expected at least one stream_gap row with preview');
   assert.match(withPreview.preview, /export const foo|list \/tmp/i);
   // Gap buffer resets after each tool_use, so a subsequent gap with no intervening
   // thinking/text block must have preview === null.
   const withoutPreview = processing.find((p) => !p.preview);
-  assert.ok(withoutPreview, 'expected at least one agent_processing row without preview');
+  assert.ok(withoutPreview, 'expected at least one stream_gap row without preview');
 });
 
-test('aggregateSession: inserts agent_processing rows for gaps ≥ threshold, not within a tool_use batch', async () => {
+test('aggregateSession: inserts stream_gap rows for gaps ≥ threshold, not within a tool_use batch', async () => {
   const out = await aggregateSession({
     sessionLogPath: fx('tool-timings-with-gaps.jsonl'),
     hooksLogPath: null,
     sessionId: 'sess-gaps',
   });
-  const processing = out.phases[0].children.filter((c) => c.kind === 'agent_processing');
+  const gaps = out.phases[0].children.filter((c) => c.kind === 'stream_gap');
   // Two gaps meet the threshold: ~4500ms (Read→Bash) and ~1200ms (Grep batch→slow Bash).
   // The 150ms gap between Bash→Grep batch is below the threshold, and the gap between the two
   // batched Greps is zero (they share the same assistant-message timestamp) — neither should appear.
-  assert.equal(processing.length, 2);
-  const durs = processing.map((p) => p.durationMs).sort((a, b) => a - b);
+  assert.equal(gaps.length, 2);
+  const durs = gaps.map((p) => p.durationMs).sort((a, b) => a - b);
   assert.equal(durs[0], 1200);
   assert.equal(durs[1], 4500);
+});
+
+test('aggregateSession: stream_gap carries eventsDuringGap count (strict between boundaries)', async () => {
+  const out = await aggregateSession({
+    sessionLogPath: fx('tool-timings-with-gaps.jsonl'),
+    hooksLogPath: null,
+    sessionId: 'sess-gaps',
+  });
+  const gaps = out.phases[0].children.filter((c) => c.kind === 'stream_gap');
+  // The 4.5s Read→Bash gap contains one assistant thinking message (the preview source) — 1 event.
+  const activeGap = gaps.find((g) => g.durationMs === 4500);
+  assert.equal(activeGap.eventsDuringGap, 1);
+  assert.ok(activeGap.preview, 'active gap should have preview');
+  // The 1.2s Grep→slow-Bash gap has no intervening events — 0 events, no preview.
+  const silentGap = gaps.find((g) => g.durationMs === 1200);
+  assert.equal(silentGap.eventsDuringGap, 0);
+  assert.equal(silentGap.preview, null);
 });
 
 test('aggregateSession: topToolCalls flags ops >30s as flaggedSlow (real tool_result durations)', async () => {
