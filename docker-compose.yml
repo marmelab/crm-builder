@@ -37,6 +37,7 @@ services:
       - ./entrypoint.sh:/entrypoint.sh:ro
       - ./chat-service/server.js:/chat-service/server.js:ro
       - ./chat-service/public:/chat-service/public:ro
+      - ./chat-service/lib:/chat-service/lib:ro
       # DEV ONLY — logs structurés des sessions chat pour review/analyse.
       # RETIRER avant release production.
       - ./sessions:/chat-service/logs

@@ -242,7 +242,37 @@ function readJsonBody(req) {
 }
 
 // ─── HTTP server ──────────────────────────────────────────────
+const HOOKS_LOG_PATH = `${LOG_DIR}/hooks.log`;
+
+async function handleStatsRequest(req, res) {
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  const sessionId = url.searchParams.get('sessionId');
+  if (!sessionId || !UUID_RE.test(sessionId)) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'missing_or_invalid_sessionId' }));
+    return;
+  }
+  const logPath = `${LOG_DIR}/${sessionId}/log.jsonl`;
+  try {
+    const { aggregateSession } = await import('./lib/stats.js');
+    const out = await aggregateSession({ sessionLogPath: logPath, hooksLogPath: HOOKS_LOG_PATH, sessionId });
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(out));
+  } catch (err) {
+    if (err?.code === 'ENOENT') {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'session_log_not_found' }));
+      return;
+    }
+    console.error('aggregateSession failed:', err);
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'aggregate_failed', message: err.message }));
+  }
+}
+
 const httpServer = createServer(async (req, res) => {
+  if (req.url?.startsWith('/api/stats')) return handleStatsRequest(req, res);
+
   // API: list sessions
   if (req.url === '/api/sessions' && req.method === 'GET') {
     const list = await listSessions();

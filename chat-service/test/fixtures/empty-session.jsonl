@@ -1,0 +1,2 @@
+{"ts":"2026-04-23T12:00:00.000Z","dir":"out","type":"debug_raw","event":{"type":"system","subtype":"init","cwd":"/app","session_id":"00000000-0000-0000-0000-000000000001","tools":["Task","Bash","Read"]}}
+{"ts":"2026-04-23T12:00:02.000Z","dir":"out","type":"debug_raw","event":{"type":"result","subtype":"success","is_error":false,"duration_ms":2000,"num_turns":1,"result":"ok","session_id":"00000000-0000-0000-0000-000000000001","total_cost_usd":0.001,"usage":{"input_tokens":5,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":3}}}
