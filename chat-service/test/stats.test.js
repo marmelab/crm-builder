@@ -172,3 +172,37 @@ test('aggregateSession: aggregates skills and rules', async () => {
   assert.equal(out.rules[0].ruleFile, 'agent-output-format.md');
   assert.equal(out.rules[0].reads, 2);
 });
+
+test('aggregateSession: detects (retry) suffix retries', async () => {
+  const out = await aggregateSession({
+    sessionLogPath: fx('parallel-two-teams.jsonl'),
+    hooksLogPath: fx('hooks.log.parallel-teams'),
+    sessionId: 'sess-parallel',
+  });
+  const retries = out.retries.filter((r) => r.matchMethod === 'suffix-parens-retry');
+  assert.ok(retries.length >= 1);
+  assert.ok(retries.find((r) => /TASK-004/.test(r.description)));
+});
+
+test('aggregateSession: summary error/retry counts match arrays', async () => {
+  const out = await aggregateSession({
+    sessionLogPath: fx('parallel-two-teams.jsonl'),
+    hooksLogPath: fx('hooks.log.parallel-teams'),
+    sessionId: 'sess-parallel',
+  });
+  assert.equal(out.summary.errorsCount, out.errors.length);
+  assert.equal(out.summary.retriesCount, out.retries.length);
+});
+
+test('aggregateSession: blocking hooks EXIT=2 are NOT errors', async () => {
+  const out = await aggregateSession({
+    sessionLogPath: fx('parallel-two-teams.jsonl'),
+    hooksLogPath: fx('hooks.log.parallel-teams'),
+    sessionId: 'sess-parallel',
+  });
+  const blocked = ['block-bash-file-write.sh','block-bash-validation.sh','circuit-breaker.sh','silent-mode-check.sh'];
+  for (const e of out.errors) {
+    if (e.kind !== 'hook_failed') continue;
+    assert.ok(!blocked.includes(e.payload?.hookName));
+  }
+});

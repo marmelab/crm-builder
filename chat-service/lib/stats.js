@@ -412,6 +412,95 @@ function aggregateRules(events, phases) {
     .sort((a, b) => b.reads - a.reads);
 }
 
+function tailPayload(obj, maxLen = 800) {
+  try {
+    const s = JSON.stringify(obj);
+    return s.length > maxLen ? s.slice(0, maxLen) + '…' : s;
+  } catch { return null; }
+}
+
+function detectErrors(events, phases, hooks) {
+  const errs = [];
+  for (const rec of events) {
+    if (rec.type !== 'debug_raw' || !rec.event) continue;
+    const ev = rec.event;
+    if (ev.type === 'system' && ev.subtype === 'notification' && ev.priority === 'immediate') {
+      errs.push({ kind: 'notification', ts: rec.ts, phaseId: null, teamName: null,
+        summary: ev.text || ev.key || 'notification', payload: tailPayload(ev) });
+    } else if (ev.type === 'result' && ev.is_error) {
+      errs.push({ kind: 'turn_error', ts: rec.ts, phaseId: null, teamName: null,
+        summary: `Turn failed: ${ev.api_error_status || ev.result || 'error'}`, payload: tailPayload(ev) });
+    } else if (ev.type === 'system' && ev.subtype === 'task_notification' && ev.status === 'failed') {
+      const phase = phases.find((p) => p.phaseId === ev.task_id);
+      errs.push({ kind: 'task_failed', ts: rec.ts, phaseId: ev.task_id, teamName: phase?.teamName ?? null,
+        summary: `${phase?.description ?? ev.task_id} failed`, payload: tailPayload(ev) });
+    }
+  }
+  for (const h of hooks) {
+    if (h.blocking) continue;
+    for (const e of h.executions) {
+      if (e.exitCode != null && e.exitCode !== 0) {
+        errs.push({ kind: 'hook_failed', ts: e.ts, phaseId: null, teamName: null,
+          summary: `${h.hookName} EXIT=${e.exitCode}`,
+          payload: { hookName: h.hookName, worktree: e.worktree, exitCode: e.exitCode } });
+      }
+    }
+  }
+  return errs.sort((a, b) => a.ts.localeCompare(b.ts));
+}
+
+function commonPrefixRatio(a, b) {
+  const n = Math.min(a.length, b.length);
+  let i = 0;
+  while (i < n && a[i] === b[i]) i++;
+  return Math.max(a.length, b.length) === 0 ? 1 : i / Math.max(a.length, b.length);
+}
+
+function detectRetries(phases, errors) {
+  const retries = [];
+  const sortedAgents = phases.filter((p) => p.kind === 'agent').sort((a, b) => a.startTs.localeCompare(b.startTs));
+  const retrySet = new Set();
+
+  const SUFFIX = /\((retry|after [^)]+)\)\s*$/i;
+  for (const p of sortedAgents) {
+    if (SUFFIX.test(p.description)) {
+      retries.push({ ts: p.startTs, triggeredByErrorTs: null, phaseId: p.phaseId,
+        description: p.description, matchMethod: 'suffix-parens-retry' });
+      retrySet.add(p.phaseId);
+    }
+  }
+
+  for (const err of errors.filter((e) => e.kind === 'task_failed')) {
+    const errPhase = sortedAgents.find((p) => p.phaseId === err.phaseId);
+    if (!errPhase) continue;
+    const windowEnd = new Date(err.ts).getTime() + 5 * 60 * 1000;
+    const cand = sortedAgents.find((p) =>
+      !retrySet.has(p.phaseId) &&
+      p.startTs > err.ts &&
+      new Date(p.startTs).getTime() <= windowEnd &&
+      commonPrefixRatio(errPhase.description, p.description) > 0.8
+    );
+    if (cand) {
+      retries.push({ ts: cand.startTs, triggeredByErrorTs: err.ts, phaseId: cand.phaseId,
+        description: cand.description, matchMethod: 'failure-followed-by-similar' });
+      retrySet.add(cand.phaseId);
+    }
+  }
+
+  for (let i = 0; i < sortedAgents.length; i++) {
+    for (let j = i + 1; j < sortedAgents.length; j++) {
+      const a = sortedAgents[i], b = sortedAgents[j];
+      if (retrySet.has(b.phaseId) || a.description !== b.description) continue;
+      if (new Date(b.startTs).getTime() - new Date(a.startTs).getTime() > 5 * 60 * 1000) continue;
+      retries.push({ ts: b.startTs, triggeredByErrorTs: null, phaseId: b.phaseId,
+        description: b.description, matchMethod: 'duplicate-description-5min' });
+      retrySet.add(b.phaseId);
+    }
+  }
+
+  return retries.sort((a, b) => a.ts.localeCompare(b.ts));
+}
+
 export async function aggregateSession({ sessionLogPath, hooksLogPath, sessionId }) {
   const events = [];
   for await (const ev of readJsonl(sessionLogPath)) events.push(ev);
@@ -456,6 +545,19 @@ export async function aggregateSession({ sessionLogPath, hooksLogPath, sessionId
   const skills = aggregateSkills(finalPhases);
   const rules = aggregateRules(events, finalPhases);
 
+  // Detect errors and retries
+  const errors = detectErrors(events, phases, hooks);
+  const retries = detectRetries(phases, errors);
+
+  // Propagate error and retry counts to phases and teams
+  for (const p of phases) {
+    p.errorsCount = errors.filter((e) => e.phaseId === p.phaseId).length;
+    p.retriesCount = retries.filter((r) => r.phaseId === p.phaseId).length;
+  }
+  for (const t of teams.values()) {
+    t.errorsCount = errors.filter((e) => e.teamName === t.team_name).length;
+  }
+
   return {
     sessionId: sessionId ?? null,
     logPath: sessionLogPath,
@@ -468,8 +570,8 @@ export async function aggregateSession({ sessionLogPath, hooksLogPath, sessionId
       opsCount: s.opsCount,
       tokensTotal: s.tokensTotal,
       costUsd: s.costUsd,
-      errorsCount: 0,
-      retriesCount: 0,
+      errorsCount: errors.length,
+      retriesCount: retries.length,
       timeBreakdown,
     },
     teams: [...teams.values()],
@@ -477,6 +579,6 @@ export async function aggregateSession({ sessionLogPath, hooksLogPath, sessionId
     topAgents,
     topToolCalls,
     toolCounts,
-    skills, hooks, rules, errors: [], retries: [],
+    skills, hooks, rules, errors, retries,
   };
 }
