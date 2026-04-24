@@ -63,8 +63,34 @@ export function extractToolUses(msg) {
   return msg.message.content.filter((b) => b.type === 'tool_use');
 }
 
+const HOOKS_LOG_PATH = `${LOG_DIR}/hooks.log`;
+
+async function handleStatsRequest(req, res) {
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  const sessionId = url.searchParams.get('sessionId');
+  if (!sessionId) { res.writeHead(204); res.end(); return; }
+  const logPath = sessionLogs.get(sessionId);
+  if (!logPath) {
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'session_log_not_found' }));
+    return;
+  }
+  try {
+    const { aggregateSession } = await import('./lib/stats.js');
+    const out = await aggregateSession({ sessionLogPath: logPath, hooksLogPath: HOOKS_LOG_PATH, sessionId });
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(out));
+  } catch (err) {
+    console.error('aggregateSession failed:', err);
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'aggregate_failed', message: err.message }));
+  }
+}
+
 // Static file server
 const httpServer = createServer(async (req, res) => {
+  if (req.url?.startsWith('/api/stats')) return handleStatsRequest(req, res);
+
   const urlPath = req.url === '/' ? '/index.html' : req.url;
   const publicDir = join(__dirname, 'public');
   const filePath = join(publicDir, urlPath);
@@ -182,7 +208,16 @@ async function processMessage(ws, prompt) {
       if (!line.trim()) continue;
       try {
         const event = JSON.parse(line);
-        if (event.session_id) state.sessionId = event.session_id;
+        if (event.session_id) {
+          state.sessionId = event.session_id;
+          if (state.log?.path && !sessionLogs.has(event.session_id)) {
+            sessionLogs.set(event.session_id, state.log.path);
+          }
+          if (!state.sessionMetaSent) {
+            safeSend(ws, { type: 'session_meta', sessionId: event.session_id });
+            state.sessionMetaSent = true;
+          }
+        }
 
         // Always send raw event to debug
         safeSend(ws, { type: 'debug_raw', event });
@@ -279,6 +314,7 @@ async function processMessage(ws, prompt) {
 
 // Per-connection state: each browser tab gets its own claude session
 const connections = new Map();
+const sessionLogs = new Map();  // sessionId -> absolute log path, populated on first session_id event
 
 const wss = new WebSocketServer({ server: httpServer });
 wss.on('error', (err) => console.error('WebSocket server error:', err));
@@ -330,6 +366,7 @@ wss.on('connection', async (ws) => {
 
   ws.on('close', () => {
     const s = connections.get(ws);
+    if (s?.sessionId) sessionLogs.delete(s.sessionId);
     s?.log?.close();
     connections.delete(ws);
   });
