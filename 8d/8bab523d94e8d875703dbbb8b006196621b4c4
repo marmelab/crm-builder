@@ -1,0 +1,34 @@
+chat-service/test/stats.test.js
+  9805a41217e988f0 141,147,149,154,157,163,167-168,173-187
+chat-service/public/chat.css
+  9805a41217e988f0 290-291
+chat-service/public/chat.js
+  9805a41217e988f0 621-626
+chat-service/lib/stats.js
+  9805a41217e988f0 38-68,238,280,282-286
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "8d8bab523d94e8d875703dbbb8b006196621b4c4",
+  "prompts": {
+    "9805a41217e988f0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ac2e66ab-6b0f-498d-8ac3-931e133375cb",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Jerome",
+      "messages": [],
+      "total_additions": 73,
+      "total_deletions": 2111,
+      "accepted_lines": 179,
+      "overriden_lines": 0
+    }
+  },
+  "humans": {
+    "h_84c0d888491a2d": {
+      "author": "Jerome"
+    }
+  }
+}
