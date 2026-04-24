@@ -677,6 +677,31 @@ New `chat-service/test/smoke-discussions.mjs` (243 lines). Boots `server.js` aga
 
 ---
 
+## Phase 29 — `cancelled` session state + saveMeta race fix (2026-04-24, branch `feat/progress-bar+new-status`)
+
+Previously, pressing ⏹ STOP transitioned the session to `completed` — indistinguishable from a natural end-of-turn. The history panel couldn't show "user-interrupted" vs "done" at a glance.
+
+### New `cancelled` state
+- `ALLOWED_STATES` in `chat-service/server.js` extended to `{'in_progress', 'completed', 'cancelled'}`.
+- `processMessage` finally block now transitions to `cancelled` when `wasStopped`, else `completed` (previously always `completed`).
+- `STATE_LABELS` in `chat.js` adds `cancelled: 'Cancelled'`; `setDisplayedState` gives it a dedicated tooltip.
+- CSS badge `.state-cancelled` in orange (`#fb923c`) to distinguish from green (in_progress) and gray (completed). Applies to both the session state pill and the history panel items.
+
+### Concurrent `writeFile` race on `meta.json` — root cause of "sessions disappearing"
+After adding `cancelled`, cancelled sessions stopped showing up in the history list. Investigation found their `meta.json` ended with `}}` (two closing braces) — invalid JSON, silently dropped by `listSessions()`'s `JSON.parse` try/catch.
+
+Trace:
+1. Stop branch at line 541 calls `runtime.session?.recordMessage('assistant', '⏹ Session stopped.')` **without `await`** (fire-and-forget) — mutates `meta.messageCount++` + `lastMessageAt`, issues `writeFile(meta.json)`.
+2. Finally block immediately runs `await transitionState(runtime, 'cancelled')` — mutates `meta.state = 'cancelled'`, issues a second `writeFile(meta.json)`.
+3. Both `writeFile` calls open with `O_TRUNC | O_WRONLY` and write concurrently. Kernel-level interleaving of the two write streams produces a file that is roughly one JSON body followed by the trailing `}` of the other.
+4. `listSessions` swallows the parse error → session silently drops from the list.
+
+Fix in `server.js:545`: `await` the `recordMessage` call in the stop branch so the two writes serialize. Every other `recordMessage` call site is already isolated from `saveMeta` via idle turns, so no changes elsewhere. Two existing corrupt `meta.json` files (`f57dc412-…`, `5a0db60d-…`) manually repaired by stripping the trailing `}`.
+
+**Why**: the race was latent before Phase 29 because the prior code only called `transitionState('completed')` whether stopped or not — and the preceding `recordMessage('⏹ Session stopped.')` raced against `saveMeta('completed')` the same way, but the previous `meta.state` was already `in_progress` so `setState('completed')` was the only *effective* write. Adding the third state revealed the race. Alternatives considered: serializing all `saveMeta` via a per-session mutex — overkill for a 50-line server; writing via rename (tmp + `rename()` atomic swap) — defensible but adds complexity. `await` is the minimal fix that matches the existing pattern (`setState` / `setTitle` / `setClaudeSessionId` are all awaited at their call sites too).
+
+---
+
 ## Open items / known limits
 
 - **`medium-new-field` test** times out at 15 min (bumped to 35 min). Real agent-team flow on a multi-file feature naturally takes 20-30 min.
@@ -690,4 +715,4 @@ New `chat-service/test/smoke-discussions.mjs` (243 lines). Boots `server.js` aga
 
 ---
 
-_Last updated: 2026-04-24 (Phase 28)_
+_Last updated: 2026-04-24 (Phase 29)_
