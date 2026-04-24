@@ -528,7 +528,7 @@ function renderSummarySection(data) {
     el('span', null, `🔧 ${data.summary.opsCount} ops`),
     el('span', null, `🪙 ${formatTokens(data.summary.tokensTotal)} tokens`),
     el('span', null, `💵 $${data.summary.costUsd.toFixed(3)}`),
-    el('span', { className: 'kpi-warn' }, `⚠️ ${data.summary.errorsCount} erreurs`),
+    el('span', { className: 'kpi-warn' }, `⚠️ ${data.summary.errorsCount} errors`),
     el('span', { className: 'kpi-warn' }, `🔁 ${data.summary.retriesCount} retries`),
   );
 
@@ -576,7 +576,7 @@ function renderChronologySection(data) {
 
   const rows = data.phases.map((phase) => renderPhaseRow(phase, relLabel, teamColor));
   return el('section', { className: 'stats-section' },
-    el('h3', { className: 'stats-section-title' }, 'Chronologie'),
+    el('h3', { className: 'stats-section-title' }, 'Timeline'),
     ...rows,
   );
 }
@@ -588,7 +588,7 @@ function renderPhaseRow(phase, relLabel, teamColor) {
   const teamBadge = phase.teamName
     ? el('span', { className: 'phase-team', style: { color: teamColor(phase.teamName), borderColor: teamColor(phase.teamName) } },
         `👥 ${phase.teamName.replace(/^ticket-/, '')}`)
-    : (phase.kind === 'agent' ? el('span', { className: 'phase-team muted' }, '🎭 hors équipe') : null);
+    : (phase.kind === 'agent' ? el('span', { className: 'phase-team muted' }, '🎭 no team') : null);
 
   const warn  = phase.errorsCount  ? el('span', { className: 'phase-warn' }, `⚠️ ${phase.errorsCount}`)  : null;
   const retry = phase.retriesCount ? el('span', { className: 'phase-warn' }, `🔁 ${phase.retriesCount}`) : null;
@@ -637,25 +637,25 @@ function renderChildRow(child, relLabel) {
 
 function renderTopOpsSection(data) {
   const grid = el('div', { className: 'stats-top-grid' },
-    buildTopList('Agents les plus longs', data.topAgents, (a) => ({
+    buildTopList('Longest agents', data.topAgents, (a) => ({
       main: a.label,
       meta: a.teamName ? `👥 ${a.teamName.replace(/^ticket-/,'')}` : '',
       value: formatDuration(a.durationMs),
     })),
-    buildTopList('Tool calls les plus longs', data.topToolCalls, (c) => ({
+    buildTopList('Longest tool calls', data.topToolCalls, (c) => ({
       main: `${toolIcon(c.tool)} ${c.tool}`,
       meta: c.detail ?? '',
       value: `${c.isApprox ? '~' : ''}${formatDuration(c.durationMs)}`,
       slow: !!c.flaggedSlow,
     })),
-    buildTopList('Outils les plus utilisés', data.toolCounts.slice(0, 5), (t) => ({
+    buildTopList('Most-used tools', data.toolCounts.slice(0, 5), (t) => ({
       main: `${toolIcon(t.tool)} ${t.tool}`,
       meta: `${formatDuration(t.totalDurationMs)} total`,
       value: `${t.count} calls`,
     })),
   );
   return el('section', { className: 'stats-section' },
-    el('h3', { className: 'stats-section-title' }, 'Top opérations'),
+    el('h3', { className: 'stats-section-title' }, 'Top operations'),
     grid,
   );
 }
@@ -683,11 +683,11 @@ function buildTopList(title, items, fmt) {
 }
 
 function renderSkillsHooksRulesSection(data) {
-  const skillsList = buildSubList('Skills invoquées', data.skills, (s) => ({
+  const skillsList = buildSubList('Skills invoked', data.skills, (s) => ({
     main: `🧠 ${s.skill}`, count: `${s.count} calls`, meta: `~${formatDuration(s.totalDurationMs)}`,
   }));
 
-  const hooksList = buildSubList('Hooks déclenchés', data.hooks, (h) => {
+  const hooksList = buildSubList('Hooks triggered', data.hooks, (h) => {
     const metaEl = el('span', null,
       el('span', { className: 'sub-ok' }, `✓ ${h.okCount}`), ' ',
       el('span', { className: 'sub-fail' }, `✗ ${h.failCount}`),
@@ -697,12 +697,12 @@ function renderSkillsHooksRulesSection(data) {
     return { main: `🪝 ${h.hookName}`, count: `${h.runs} runs`, metaEl: el('span', null, `${formatDuration(h.totalDurationMs)} · `, metaEl) };
   });
 
-  const rulesList = buildSubList('Rules référencées', data.rules, (r) => ({
+  const rulesList = buildSubList('Rules referenced', data.rules, (r) => ({
     main: `📜 ${r.ruleFile}`, count: `${r.reads} reads`, meta: r.readers.map((x) => `${x.agentType}×${x.count}`).join(', '),
   }));
 
   const note = el('div', { className: 'stats-note' },
-    'Détection des rules basée sur les lectures de .claude/rules/*.md ; un agent peut appliquer une rule sans la relire.');
+    'Rules detection is based on reads of .claude/rules/*.md; an agent may apply a rule without re-reading it.');
 
   return el('section', { className: 'stats-section' },
     el('h3', { className: 'stats-section-title' }, 'Skills · Hooks · Rules'),
@@ -731,10 +731,10 @@ function renderErrorsRetriesSection(data) {
   ].sort((a, b) => a.ts.localeCompare(b.ts));
 
   const section = el('section', { className: 'stats-section' },
-    el('h3', { className: 'stats-section-title' }, 'Erreurs & retries'));
+    el('h3', { className: 'stats-section-title' }, 'Errors & retries'));
 
   if (!merged.length) {
-    section.appendChild(el('div', { className: 'sub-empty' }, 'Aucune erreur ni retry dans cette session 🎉'));
+    section.appendChild(el('div', { className: 'sub-empty' }, 'No errors or retries in this session 🎉'));
     return section;
   }
 

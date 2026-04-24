@@ -614,29 +614,29 @@ Copied `/app-variants/App.fakerest.tsx → /app/src/App.tsx` live in the running
 
 Dates: 2026-04-23 to 2026-04-24.
 
-Nouveau bouton 📊 dans le header du chat widget, disponible en idle après la première question, qui bascule sur un panel de statistiques consultable post-mortem. Objectif : donner à l'utilisateur de quoi diagnostiquer fiabilité et rapidité des opérations (agents, tool calls, hooks, skills, erreurs, retries) sans plonger dans les JSONL bruts.
+New 📊 button in the chat widget header, available when idle after the first user message, that swaps the chat area for a post-mortem statistics panel. Goal: give the user enough signal to diagnose reliability and speed of each run (agents, tool calls, hooks, skills, errors, retries) without having to dig through raw JSONL logs.
 
 ### Architecture
-Agrégateur pur côté serveur dans [`chat-service/lib/stats.js`](chat-service/lib/stats.js) (exporte `aggregateSession()`) — lecture streaming du JSONL de session + corrélation `hooks.log` par worktree, pas de cache au premier jet. Endpoint `GET /api/stats?sessionId=<id>` dans [`chat-service/server.js`](chat-service/server.js) avec map interne `sessionId → logPath` peuplée à la réception du premier event `session_id` (et un nouveau WS event `session_meta` pour que le client connaisse son id). UI vanilla dans [`chat-service/public/`](chat-service/public/) : bouton dans le header, bascule via classe CSS `chat-stats-mode`, helper `el()` pour construire le DOM sans jamais `innerHTML` sur des données dynamiques (les descriptions d'agents dérivent du prompt utilisateur et sont donc potentiellement attaquables).
+Pure server-side aggregator in [`chat-service/lib/stats.js`](chat-service/lib/stats.js) (exports `aggregateSession()`) — streaming read of the session JSONL plus `hooks.log` correlation by worktree, no cache in v1. Endpoint `GET /api/stats?sessionId=<id>` in [`chat-service/server.js`](chat-service/server.js) backed by an internal `sessionId → logPath` map populated on the first `session_id` event (plus a new `session_meta` WS event so the client knows its id). Vanilla UI in [`chat-service/public/`](chat-service/public/): button in the header, mode swap via a `chat-stats-mode` CSS class, small `el()` DOM helper used everywhere to avoid `innerHTML` on dynamic data (agent descriptions derive from the user prompt and are potentially attackable).
 
 ### Panel (5 sections)
-1. **Header résumé** — KPIs (durée, agents, ops, tokens, coût, erreurs, retries), pastilles par team, mini-barre de répartition temporelle par agent type.
-2. **Chronologie 2 niveaux** — phases (orchestrator + subagents) ordonnées chronologiquement ; chaque phase dépliable en sous-timeline (tool calls, skills invoquées, hooks exécutés corrélés depuis hooks.log).
-3. **Top opérations** — 3 leaderboards (agents les plus longs, tool calls les plus longs avec flag jaune > 30s, outils les plus utilisés avec durée cumulée).
-4. **Skills / hooks / rules** — agrégation globale avec counts ; hooks distinguent ✓/✗/SKIP et marquent `blocking` pour les PreToolUse bloquants intentionnels ; rules détectées via lectures de `.claude/rules/*.md` (heuristique documentée dans une note).
-5. **Erreurs & retries** — liste chronologique fusionnée, entrées dépliables avec payload tail ; 4 sources d'erreurs (`notification{priority:immediate}`, `result.is_error`, `task_notification.status:failed`, `hooks.log EXIT≠0` hors blocking) et 3 heuristiques de retries (suffixe `(retry)`/`(after X)`, failure suivi d'une dispatch similaire dans 5min, description dupliquée dans 5min).
+1. **Summary header** — KPIs (duration, agents, ops, tokens, cost, errors, retries), one pill per team, and a horizontal stacked bar for time breakdown by agent type.
+2. **Two-level timeline** — phases (orchestrator + each subagent) in chronological order; each phase is collapsible and expands into a sub-timeline (tool calls, invoked skills, hook executions correlated from hooks.log).
+3. **Top operations** — 3 leaderboards (longest agents, longest tool calls flagged yellow when > 30s, most-used tools with cumulative duration).
+4. **Skills / hooks / rules** — aggregated counts; hooks show ✓/✗/SKIP and tag `blocking` for the intentional PreToolUse blockers; rules are detected by reads of `.claude/rules/*.md` (heuristic, documented with an inline note).
+5. **Errors & retries** — chronologically merged list, entries expandable to show the payload tail; 4 error sources (`notification{priority:immediate}`, `result.is_error`, `task_notification.status:failed`, non-blocking `hooks.log EXIT≠0`) and 3 retry heuristics (`(retry)`/`(after X)` suffix, failure followed by a similar re-dispatch within 5 min, duplicate description within 5 min).
 
 ### Tests
-21 tests Node (built-in `node:test`), fixtures JSONL + hooks.log réalistes (le plus riche est `parallel-two-teams.jsonl` adapté du log réel du 2026-04-23, 2 TeamCreate + 12 agents + 1 retry). Pas de test UI automatisé — validation manuelle via 3 scénarios browser (happy path, session parallèle complète, fetch KO).
+21 Node tests using built-in `node:test`, against realistic JSONL + hooks.log fixtures (the richest is `parallel-two-teams.jsonl`, adapted from the real 2026-04-23 log: 2 TeamCreates + 12 agents + 1 retry). No UI tests — manual validation via 3 browser scenarios (happy path, full parallel session, fetch error).
 
-### Détails notables
-- Lien agent↔team **explicite** via `Agent.input.team_name` indexé par `tool_use_id` (task_started.tool_use_id le référence). Pas d'inférence temporelle — la ligne est posée à l'appel `Agent`.
-- Bash tool calls ont leur durée exacte via `local_bash` task_notification corrélé par `tool_use_id` ; les autres outils ont une durée approximée (`~Xs`) par delta de timestamps avec l'event suivant dans la même phase.
-- Blocking hooks (`block-bash-*`, `circuit-breaker.sh`, `silent-mode-check.sh`) identifiés par liste blanche : leur EXIT=2 est un comportement attendu, pas une erreur.
-- Nouveau bind-mount `./chat-service/lib:/chat-service/lib:ro` dans `docker-compose.yml` pour itérer sur l'aggregator sans rebuild.
+### Notable details
+- Agent↔team linkage is **explicit** via `Agent.input.team_name` indexed by `tool_use_id` (referenced back by `task_started.tool_use_id`). No temporal-bracket guessing — the line is drawn at the Agent call itself.
+- Bash tool calls get their exact duration from `local_bash` task_notification entries sharing the `tool_use_id`; other tools show an approximated `~Ns` based on the delta of timestamps to the next event in the same phase.
+- Blocking hooks (`block-bash-*`, `circuit-breaker.sh`, `silent-mode-check.sh`) are identified by an explicit allowlist: their EXIT=2 is expected behavior, not an error.
+- New bind mount `./chat-service/lib:/chat-service/lib:ro` in `docker-compose.yml` so the aggregator can be iterated on without rebuilding the image.
 
 ### Workflow
-Implémentation via la skill `superpowers:subagent-driven-development` — 17 commits (1 par task + 1 fix docker-compose), chaque task en TDD (test rouge → impl → test vert → commit). Spec: [docs/superpowers/specs/2026-04-23-session-stats-panel-design.md](docs/superpowers/specs/2026-04-23-session-stats-panel-design.md), plan: [docs/superpowers/plans/2026-04-23-session-stats-panel.md](docs/superpowers/plans/2026-04-23-session-stats-panel.md).
+Implemented with the `superpowers:subagent-driven-development` skill — 17 commits (one per task plus a docker-compose fix), each task in TDD (red test → implementation → green test → commit). Spec: [docs/superpowers/specs/2026-04-23-session-stats-panel-design.md](docs/superpowers/specs/2026-04-23-session-stats-panel-design.md), plan: [docs/superpowers/plans/2026-04-23-session-stats-panel.md](docs/superpowers/plans/2026-04-23-session-stats-panel.md).
 
 ---
 
