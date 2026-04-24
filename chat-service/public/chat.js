@@ -12,6 +12,25 @@ const stats = document.getElementById('chat-stats');
 const statsBtn = document.getElementById('chat-stats-btn');
 const statsPanel = document.getElementById('chat-stats-panel');
 
+function el(tag, props, ...children) {
+  const e = document.createElement(tag);
+  if (props) {
+    for (const [k, v] of Object.entries(props)) {
+      if (v == null) continue;
+      if (k === 'className') e.className = v;
+      else if (k === 'style' && typeof v === 'object') Object.assign(e.style, v);
+      else if (k === 'dataset' && typeof v === 'object') for (const [dk, dv] of Object.entries(v)) e.dataset[dk] = dv;
+      else if (k in e) e[k] = v;
+      else e.setAttribute(k, v);
+    }
+  }
+  for (const c of children) {
+    if (c == null || c === false) continue;
+    e.appendChild(typeof c === 'string' || typeof c === 'number' ? document.createTextNode(String(c)) : c);
+  }
+  return e;
+}
+
 function formatTokens(n) {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
   if (n >= 1_000) return (n / 1_000).toFixed(1) + 'k';
@@ -444,3 +463,45 @@ debugBtn.addEventListener('click', () => {
     messages.querySelectorAll('.msg-debug').forEach((el) => el.remove());
   }
 });
+
+async function enterStatsMode() {
+  if (!currentSessionId) return;
+  statsMode = true;
+  widget.classList.add('chat-stats-mode');
+  statsPanel.hidden = false;
+  statsBtn.textContent = '←';
+  statsBtn.title = 'Back to chat';
+
+  statsPanel.replaceChildren(el('div', { className: 'stats-loading' }, 'Loading stats…'));
+  try {
+    const res = await fetch(`/api/stats?sessionId=${encodeURIComponent(currentSessionId)}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    renderStatsPanel(data);
+  } catch (err) {
+    const retry = el('button', { id: 'stats-retry-btn', onclick: enterStatsMode }, 'Retry');
+    const back  = el('button', { id: 'stats-back-btn',  onclick: exitStatsMode  }, '← Back to chat');
+    const label = el('div', null, el('strong', null, 'Failed to load stats:'), ' ', String(err.message));
+    statsPanel.replaceChildren(el('div', { className: 'stats-error' }, label, retry, back));
+  }
+}
+
+function exitStatsMode() {
+  statsMode = false;
+  widget.classList.remove('chat-stats-mode');
+  statsPanel.hidden = true;
+  statsPanel.replaceChildren();
+  statsBtn.textContent = '📊';
+  statsBtn.title = 'Session stats';
+}
+
+statsBtn.addEventListener('click', () => {
+  if (statsMode) exitStatsMode(); else enterStatsMode();
+});
+
+// Placeholder until Tasks 11-15 fill in the sections
+function renderStatsPanel(data) {
+  const pre = el('pre', { style: { fontSize: '11px', color: '#636366', overflow: 'auto' } });
+  pre.textContent = JSON.stringify(data, null, 2);
+  statsPanel.replaceChildren(pre);
+}
