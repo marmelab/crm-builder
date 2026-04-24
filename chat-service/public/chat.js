@@ -9,6 +9,8 @@ const send     = document.getElementById('chat-send');
 const statusDots = document.getElementById('chat-status-dots');
 const messages = document.getElementById('chat-messages');
 const stats = document.getElementById('chat-stats');
+const statsBtn = document.getElementById('chat-stats-btn');
+const statsPanel = document.getElementById('chat-stats-panel');
 
 function formatTokens(n) {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
@@ -18,6 +20,15 @@ function formatTokens(n) {
 
 let working  = false;
 let debugMode = false;
+let hasUserMessage = false;
+let currentSessionId = null;
+let statsMode = false;
+
+function updateStatsBtnVisibility() {
+  if (!hasUserMessage) { statsBtn.hidden = true; return; }
+  statsBtn.hidden = false;
+  statsBtn.disabled = working;
+}
 
 // Monotonic sequence assigned to every persistent message (user/assistant
 // text, choices, debug events). Used to interleave buffered debug events at
@@ -68,6 +79,11 @@ ws.onmessage = (event) => {
   let msg;
   try { msg = JSON.parse(event.data); } catch { return; }
 
+  if (msg.type === 'session_meta') {
+    currentSessionId = msg.sessionId;
+    return;
+  }
+
   if (msg.type === 'status') {
     working = msg.working;
     send.disabled = working;
@@ -87,6 +103,7 @@ ws.onmessage = (event) => {
     } else if (!working && existing) {
       existing.remove();
     }
+    updateStatsBtnVisibility();
     return;
   }
 
@@ -153,6 +170,8 @@ function appendChoices(content, options, seq = ++seqCounter) {
       wrap.remove();
       appendMessage('user', label);
       ws.send(JSON.stringify({ content: id }));
+      hasUserMessage = true;
+      updateStatsBtnVisibility();
     });
     wrap.appendChild(btn);
   });
@@ -384,6 +403,8 @@ form.addEventListener('submit', (e) => {
   ws.send(JSON.stringify({ content }));
   input.value = '';
   input.style.height = 'auto';
+  hasUserMessage = true;
+  updateStatsBtnVisibility();
 });
 
 // Toggle open/close

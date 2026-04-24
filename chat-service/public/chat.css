@@ -195,3 +195,33 @@ body { height: 100vh; overflow: hidden; font-family: system-ui, sans-serif; back
   min-height: 24px; font-weight: 500;
   border-top: 1px solid #2c2c2e;
 }
+
+#chat-stats-btn {
+  background: none; border: none; color: #636366;
+  cursor: pointer; font-size: 14px; padding: 2px 4px;
+  transition: color .15s, opacity .15s; border-radius: 6px;
+}
+#chat-stats-btn:hover:not(:disabled) { color: #fff; }
+#chat-stats-btn:disabled { opacity: .35; cursor: not-allowed; }
+
+#chat-widget.chat-stats-mode #chat-messages,
+#chat-widget.chat-stats-mode #chat-form,
+#chat-widget.chat-stats-mode #chat-debug { display: none; }
+
+#chat-stats-panel {
+  flex: 1; overflow-y: auto; padding: 16px;
+  font-size: 13px; color: #f2f2f7;
+}
+#chat-stats-panel::-webkit-scrollbar { width: 4px; }
+#chat-stats-panel::-webkit-scrollbar-thumb { background: #3a3a3c; border-radius: 2px; }
+
+.stats-loading { padding: 24px; text-align: center; color: #8e8e93; }
+.stats-error {
+  padding: 16px; color: #f87171;
+  background: rgba(248,113,113,.08); border-radius: 10px;
+}
+.stats-error button {
+  margin-top: 8px; margin-right: 8px;
+  background: #2c2c2e; border: 1px solid #3a3a3c; color: #f2f2f7;
+  padding: 6px 12px; border-radius: 8px; cursor: pointer;
+}
