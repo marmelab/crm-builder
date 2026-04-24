@@ -515,6 +515,7 @@ function renderStatsPanel(data) {
   statsPanel.replaceChildren(
     renderSummarySection(data),
     renderChronologySection(data),
+    renderTopOpsSection(data),
   );
 }
 
@@ -630,4 +631,51 @@ function renderChildRow(child, relLabel) {
     detailSpan,
     el('span', { className: 'child-dur' }, dur),
   );
+}
+
+function renderTopOpsSection(data) {
+  const grid = el('div', { className: 'stats-top-grid' },
+    buildTopList('Agents les plus longs', data.topAgents, (a) => ({
+      main: a.label,
+      meta: a.teamName ? `👥 ${a.teamName.replace(/^ticket-/,'')}` : '',
+      value: formatDuration(a.durationMs),
+    })),
+    buildTopList('Tool calls les plus longs', data.topToolCalls, (c) => ({
+      main: `${toolIcon(c.tool)} ${c.tool}`,
+      meta: c.detail ?? '',
+      value: `${c.isApprox ? '~' : ''}${formatDuration(c.durationMs)}`,
+      slow: !!c.flaggedSlow,
+    })),
+    buildTopList('Outils les plus utilisés', data.toolCounts.slice(0, 5), (t) => ({
+      main: `${toolIcon(t.tool)} ${t.tool}`,
+      meta: `${formatDuration(t.totalDurationMs)} total`,
+      value: `${t.count} calls`,
+    })),
+  );
+  return el('section', { className: 'stats-section' },
+    el('h3', { className: 'stats-section-title' }, 'Top opérations'),
+    grid,
+  );
+}
+
+function buildTopList(title, items, fmt) {
+  const col = el('div', { className: 'stats-top-col' },
+    el('h4', null, title),
+  );
+  if (!items.length) {
+    col.appendChild(el('ol', { className: 'stats-top-list' }, el('li', { className: 'top-empty' }, '—')));
+    return col;
+  }
+  const list = el('ol', { className: 'stats-top-list' });
+  for (const it of items) {
+    const f = fmt(it);
+    const li = el('li', f.slow ? { className: 'slow' } : null,
+      el('div', { className: 'top-main' }, f.main),
+      el('div', { className: 'top-meta' }, f.meta),
+      el('div', { className: 'top-value' }, f.value),
+    );
+    list.appendChild(li);
+  }
+  col.appendChild(list);
+  return col;
 }

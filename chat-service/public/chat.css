@@ -287,3 +287,21 @@ body { height: 100vh; overflow: hidden; font-family: system-ui, sans-serif; back
 .child-dur { color: #636366; font-variant-numeric: tabular-nums; }
 .child-hook .child-label { color: #a78bfa; }
 .child-skill .child-label { color: #34d399; }
+
+.stats-top-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+.stats-top-col { background: #2c2c2e; border-radius: 10px; padding: 10px 12px; }
+.stats-top-col h4 {
+  font-size: 11px; font-weight: 600; color: #8e8e93;
+  margin-bottom: 6px; text-transform: uppercase; letter-spacing: .04em;
+}
+.stats-top-list { list-style: decimal inside; padding: 0; margin: 0; }
+.stats-top-list li { padding: 4px 0; font-size: 11px; border-bottom: 1px solid #3a3a3c; }
+.stats-top-list li:last-child { border-bottom: none; }
+.stats-top-list li.slow .top-value { color: #f59e0b; font-weight: 600; }
+.top-main { color: #f2f2f7; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.top-meta { color: #636366; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.top-value { color: #8e8e93; font-variant-numeric: tabular-nums; }
+.top-empty { color: #636366; font-style: italic; list-style: none; }
