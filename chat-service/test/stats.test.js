@@ -138,6 +138,22 @@ test('aggregateSession: tool durations come from tool_use_id → tool_result pai
   assert.deepEqual(greps.map((g) => g.durationMs).sort((a, b) => a - b), [250, 450]);
 });
 
+test('aggregateSession: attaches thinking/text preview to agent_processing rows when available', async () => {
+  const out = await aggregateSession({
+    sessionLogPath: fx('tool-timings-with-gaps.jsonl'),
+    hooksLogPath: null,
+    sessionId: 'sess-gaps',
+  });
+  const processing = out.phases[0].children.filter((c) => c.kind === 'agent_processing');
+  const withPreview = processing.find((p) => p.preview);
+  assert.ok(withPreview, 'expected at least one agent_processing row with preview');
+  assert.match(withPreview.preview, /export const foo|list \/tmp/i);
+  // Gap buffer resets after each tool_use, so a subsequent gap with no intervening
+  // thinking/text block must have preview === null.
+  const withoutPreview = processing.find((p) => !p.preview);
+  assert.ok(withoutPreview, 'expected at least one agent_processing row without preview');
+});
+
 test('aggregateSession: inserts agent_processing rows for gaps ≥ threshold, not within a tool_use batch', async () => {
   const out = await aggregateSession({
     sessionLogPath: fx('tool-timings-with-gaps.jsonl'),

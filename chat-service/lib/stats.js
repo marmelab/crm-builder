@@ -190,6 +190,17 @@ function buildToolResultMap(events) {
   return m;
 }
 
+const THINKING_PREVIEW_MAX_CHARS = 300;
+
+function previewFromBuffer(buf) {
+  if (!buf || buf.length === 0) return null;
+  const joined = buf.join(' ').replace(/\s+/g, ' ').trim();
+  if (!joined) return null;
+  return joined.length > THINKING_PREVIEW_MAX_CHARS
+    ? joined.slice(0, THINKING_PREVIEW_MAX_CHARS - 1) + '…'
+    : joined;
+}
+
 function populateChildrenAndCounts(events, phases, orchestrator) {
   const agentPhases = phases.filter((p) => p.kind === 'agent');
   const phaseByToolUseId = buildPhaseOwnerMap(events, agentPhases);
@@ -197,12 +208,25 @@ function populateChildrenAndCounts(events, phases, orchestrator) {
   const toolCounts = new Map();
   const allToolCalls = [];
   const lastToolResultTsByPhase = new Map();
+  const thinkingBufferByPhase = new Map();
 
   for (const rec of events) {
     if (rec.type !== 'debug_raw' || rec.event?.type !== 'assistant') continue;
     const owner = resolvePhase(rec.event, phaseByToolUseId) ?? orchestrator;
     if (!owner) continue;
-    const allUses = extractToolUsesFromAssistant(rec.event);
+    const blocks = rec.event.message?.content || [];
+    for (const b of blocks) {
+      if (b.type === 'thinking' && b.thinking) {
+        const buf = thinkingBufferByPhase.get(owner.phaseId) || [];
+        buf.push(b.thinking);
+        thinkingBufferByPhase.set(owner.phaseId, buf);
+      } else if (b.type === 'text' && b.text) {
+        const buf = thinkingBufferByPhase.get(owner.phaseId) || [];
+        buf.push(b.text);
+        thinkingBufferByPhase.set(owner.phaseId, buf);
+      }
+    }
+    const allUses = blocks.filter((b) => b.type === 'tool_use');
     if (allUses.length === 0) continue;
 
     // Every tool_use (including dispatches like Agent/Team*) advances the phase's
@@ -223,9 +247,11 @@ function populateChildrenAndCounts(events, phases, orchestrator) {
       if (lastTR) {
         const gapMs = msBetween(lastTR, rec.ts);
         if (gapMs >= AGENT_PROCESSING_THRESHOLD_MS) {
-          owner.children.push({ kind: 'agent_processing', ts: lastTR, durationMs: gapMs });
+          const preview = previewFromBuffer(thinkingBufferByPhase.get(owner.phaseId));
+          owner.children.push({ kind: 'agent_processing', ts: lastTR, durationMs: gapMs, preview });
         }
       }
+      thinkingBufferByPhase.set(owner.phaseId, []);
       for (const b of visibleUses) {
         const toolResultTs = toolResultTsByToolUseId.get(b.id) ?? null;
         const durationMs = toolResultTs ? Math.max(0, msBetween(rec.ts, toolResultTs)) : 0;
