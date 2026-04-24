@@ -3,10 +3,19 @@ const fab      = document.getElementById('chat-fab');
 const toggle   = document.getElementById('chat-toggle');
 const expandBtn = document.getElementById('chat-expand');
 const debugBtn = document.getElementById('chat-debug');
+const stateBtn = document.getElementById('chat-state');
+const historyBtn = document.getElementById('chat-history');
+const newBtn = document.getElementById('chat-new');
+const historyPanel = document.getElementById('chat-history-panel');
+const historyList = document.getElementById('history-list');
+const historyEmpty = document.getElementById('history-empty');
+const historyClose = document.getElementById('history-close');
+const chatTitle = document.getElementById('chat-title');
 const form     = document.getElementById('chat-form');
 const input    = document.getElementById('chat-input');
 const send     = document.getElementById('chat-send');
 const statusDots = document.getElementById('chat-status-dots');
+const stopBtn = document.getElementById('chat-stop');
 const messages = document.getElementById('chat-messages');
 const stats = document.getElementById('chat-stats');
 
@@ -16,8 +25,36 @@ function formatTokens(n) {
   return String(n);
 }
 
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+
+function formatRelative(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const diff = Date.now() - d.getTime();
+  const min = Math.round(diff / 60_000);
+  if (min < 1) return 'just now';
+  if (min < 60) return `${min} min ago`;
+  const h = Math.round(min / 60);
+  if (h < 24) return `${h} h ago`;
+  const days = Math.round(h / 24);
+  if (days < 7) return `${days} d ago`;
+  return d.toLocaleDateString();
+}
+
 let working  = false;
 let debugMode = false;
+let currentSessionId = null;
+let currentTitle = '';
+let currentState = 'in_progress';
+
+const STATE_LABELS = {
+  in_progress: 'In progress',
+  completed: 'Completed',
+};
 
 // Monotonic sequence assigned to every persistent message (user/assistant
 // text, choices, debug events). Used to interleave buffered debug events at
@@ -62,31 +99,141 @@ const TOOL_LABELS = {
   result:       '✅ Turn complete',
 };
 
-const ws = new WebSocket(`ws://${location.host}`);
+function buildWsUrl() {
+  const params = new URLSearchParams(location.search);
+  const id = params.get('session');
+  const qs = id ? `?session=${encodeURIComponent(id)}` : '';
+  return `ws://${location.host}${qs}`;
+}
 
-ws.onmessage = (event) => {
+let ws;
+let switchingSession = false;
+
+function connectWs() {
+  ws = new WebSocket(buildWsUrl());
+  ws.onmessage = handleWsMessage;
+  ws.onclose = () => {
+    if (switchingSession) { switchingSession = false; return; }
+    appendMessage('assistant', 'Connection lost. Please reload the page.');
+  };
+}
+
+// Switch to another session (or start a fresh one with id=null) without
+// reloading the page — keeps the CRM iframe state intact.
+function switchSession(id) {
+  switchingSession = true;
+  try { ws?.close(); } catch {}
+  const url = new URL(location.href);
+  if (id) url.searchParams.set('session', id);
+  else url.searchParams.delete('session');
+  history.pushState({}, '', url);
+  resetChatUi();
+  connectWs();
+}
+
+function resetChatUi() {
+  messages.innerHTML = '';
+  currentSessionId = null;
+  currentTitle = '';
+  working = false;
+  send.disabled = false;
+  statusDots.style.display = 'none';
+  stopBtn.hidden = true;
+  stopBtn.disabled = false;
+  historyPanel.hidden = true;
+  stats.textContent = '';
+}
+
+window.addEventListener('popstate', () => {
+  switchingSession = true;
+  try { ws?.close(); } catch {}
+  resetChatUi();
+  connectWs();
+});
+
+// Sync the dots, stop button, and "Working on it..." bubble to the current
+// value of `working`. Called from both init (on reconnect) and the status
+// handler (on live transitions). Intentionally does NOT touch .msg-queued
+// bubbles — that demote logic is a false→true transition concern and lives
+// in the status handler.
+function renderWorkingUi() {
+  statusDots.style.display = working ? 'inline-flex' : 'none';
+  stopBtn.hidden = !working;
+  stopBtn.disabled = false;
+  const existing = messages.querySelector('.msg-working');
+  if (working && !existing) {
+    const el = document.createElement('div');
+    el.className = 'msg msg-working';
+    const spinner = document.createElement('div');
+    spinner.className = 'spinner';
+    const label = document.createElement('span');
+    label.textContent = 'Working on it...';
+    el.appendChild(spinner);
+    el.appendChild(label);
+    messages.appendChild(el);
+    messages.scrollTop = messages.scrollHeight;
+  } else if (!working && existing) {
+    existing.remove();
+  }
+}
+
+function handleWsMessage(event) {
   let msg;
   try { msg = JSON.parse(event.data); } catch { return; }
 
-  if (msg.type === 'status') {
-    working = msg.working;
-    send.disabled = working;
-    statusDots.style.display = working ? 'inline-flex' : 'none';
-    const existing = messages.querySelector('.msg-working');
-    if (working && !existing) {
-      const el = document.createElement('div');
-      el.className = 'msg msg-working';
-      const spinner = document.createElement('div');
-      spinner.className = 'spinner';
-      const label = document.createElement('span');
-      label.textContent = 'Working on it...';
-      el.appendChild(spinner);
-      el.appendChild(label);
-      messages.appendChild(el);
-      messages.scrollTop = messages.scrollHeight;
-    } else if (!working && existing) {
-      existing.remove();
+  if (msg.type === 'init') {
+    currentSessionId = msg.sessionId;
+    setDisplayedTitle(msg.title || 'New session');
+    setDisplayedState(msg.state || 'in_progress');
+    messages.innerHTML = '';
+    const list = msg.messages || [];
+    // The last `queuedCount` user messages are still sitting in the server's
+    // queue — re-apply the "waiting" badge on reconnect.
+    const queuedIdx = new Set();
+    let remaining = msg.queuedCount || 0;
+    for (let i = list.length - 1; i >= 0 && remaining > 0; i--) {
+      if (list[i].role === 'user') { queuedIdx.add(i); remaining--; }
     }
+    list.forEach((m, i) => appendMessage(m.role, m.content, { queued: queuedIdx.has(i) }));
+    // Re-hydrate the "working" visuals directly (not through the status
+    // handler) — going through the handler would interpret this as a new
+    // turn starting and demote the queued bubbles we just rendered.
+    if (msg.working) {
+      working = true;
+      renderWorkingUi();
+    }
+    refreshHistoryIfOpen();
+    return;
+  }
+
+  if (msg.type === 'state') {
+    setDisplayedState(msg.state);
+    refreshHistoryIfOpen();
+    return;
+  }
+
+  if (msg.type === 'title') {
+    setDisplayedTitle(msg.title);
+    refreshHistoryIfOpen();
+    return;
+  }
+
+  if (msg.type === 'status') {
+    const wasWorking = working;
+    working = msg.working;
+    // working=true coming out of an idle state means a queued message just
+    // started processing — promote the oldest queued bubble to normal. Only
+    // fire on a real false→true transition: `init` may set working=true
+    // already on reconnect, and demoting there would strip the badge off
+    // still-queued messages.
+    if (!wasWorking && working) {
+      const oldestQueued = messages.querySelector('.msg-queued');
+      if (oldestQueued) {
+        oldestQueued.classList.remove('msg-queued');
+        oldestQueued.querySelector('.queued-badge')?.remove();
+      }
+    }
+    renderWorkingUi();
     return;
   }
 
@@ -120,12 +267,25 @@ ws.onmessage = (event) => {
     const existing = messages.querySelector('.msg-working');
     if (existing) existing.remove();
     appendMessage('assistant', msg.content);
+    refreshHistoryIfOpen();
   }
-};
+}
 
-ws.onclose = () => {
-  appendMessage('assistant', 'Connection lost. Please reload the page.');
-};
+connectWs();
+
+function setDisplayedTitle(t) {
+  currentTitle = t;
+  chatTitle.textContent = t;
+}
+
+function setDisplayedState(s) {
+  currentState = s;
+  stateBtn.textContent = STATE_LABELS[s] || s;
+  stateBtn.className = `state-${s}`;
+  stateBtn.title = s === 'completed'
+    ? 'Claude session ended — send a message to restart'
+    : 'Claude is working…';
+}
 
 function appendChoices(content, options, seq = ++seqCounter) {
   const wrap = document.createElement('div');
@@ -152,7 +312,8 @@ function appendChoices(content, options, seq = ++seqCounter) {
     btn.addEventListener('click', () => {
       wrap.remove();
       appendMessage('user', label);
-      ws.send(JSON.stringify({ content: id }));
+      ws.send(JSON.stringify({ content: id, display: label }));
+      refreshHistoryIfOpen();
     });
     wrap.appendChild(btn);
   });
@@ -160,10 +321,19 @@ function appendChoices(content, options, seq = ++seqCounter) {
   placeIntoMessages(wrap, seq);
 }
 
-function appendMessage(role, content, seq = ++seqCounter) {
+function appendMessage(role, content, seqOrOpts = ++seqCounter) {
+  const opts = typeof seqOrOpts === 'object' && seqOrOpts !== null ? seqOrOpts : {};
+  const seq = typeof seqOrOpts === 'number' ? seqOrOpts : (opts.seq ?? ++seqCounter);
+  const queued = !!opts.queued;
   const el = document.createElement('div');
-  el.className = `msg msg-${role}`;
+  el.className = `msg msg-${role}${queued ? ' msg-queued' : ''}`;
   el.textContent = content;
+  if (queued) {
+    const badge = document.createElement('span');
+    badge.className = 'queued-badge';
+    badge.textContent = '⏳ waiting';
+    el.appendChild(badge);
+  }
   placeIntoMessages(el, seq);
 }
 
@@ -362,6 +532,104 @@ function renderDebugRaw(msg, seq = ++seqCounter) {
   appendRaw(ev, seq);
 }
 
+// ─── History panel ──────────────────────────────────────────
+// Debounced refresh for the open panel. Triggered by WS events that change
+// list data (new message → messageCount/lastMessageAt, title/state changes)
+// and by local sends (the server updates meta before we get any echo back).
+let historyRefreshTimer = null;
+function refreshHistoryIfOpen() {
+  if (historyPanel.hidden) return;
+  clearTimeout(historyRefreshTimer);
+  historyRefreshTimer = setTimeout(openHistory, 250);
+}
+
+async function openHistory() {
+  try {
+    const res = await fetch('/api/sessions');
+    const list = await res.json();
+    historyList.innerHTML = '';
+    if (list.length === 0) {
+      historyEmpty.hidden = false;
+    } else {
+      historyEmpty.hidden = true;
+      list.forEach((d) => historyList.appendChild(renderHistoryItem(d)));
+    }
+    historyPanel.hidden = false;
+  } catch (err) {
+    console.error('Failed to load history:', err);
+  }
+}
+
+function renderHistoryItem(d) {
+  const li = document.createElement('li');
+  li.className = 'history-item';
+  if (d.id === currentSessionId) li.classList.add('active');
+
+  const title = document.createElement('div');
+  title.className = 'history-title';
+  title.textContent = d.title || '(untitled)';
+  li.appendChild(title);
+
+  const meta = document.createElement('div');
+  meta.className = 'history-meta';
+  const statePill = document.createElement('span');
+  const st = d.state || 'in_progress';
+  statePill.className = `history-state state-${st}`;
+  statePill.textContent = STATE_LABELS[st] || st;
+  meta.appendChild(statePill);
+  meta.appendChild(document.createTextNode(` · ${formatRelative(d.lastMessageAt || d.createdAt)} · ${d.messageCount} message${d.messageCount > 1 ? 's' : ''}`));
+  li.appendChild(meta);
+
+  li.addEventListener('click', () => {
+    if (d.id === currentSessionId) {
+      historyPanel.hidden = true;
+      return;
+    }
+    switchSession(d.id);
+  });
+  return li;
+}
+
+historyBtn.addEventListener('click', () => {
+  if (historyPanel.hidden) openHistory();
+  else historyPanel.hidden = true;
+});
+historyClose.addEventListener('click', () => { historyPanel.hidden = true; });
+
+stopBtn.addEventListener('click', () => {
+  if (!working || stopBtn.disabled) return;
+  if (ws?.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'stop' }));
+  }
+  stopBtn.disabled = true; // re-enabled on next status flip
+});
+
+newBtn.addEventListener('click', () => {
+  switchSession(null);
+});
+
+// ─── Title rename ───────────────────────────────────────────
+chatTitle.addEventListener('click', async () => {
+  if (!currentSessionId) return;
+  const next = prompt('Rename session:', currentTitle);
+  if (next == null) return;
+  const trimmed = next.trim();
+  if (!trimmed || trimmed === currentTitle) return;
+  try {
+    const res = await fetch(`/api/sessions/${currentSessionId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: trimmed }),
+    });
+    if (!res.ok) throw new Error('rename failed');
+    const meta = await res.json();
+    setDisplayedTitle(meta.title || 'New session');
+    refreshHistoryIfOpen();
+  } catch (err) {
+    console.error('Rename failed:', err);
+  }
+});
+
 // Auto-resize textarea
 input.addEventListener('input', () => {
   input.style.height = 'auto';
@@ -379,9 +647,10 @@ input.addEventListener('keydown', (e) => {
 form.addEventListener('submit', (e) => {
   e.preventDefault();
   const content = input.value.trim();
-  if (!content || working) return;
-  appendMessage('user', content);
+  if (!content) return;
+  appendMessage('user', content, { queued: working });
   ws.send(JSON.stringify({ content }));
+  refreshHistoryIfOpen();
   input.value = '';
   input.style.height = 'auto';
 });

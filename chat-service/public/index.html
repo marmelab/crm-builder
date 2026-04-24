@@ -12,10 +12,12 @@
   <div id="chat-widget" class="chat-open">
     <div id="chat-header">
       <div id="chat-header-icon">✦</div>
-      <span id="chat-title">CRM Assistant</span>
+      <span id="chat-title" title="Click to rename">CRM Assistant</span>
+      <span id="chat-state" class="state-in_progress" aria-label="Session state"></span>
       <span id="chat-status-dots" style="display:none">
         <span></span><span></span><span></span>
       </span>
+      <button id="chat-stop" title="Stop Claude" aria-label="Stop" hidden>⏹</button>
       <button id="chat-debug" title="Debug OFF" aria-label="Toggle debug">🔍</button>
       <button id="chat-expand" title="Expand" aria-label="Expand chat">⤢</button>
       <button id="chat-toggle" aria-label="Toggle chat">✕</button>
@@ -31,6 +33,19 @@
       <button type="submit" id="chat-send" aria-label="Send">↑</button>
     </form>
     <div id="chat-stats" title="Tokens and cost used in this session"></div>
+  </div>
+
+  <div id="chat-actions">
+    <button id="chat-history" title="History" aria-label="Session history">📂</button>
+    <button id="chat-new" title="New session" aria-label="New session">✚</button>
+    <div id="chat-history-panel" hidden>
+      <div id="history-panel-header">
+        <span>Sessions</span>
+        <button id="history-close" aria-label="Close history">✕</button>
+      </div>
+      <ul id="history-list"></ul>
+      <div id="history-empty" hidden>No saved sessions.</div>
+    </div>
   </div>
 
   <button id="chat-fab" aria-label="Open assistant">✦</button>

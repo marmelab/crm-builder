@@ -10,3 +10,19 @@
 * clean logs hooks
 
 * refactor agents & skills (trop verbeux)
+
+* refactor chat.js
+
+* refactor server.js
+
+* tests/ et test/ -> à renommer
+
+******************************************************************************
+* nouveau status "cancelled"
+* nouveau status "en attente" s'il veut poser une question
+* progress bar
+******************************************************************************
+
+* to discuss with françois
+* -  stop -> clean worktrees / sessions / etc.
+* -  tester "stop" sur grosse task
