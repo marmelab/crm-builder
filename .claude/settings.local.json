@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node --check /home/erwan/projets/innovation/usine_agentique/crm-builder*)"
+    ]
+  }
+}
