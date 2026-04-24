@@ -677,7 +677,39 @@ New `chat-service/test/smoke-discussions.mjs` (243 lines). Boots `server.js` aga
 
 ---
 
-## Phase 29 — `cancelled` session state + saveMeta race fix (2026-04-24, branch `feat/progress-bar+new-status`)
+## Phase 29 — Session stats panel
+
+Dates: 2026-04-23 to 2026-04-24.
+
+New 📊 button in the chat widget header, available when idle after the first user message, that swaps the chat area for a post-mortem statistics panel. Goal: give the user enough signal to diagnose reliability and speed of each run (agents, tool calls, hooks, skills, errors, retries) without having to dig through raw JSONL logs.
+
+### Architecture
+Pure server-side aggregator in [`chat-service/lib/stats.js`](chat-service/lib/stats.js) (exports `aggregateSession()`) — streaming read of the session JSONL plus `hooks.log` correlation by worktree, no cache in v1. Endpoint `GET /api/stats?sessionId=<id>` in [`chat-service/server.js`](chat-service/server.js) derives the log path directly from the discussion UUID (`LOG_DIR/<sessionId>/log.jsonl`) — no extra server state. Vanilla UI in [`chat-service/public/`](chat-service/public/): button in the header, mode swap via a `chat-stats-mode` CSS class, small `el()` DOM helper used everywhere to avoid `innerHTML` on dynamic data (agent descriptions derive from the user prompt and are potentially attackable).
+
+### Panel (5 sections)
+1. **Summary header** — KPIs (duration, agents, ops, tokens, cost, errors, retries), one pill per team, and a horizontal stacked bar for time breakdown by agent type.
+2. **Two-level timeline** — phases (orchestrator + each subagent) in chronological order; each phase is collapsible and expands into a sub-timeline (tool calls, invoked skills, hook executions correlated from hooks.log, plus `stream_gap` rows — see below).
+3. **Top operations** — 3 leaderboards (longest agents, longest tool calls flagged yellow when > 30s, most-used tools with cumulative duration).
+4. **Skills / hooks / rules** — aggregated counts; hooks show ✓/✗/SKIP and tag `blocking` for the intentional PreToolUse blockers; rules are detected by reads of `.claude/rules/*.md` (heuristic, documented with an inline note).
+5. **Errors & retries** — chronologically merged list, entries expandable to show the payload tail; 4 error sources (`notification{priority:immediate}`, `result.is_error`, `task_notification.status:failed`, non-blocking `hooks.log EXIT≠0`) and 3 retry heuristics (`(retry)`/`(after X)` suffix, failure followed by a similar re-dispatch within 5 min, duplicate description within 5 min).
+
+### Accurate durations
+Tool durations are derived from explicit `tool_use.id ↔ tool_result.tool_use_id` pairing in the stream; the delta between those two timestamps is the real wall-clock cost. The inter-tool time (model reasoning, API wait) is surfaced separately as a `stream_gap` child row with a factual `eventsDuringGap` count of substantive assistant/user events strictly inside the window (`task_progress` excluded — it fires at every tool boundary as metadata). When the next assistant message carried `thinking` or `text` blocks, those are captured as a `preview` string on the row. The UI splits gaps accordingly: 💭 "gap" with preview for stream-active windows, ⏸️ "silent gap" for windows with zero substantive events — no claims beyond what the log shows. Orchestrator duration uses interval-union over agent phases (not sum) so parallel dispatches no longer clamp it to 0.
+
+### Tests
+26 Node tests using built-in `node:test`, against realistic JSONL + hooks.log fixtures (the richest is `parallel-two-teams.jsonl`, adapted from the real 2026-04-23 log: 2 TeamCreates + 12 agents + 1 retry). A dedicated `tool-timings-with-gaps.jsonl` fixture covers the pairing, batched tool_use handling, and active-vs-silent gap detection. No UI tests — manual validation via 3 browser scenarios (happy path, full parallel session, fetch error).
+
+### Notable details
+- Agent↔team linkage is **explicit** via `Agent.input.team_name` indexed by `tool_use_id` (referenced back by `task_started.tool_use_id`). No temporal-bracket guessing — the line is drawn at the Agent call itself.
+- Blocking hooks (`block-bash-*`, `circuit-breaker.sh`, `silent-mode-check.sh`) are identified by an explicit allowlist: their EXIT=2 is expected behavior, not an error.
+- New bind mount `./chat-service/lib:/chat-service/lib:ro` in `docker-compose.yml` so the aggregator can be iterated on without rebuilding the image.
+
+### Workflow
+Implemented with the `superpowers:subagent-driven-development` skill — one commit per task in TDD (red test → implementation → green test → commit), then three follow-up commits that tightened duration semantics after validating the panel on real session logs. Spec: [docs/superpowers/specs/2026-04-23-session-stats-panel-design.md](docs/superpowers/specs/2026-04-23-session-stats-panel-design.md), plan: [docs/superpowers/plans/2026-04-23-session-stats-panel.md](docs/superpowers/plans/2026-04-23-session-stats-panel.md).
+
+---
+
+## Phase 30 — `cancelled` session state + saveMeta race fix (2026-04-24, branch `feat/progress-bar+new-status`)
 
 Previously, pressing ⏹ STOP transitioned the session to `completed` — indistinguishable from a natural end-of-turn. The history panel couldn't show "user-interrupted" vs "done" at a glance.
 
@@ -698,7 +730,7 @@ Trace:
 
 Fix in `server.js:545`: `await` the `recordMessage` call in the stop branch so the two writes serialize. Every other `recordMessage` call site is already isolated from `saveMeta` via idle turns, so no changes elsewhere. Two existing corrupt `meta.json` files (`f57dc412-…`, `5a0db60d-…`) manually repaired by stripping the trailing `}`.
 
-**Why**: the race was latent before Phase 29 because the prior code only called `transitionState('completed')` whether stopped or not — and the preceding `recordMessage('⏹ Session stopped.')` raced against `saveMeta('completed')` the same way, but the previous `meta.state` was already `in_progress` so `setState('completed')` was the only *effective* write. Adding the third state revealed the race. Alternatives considered: serializing all `saveMeta` via a per-session mutex — overkill for a 50-line server; writing via rename (tmp + `rename()` atomic swap) — defensible but adds complexity. `await` is the minimal fix that matches the existing pattern (`setState` / `setTitle` / `setClaudeSessionId` are all awaited at their call sites too).
+**Why**: the race was latent before Phase 30 because the prior code only called `transitionState('completed')` whether stopped or not — and the preceding `recordMessage('⏹ Session stopped.')` raced against `saveMeta('completed')` the same way, but the previous `meta.state` was already `in_progress` so `setState('completed')` was the only *effective* write. Adding the third state revealed the race. Alternatives considered: serializing all `saveMeta` via a per-session mutex — overkill for a 50-line server; writing via rename (tmp + `rename()` atomic swap) — defensible but adds complexity. `await` is the minimal fix that matches the existing pattern (`setState` / `setTitle` / `setClaudeSessionId` are all awaited at their call sites too).
 
 ### `waiting` state when Claude asks a question
 
@@ -735,4 +767,4 @@ Added a fourth state `waiting`:
 
 ---
 
-_Last updated: 2026-04-24 (Phase 29)_
+_Last updated: 2026-04-24 (Phase 30)_

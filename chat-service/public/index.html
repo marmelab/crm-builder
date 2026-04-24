@@ -17,12 +17,14 @@
       <span id="chat-status-dots" style="display:none">
         <span></span><span></span><span></span>
       </span>
+      <button id="chat-stats-btn" hidden title="Session stats" aria-label="Show session statistics">📊</button>
       <button id="chat-stop" title="Stop Claude" aria-label="Stop" hidden>⏹</button>
       <button id="chat-debug" title="Debug OFF" aria-label="Toggle debug">🔍</button>
       <button id="chat-expand" title="Expand" aria-label="Expand chat">⤢</button>
       <button id="chat-toggle" aria-label="Toggle chat">✕</button>
     </div>
     <div id="chat-messages"></div>
+    <div id="chat-stats-panel" hidden></div>
     <form id="chat-form">
       <textarea
         id="chat-input"
