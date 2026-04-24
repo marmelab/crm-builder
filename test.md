@@ -13,6 +13,8 @@
 
 * refactor chat.js
 
+* refactor server.js
+
 * tests/ et test/ -> à renommer
 
 ******************************************************************************

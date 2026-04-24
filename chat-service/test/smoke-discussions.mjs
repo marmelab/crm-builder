@@ -88,15 +88,15 @@ try {
   assert.ok(meta1.lastMessageAt, 'lastMessageAt set');
   assert.ok(meta1.messageCount >= 1, 'messageCount incremented');
   // Claude's spawn failed (no binary on host), so the turn ends and state auto-
-  // transitions back to 'terminee'.
-  assert.equal(meta1.state, 'terminee', 'state auto → terminee after turn');
+  // transitions back to 'completed'.
+  assert.equal(meta1.state, 'completed', 'state auto → completed after turn');
   assert.equal(meta1.userMessageCount, 1, 'userMessageCount=1 after first message');
-  console.log(`✓ user message persisted, title auto-generated, state auto→terminee`);
+  console.log(`✓ user message persisted, title auto-generated, state auto→completed`);
 
-  // 2b. Verify the client received the 'terminee' transition
+  // 2b. Verify the client received the 'completed' transition
   const stateEvents = e1.filter((e) => e.type === 'state');
-  assert.ok(stateEvents.some((e) => e.state === 'terminee'), 'terminee broadcast');
-  console.log('✓ terminee broadcast over WS at turn end');
+  assert.ok(stateEvents.some((e) => e.state === 'completed'), 'completed broadcast');
+  console.log('✓ completed broadcast over WS at turn end');
 
   // 3. Choice with display label → saved as label
   ws1.send(JSON.stringify({ content: 'QUICK_EDIT', display: '⚡ Make a quick change' }));
@@ -111,14 +111,14 @@ try {
   assert.equal(userMsgs1b[1].display, '⚡ Make a quick change', 'display label preserved');
   console.log('✓ choice label preserved (content=ID, display=label)');
 
-  // 3b. Second message: state should have flipped en_cours → terminee again
+  // 3b. Second message: state should have flipped in_progress → completed again
   const stateEvents2 = e1.filter((e) => e.type === 'state');
-  assert.ok(stateEvents2.some((e) => e.state === 'en_cours'), 'en_cours rebroadcast on 2nd message');
+  assert.ok(stateEvents2.some((e) => e.state === 'in_progress'), 'in_progress rebroadcast on 2nd message');
   assert.ok(
-    stateEvents2.filter((e) => e.state === 'terminee').length >= 2,
-    'terminee broadcast twice (end of turn 1 and turn 2)'
+    stateEvents2.filter((e) => e.state === 'completed').length >= 2,
+    'completed broadcast twice (end of turn 1 and turn 2)'
   );
-  console.log('✓ state auto-cycled en_cours → terminee on relaunch');
+  console.log('✓ state auto-cycled in_progress → completed on relaunch');
 
   // 3c. 2nd user message → Haiku retitle attempted but claude binary is absent
   //     on the test host, so the title should remain the initial auto-title and
@@ -170,12 +170,12 @@ try {
   const stateRes = await fetch(`${BASE}/api/discussions/${id1}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ state: 'terminee' }),
+    body: JSON.stringify({ state: 'completed' }),
   });
   assert.equal(stateRes.status, 200);
   const stateMeta = await stateRes.json();
-  assert.equal(stateMeta.state, 'terminee');
-  console.log('✓ PATCH state=terminee still works');
+  assert.equal(stateMeta.state, 'completed');
+  console.log('✓ PATCH state=completed still works');
 
   // 6c. Invalid state rejected
   const badState = await fetch(`${BASE}/api/discussions/${id1}`, {
@@ -192,7 +192,7 @@ try {
   assert.equal(init2.isNew, false, 'resume → isNew=false');
   assert.equal(init2.discussionId, id1);
   assert.equal(init2.title, 'Renamed by smoke test');
-  assert.equal(init2.state, 'terminee', 'state restored on resume');
+  assert.equal(init2.state, 'completed', 'state restored on resume');
   assert.ok(init2.messages.length >= 2, 'history restored');
   // No welcome choices on resume
   await new Promise((r) => setTimeout(r, 100));
