@@ -47,7 +47,7 @@ function formatRelative(iso) {
 
 let working  = false;
 let debugMode = false;
-let currentDiscussionId = null;
+let currentSessionId = null;
 let currentTitle = '';
 let currentState = 'in_progress';
 
@@ -101,31 +101,31 @@ const TOOL_LABELS = {
 
 function buildWsUrl() {
   const params = new URLSearchParams(location.search);
-  const id = params.get('discussion');
-  const qs = id ? `?discussion=${encodeURIComponent(id)}` : '';
+  const id = params.get('session');
+  const qs = id ? `?session=${encodeURIComponent(id)}` : '';
   return `ws://${location.host}${qs}`;
 }
 
 let ws;
-let switchingDiscussion = false;
+let switchingSession = false;
 
 function connectWs() {
   ws = new WebSocket(buildWsUrl());
   ws.onmessage = handleWsMessage;
   ws.onclose = () => {
-    if (switchingDiscussion) { switchingDiscussion = false; return; }
+    if (switchingSession) { switchingSession = false; return; }
     appendMessage('assistant', 'Connection lost. Please reload the page.');
   };
 }
 
-// Switch to another discussion (or start a fresh one with id=null) without
+// Switch to another session (or start a fresh one with id=null) without
 // reloading the page — keeps the CRM iframe state intact.
-function switchDiscussion(id) {
-  switchingDiscussion = true;
+function switchSession(id) {
+  switchingSession = true;
   try { ws?.close(); } catch {}
   const url = new URL(location.href);
-  if (id) url.searchParams.set('discussion', id);
-  else url.searchParams.delete('discussion');
+  if (id) url.searchParams.set('session', id);
+  else url.searchParams.delete('session');
   history.pushState({}, '', url);
   resetChatUi();
   connectWs();
@@ -133,7 +133,7 @@ function switchDiscussion(id) {
 
 function resetChatUi() {
   messages.innerHTML = '';
-  currentDiscussionId = null;
+  currentSessionId = null;
   currentTitle = '';
   working = false;
   send.disabled = false;
@@ -145,7 +145,7 @@ function resetChatUi() {
 }
 
 window.addEventListener('popstate', () => {
-  switchingDiscussion = true;
+  switchingSession = true;
   try { ws?.close(); } catch {}
   resetChatUi();
   connectWs();
@@ -182,8 +182,8 @@ function handleWsMessage(event) {
   try { msg = JSON.parse(event.data); } catch { return; }
 
   if (msg.type === 'init') {
-    currentDiscussionId = msg.discussionId;
-    setDisplayedTitle(msg.title || 'New discussion');
+    currentSessionId = msg.sessionId;
+    setDisplayedTitle(msg.title || 'New session');
     setDisplayedState(msg.state || 'in_progress');
     messages.innerHTML = '';
     const list = msg.messages || [];
@@ -545,7 +545,7 @@ function refreshHistoryIfOpen() {
 
 async function openHistory() {
   try {
-    const res = await fetch('/api/discussions');
+    const res = await fetch('/api/sessions');
     const list = await res.json();
     historyList.innerHTML = '';
     if (list.length === 0) {
@@ -563,7 +563,7 @@ async function openHistory() {
 function renderHistoryItem(d) {
   const li = document.createElement('li');
   li.className = 'history-item';
-  if (d.id === currentDiscussionId) li.classList.add('active');
+  if (d.id === currentSessionId) li.classList.add('active');
 
   const title = document.createElement('div');
   title.className = 'history-title';
@@ -581,11 +581,11 @@ function renderHistoryItem(d) {
   li.appendChild(meta);
 
   li.addEventListener('click', () => {
-    if (d.id === currentDiscussionId) {
+    if (d.id === currentSessionId) {
       historyPanel.hidden = true;
       return;
     }
-    switchDiscussion(d.id);
+    switchSession(d.id);
   });
   return li;
 }
@@ -605,25 +605,25 @@ stopBtn.addEventListener('click', () => {
 });
 
 newBtn.addEventListener('click', () => {
-  switchDiscussion(null);
+  switchSession(null);
 });
 
 // ─── Title rename ───────────────────────────────────────────
 chatTitle.addEventListener('click', async () => {
-  if (!currentDiscussionId) return;
-  const next = prompt('Rename discussion:', currentTitle);
+  if (!currentSessionId) return;
+  const next = prompt('Rename session:', currentTitle);
   if (next == null) return;
   const trimmed = next.trim();
   if (!trimmed || trimmed === currentTitle) return;
   try {
-    const res = await fetch(`/api/discussions/${currentDiscussionId}`, {
+    const res = await fetch(`/api/sessions/${currentSessionId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title: trimmed }),
     });
     if (!res.ok) throw new Error('rename failed');
     const meta = await res.json();
-    setDisplayedTitle(meta.title || 'New discussion');
+    setDisplayedTitle(meta.title || 'New session');
     refreshHistoryIfOpen();
   } catch (err) {
     console.error('Rename failed:', err);

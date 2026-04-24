@@ -1,4 +1,4 @@
-// Integration smoke test for discussion persistence + HTTP API.
+// Integration smoke test for session persistence + HTTP API.
 // Boots server.js against a temp log dir and exercises create/list/resume/rename.
 // Does NOT hit Claude — we only test the persistence layer + protocol.
 import { mkdtemp, rm, readFile, readdir } from 'fs/promises';
@@ -24,7 +24,7 @@ async function waitReady() {
   const deadline = Date.now() + 5000;
   while (Date.now() < deadline) {
     try {
-      const res = await fetch(`${BASE}/api/discussions`);
+      const res = await fetch(`${BASE}/api/sessions`);
       if (res.ok) return;
     } catch {}
     await new Promise((r) => setTimeout(r, 100));
@@ -57,16 +57,16 @@ async function waitFor(events, predicate, label, ms = 2000) {
 try {
   await waitReady();
 
-  // 1. New discussion: connect without query
+  // 1. New session: connect without query
   const { ws: ws1, events: e1 } = await wsConnect();
   const init1 = await waitFor(e1, (e) => e.type === 'init', 'init');
   assert.equal(init1.isNew, true, 'first connection is new');
-  assert.ok(init1.discussionId, 'got a discussionId');
+  assert.ok(init1.sessionId, 'got a sessionId');
   assert.equal(init1.title, '');
   assert.deepEqual(init1.messages, []);
   await waitFor(e1, (e) => e.type === 'choices', 'welcome choices');
-  const id1 = init1.discussionId;
-  console.log(`✓ new discussion created: ${id1}`);
+  const id1 = init1.sessionId;
+  console.log(`✓ new session created: ${id1}`);
 
   // 2. Send a user message. Claude is not installed on the host, so the server
   //    will emit a friendly-error assistant message — we expect BOTH the user
@@ -132,28 +132,28 @@ try {
   ws1.close();
   await new Promise((r) => setTimeout(r, 100));
 
-  // 4. List discussions
-  const listRes = await fetch(`${BASE}/api/discussions`);
+  // 4. List sessions
+  const listRes = await fetch(`${BASE}/api/sessions`);
   const list = await listRes.json();
   assert.ok(Array.isArray(list));
   const found = list.find((d) => d.id === id1);
-  assert.ok(found, 'discussion appears in list');
+  assert.ok(found, 'session appears in list');
   assert.ok(found.messageCount >= 2, 'at least 2 messages');
   assert.equal(found.title, 'Hello world from smoke test');
-  console.log(`✓ list returned ${list.length} discussion(s)`);
+  console.log(`✓ list returned ${list.length} session(s)`);
 
-  // 5. Get one discussion — messages derived from log.jsonl on the fly
-  const getRes = await fetch(`${BASE}/api/discussions/${id1}`);
+  // 5. Get one session — messages derived from log.jsonl on the fly
+  const getRes = await fetch(`${BASE}/api/sessions/${id1}`);
   const one = await getRes.json();
   assert.equal(one.meta.id, id1);
   assert.ok(one.messages.length >= 2, 'messages derived from log.jsonl');
   // Verify display-label replaced the raw choice ID in the derived messages
   const displayedUser = one.messages.filter((m) => m.role === 'user');
   assert.equal(displayedUser[1].content, '⚡ Make a quick change');
-  console.log('✓ GET /api/discussions/:id reconstructs messages from log');
+  console.log('✓ GET /api/sessions/:id reconstructs messages from log');
 
   // 6. Rename
-  const patchRes = await fetch(`${BASE}/api/discussions/${id1}`, {
+  const patchRes = await fetch(`${BASE}/api/sessions/${id1}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ title: 'Renamed by smoke test' }),
@@ -167,7 +167,7 @@ try {
   console.log('✓ rename persisted + titleLocked flag set');
 
   // 6b. PATCH with state is still accepted (kept for programmatic use)
-  const stateRes = await fetch(`${BASE}/api/discussions/${id1}`, {
+  const stateRes = await fetch(`${BASE}/api/sessions/${id1}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ state: 'completed' }),
@@ -178,7 +178,7 @@ try {
   console.log('✓ PATCH state=completed still works');
 
   // 6c. Invalid state rejected
-  const badState = await fetch(`${BASE}/api/discussions/${id1}`, {
+  const badState = await fetch(`${BASE}/api/sessions/${id1}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ state: 'unknown' }),
@@ -186,11 +186,11 @@ try {
   assert.equal(badState.status, 400);
   console.log('✓ invalid state → 400');
 
-  // 7. Resume: reconnect with ?discussion=<id>
-  const { ws: ws2, events: e2 } = await wsConnect(`?discussion=${id1}`);
+  // 7. Resume: reconnect with ?session=<id>
+  const { ws: ws2, events: e2 } = await wsConnect(`?session=${id1}`);
   const init2 = await waitFor(e2, (e) => e.type === 'init', 'init on resume');
   assert.equal(init2.isNew, false, 'resume → isNew=false');
-  assert.equal(init2.discussionId, id1);
+  assert.equal(init2.sessionId, id1);
   assert.equal(init2.title, 'Renamed by smoke test');
   assert.equal(init2.state, 'completed', 'state restored on resume');
   assert.ok(init2.messages.length >= 2, 'history restored');
@@ -201,21 +201,21 @@ try {
   console.log('✓ resume works — history + state restored, no welcome prompt');
   ws2.close();
 
-  // 8. Bogus discussion ID → should fall back to new discussion
-  const { ws: ws3, events: e3 } = await wsConnect(`?discussion=not-a-uuid`);
+  // 8. Bogus session ID → should fall back to new session
+  const { ws: ws3, events: e3 } = await wsConnect(`?session=not-a-uuid`);
   const init3 = await waitFor(e3, (e) => e.type === 'init', 'init on bogus id');
-  assert.equal(init3.isNew, true, 'bogus id → new discussion');
-  assert.notEqual(init3.discussionId, 'not-a-uuid');
+  assert.equal(init3.isNew, true, 'bogus id → new session');
+  assert.notEqual(init3.sessionId, 'not-a-uuid');
   ws3.close();
-  console.log('✓ invalid UUID → falls back to new discussion');
+  console.log('✓ invalid UUID → falls back to new session');
 
-  // 9. GET /api/discussions/:id on missing → 404
-  const missingRes = await fetch(`${BASE}/api/discussions/00000000-0000-0000-0000-000000000000`);
+  // 9. GET /api/sessions/:id on missing → 404
+  const missingRes = await fetch(`${BASE}/api/sessions/00000000-0000-0000-0000-000000000000`);
   assert.equal(missingRes.status, 404);
-  console.log('✓ missing discussion → 404');
+  console.log('✓ missing session → 404');
 
   // 10. PATCH with empty body → 400
-  const badPatch = await fetch(`${BASE}/api/discussions/${id1}`, {
+  const badPatch = await fetch(`${BASE}/api/sessions/${id1}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ notitle: 'nope' }),
@@ -225,8 +225,8 @@ try {
 
   // 11. Folder structure on disk — only log.jsonl + meta.json, no messages.json
   const dirs = await readdir(LOG_DIR);
-  const discussionDirs = dirs.filter((d) => /^[0-9a-f-]{36}$/.test(d));
-  assert.ok(discussionDirs.length >= 2, 'at least 2 discussion folders exist');
+  const sessionDirs = dirs.filter((d) => /^[0-9a-f-]{36}$/.test(d));
+  assert.ok(sessionDirs.length >= 2, 'at least 2 session folders exist');
   const files = await readdir(join(LOG_DIR, id1));
   assert.ok(files.includes('log.jsonl'), 'log.jsonl present');
   assert.ok(files.includes('meta.json'), 'meta.json present');

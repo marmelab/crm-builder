@@ -75,8 +75,8 @@ body { height: 100vh; overflow: hidden; font-family: system-ui, sans-serif; back
 #chat-debug:hover, #chat-expand:hover { color: #fff; }
 #chat-debug.debug-active { color: #3b82f6; background: rgba(59,130,246,.15); }
 
-/* Global discussion toolbar — lives outside #chat-widget so the ✚/📂 actions
-   aren't visually tied to the currently-displayed discussion. */
+/* Global session toolbar — lives outside #chat-widget so the ✚/📂 actions
+   aren't visually tied to the currently-displayed session. */
 #chat-actions {
   position: fixed; bottom: 28px; right: calc(28px + 420px + 10px); z-index: 200;
   display: flex; flex-direction: column; gap: 6px;
@@ -107,7 +107,7 @@ body { height: 100vh; overflow: hidden; font-family: system-ui, sans-serif; back
 #chat-stop:hover:not(:disabled) { background: rgba(244,63,94,.28); }
 #chat-stop:disabled { opacity: .5; cursor: default; }
 
-/* Discussion state badge (derived from claude activity; read-only) */
+/* Session state badge (derived from claude activity; read-only) */
 #chat-state {
   font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
   padding: 3px 8px; border-radius: 999px;
@@ -125,7 +125,7 @@ body { height: 100vh; overflow: hidden; font-family: system-ui, sans-serif; back
 
 /* History panel — popover anchored to the left of the #chat-actions toolbar.
    Bottom-anchored so the list grows upward and stays within the viewport
-   regardless of how many discussions are loaded. */
+   regardless of how many sessions are loaded. */
 #chat-history-panel {
   position: absolute; bottom: 0; right: calc(100% + 8px); z-index: 10;
   width: 300px; max-height: 70vh;
