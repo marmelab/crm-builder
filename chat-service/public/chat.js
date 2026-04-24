@@ -161,16 +161,19 @@ function handleWsMessage(event) {
     setDisplayedState(msg.state || 'en_cours');
     messages.innerHTML = '';
     (msg.messages || []).forEach((m) => appendMessage(m.role, m.content));
+    refreshHistoryIfOpen();
     return;
   }
 
   if (msg.type === 'state') {
     setDisplayedState(msg.state);
+    refreshHistoryIfOpen();
     return;
   }
 
   if (msg.type === 'title') {
     setDisplayedTitle(msg.title);
+    refreshHistoryIfOpen();
     return;
   }
 
@@ -238,6 +241,7 @@ function handleWsMessage(event) {
     const existing = messages.querySelector('.msg-working');
     if (existing) existing.remove();
     appendMessage('assistant', msg.content);
+    refreshHistoryIfOpen();
   }
 }
 
@@ -283,6 +287,7 @@ function appendChoices(content, options, seq = ++seqCounter) {
       wrap.remove();
       appendMessage('user', label);
       ws.send(JSON.stringify({ content: id, display: label }));
+      refreshHistoryIfOpen();
     });
     wrap.appendChild(btn);
   });
@@ -502,6 +507,16 @@ function renderDebugRaw(msg, seq = ++seqCounter) {
 }
 
 // ─── History panel ──────────────────────────────────────────
+// Debounced refresh for the open panel. Triggered by WS events that change
+// list data (new message → messageCount/lastMessageAt, title/state changes)
+// and by local sends (the server updates meta before we get any echo back).
+let historyRefreshTimer = null;
+function refreshHistoryIfOpen() {
+  if (historyPanel.hidden) return;
+  clearTimeout(historyRefreshTimer);
+  historyRefreshTimer = setTimeout(openHistory, 250);
+}
+
 async function openHistory() {
   try {
     const res = await fetch('/api/discussions');
@@ -583,6 +598,7 @@ chatTitle.addEventListener('click', async () => {
     if (!res.ok) throw new Error('rename failed');
     const meta = await res.json();
     setDisplayedTitle(meta.title || 'New discussion');
+    refreshHistoryIfOpen();
   } catch (err) {
     console.error('Rename failed:', err);
   }
@@ -608,6 +624,7 @@ form.addEventListener('submit', (e) => {
   if (!content) return;
   appendMessage('user', content, { queued: working });
   ws.send(JSON.stringify({ content }));
+  refreshHistoryIfOpen();
   input.value = '';
   input.style.height = 'auto';
 });

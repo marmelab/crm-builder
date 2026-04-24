@@ -67,13 +67,37 @@ body { height: 100vh; overflow: hidden; font-family: system-ui, sans-serif; back
 #chat-status-dots span:nth-child(3) { animation-delay: .4s; }
 @keyframes dotPop { 0%,80%,100% { opacity: 0; transform: scale(.6); } 40% { opacity: 1; transform: scale(1); } }
 
-#chat-debug, #chat-expand, #chat-history, #chat-new {
+#chat-debug, #chat-expand {
   background: none; border: none; color: #636366;
   cursor: pointer; font-size: 14px; padding: 2px 4px;
   transition: color .15s; border-radius: 6px;
 }
-#chat-debug:hover, #chat-expand:hover, #chat-history:hover, #chat-new:hover { color: #fff; }
+#chat-debug:hover, #chat-expand:hover { color: #fff; }
 #chat-debug.debug-active { color: #3b82f6; background: rgba(59,130,246,.15); }
+
+/* Global discussion toolbar — lives outside #chat-widget so the ✚/📂 actions
+   aren't visually tied to the currently-displayed discussion. */
+#chat-actions {
+  position: fixed; bottom: 28px; right: calc(28px + 420px + 10px); z-index: 200;
+  display: flex; flex-direction: column; gap: 6px;
+  background: #1c1c1e; border: 1px solid #2c2c2e;
+  border-radius: 14px; padding: 6px;
+  box-shadow: 0 8px 30px rgba(0,0,0,.5);
+}
+#chat-actions button {
+  width: 38px; height: 38px;
+  background: none; border: none; color: #8e8e93;
+  cursor: pointer; font-size: 16px; border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  transition: background .15s, color .15s;
+}
+#chat-actions button:hover { background: #2c2c2e; color: #fff; }
+/* Hide the toolbar when the widget is closed (FAB takes over). */
+#chat-widget.chat-closed ~ #chat-actions { display: none; }
+/* Expanded mode: the widget covers the right half of the screen. */
+#chat-widget.chat-expanded ~ #chat-actions {
+  right: calc(50vw + 10px); bottom: 16px;
+}
 
 #chat-stop {
   background: rgba(244,63,94,.15); border: none; color: #f43f5e;
@@ -99,10 +123,12 @@ body { height: 100vh; overflow: hidden; font-family: system-ui, sans-serif; back
   margin-right: 2px;
 }
 
-/* History panel — overlay inside the widget */
+/* History panel — popover anchored to the left of the #chat-actions toolbar.
+   Bottom-anchored so the list grows upward and stays within the viewport
+   regardless of how many discussions are loaded. */
 #chat-history-panel {
-  position: absolute; top: 60px; right: 8px; z-index: 10;
-  width: 300px; max-height: 70%;
+  position: absolute; bottom: 0; right: calc(100% + 8px); z-index: 10;
+  width: 300px; max-height: 70vh;
   background: #1c1c1e; border: 1px solid #3a3a3c; border-radius: 12px;
   box-shadow: 0 8px 30px rgba(0,0,0,.6);
   display: flex; flex-direction: column;

@@ -18,19 +18,9 @@
         <span></span><span></span><span></span>
       </span>
       <button id="chat-stop" title="Arrêter Claude" aria-label="Stop" hidden>⏹</button>
-      <button id="chat-history" title="History" aria-label="Discussion history">📂</button>
-      <button id="chat-new" title="New discussion" aria-label="New discussion">✚</button>
       <button id="chat-debug" title="Debug OFF" aria-label="Toggle debug">🔍</button>
       <button id="chat-expand" title="Expand" aria-label="Expand chat">⤢</button>
       <button id="chat-toggle" aria-label="Toggle chat">✕</button>
-    </div>
-    <div id="chat-history-panel" hidden>
-      <div id="history-panel-header">
-        <span>Discussions</span>
-        <button id="history-close" aria-label="Close history">✕</button>
-      </div>
-      <ul id="history-list"></ul>
-      <div id="history-empty" hidden>Aucune discussion sauvegardée.</div>
     </div>
     <div id="chat-messages"></div>
     <form id="chat-form">
@@ -43,6 +33,19 @@
       <button type="submit" id="chat-send" aria-label="Send">↑</button>
     </form>
     <div id="chat-stats" title="Tokens and cost used in this session"></div>
+  </div>
+
+  <div id="chat-actions">
+    <button id="chat-history" title="History" aria-label="Discussion history">📂</button>
+    <button id="chat-new" title="New discussion" aria-label="New discussion">✚</button>
+    <div id="chat-history-panel" hidden>
+      <div id="history-panel-header">
+        <span>Discussions</span>
+        <button id="history-close" aria-label="Close history">✕</button>
+      </div>
+      <ul id="history-list"></ul>
+      <div id="history-empty" hidden>Aucune discussion sauvegardée.</div>
+    </div>
   </div>
 
   <button id="chat-fab" aria-label="Open assistant">✦</button>
