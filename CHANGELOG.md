@@ -610,6 +610,36 @@ Copied `/app-variants/App.fakerest.tsx → /app/src/App.tsx` live in the running
 
 ---
 
+## Phase 28 — Session stats panel
+
+Dates: 2026-04-23 to 2026-04-24.
+
+Nouveau bouton 📊 dans le header du chat widget, disponible en idle après la première question, qui bascule sur un panel de statistiques consultable post-mortem. Objectif : donner à l'utilisateur de quoi diagnostiquer fiabilité et rapidité des opérations (agents, tool calls, hooks, skills, erreurs, retries) sans plonger dans les JSONL bruts.
+
+### Architecture
+Agrégateur pur côté serveur dans [`chat-service/lib/stats.js`](chat-service/lib/stats.js) (exporte `aggregateSession()`) — lecture streaming du JSONL de session + corrélation `hooks.log` par worktree, pas de cache au premier jet. Endpoint `GET /api/stats?sessionId=<id>` dans [`chat-service/server.js`](chat-service/server.js) avec map interne `sessionId → logPath` peuplée à la réception du premier event `session_id` (et un nouveau WS event `session_meta` pour que le client connaisse son id). UI vanilla dans [`chat-service/public/`](chat-service/public/) : bouton dans le header, bascule via classe CSS `chat-stats-mode`, helper `el()` pour construire le DOM sans jamais `innerHTML` sur des données dynamiques (les descriptions d'agents dérivent du prompt utilisateur et sont donc potentiellement attaquables).
+
+### Panel (5 sections)
+1. **Header résumé** — KPIs (durée, agents, ops, tokens, coût, erreurs, retries), pastilles par team, mini-barre de répartition temporelle par agent type.
+2. **Chronologie 2 niveaux** — phases (orchestrator + subagents) ordonnées chronologiquement ; chaque phase dépliable en sous-timeline (tool calls, skills invoquées, hooks exécutés corrélés depuis hooks.log).
+3. **Top opérations** — 3 leaderboards (agents les plus longs, tool calls les plus longs avec flag jaune > 30s, outils les plus utilisés avec durée cumulée).
+4. **Skills / hooks / rules** — agrégation globale avec counts ; hooks distinguent ✓/✗/SKIP et marquent `blocking` pour les PreToolUse bloquants intentionnels ; rules détectées via lectures de `.claude/rules/*.md` (heuristique documentée dans une note).
+5. **Erreurs & retries** — liste chronologique fusionnée, entrées dépliables avec payload tail ; 4 sources d'erreurs (`notification{priority:immediate}`, `result.is_error`, `task_notification.status:failed`, `hooks.log EXIT≠0` hors blocking) et 3 heuristiques de retries (suffixe `(retry)`/`(after X)`, failure suivi d'une dispatch similaire dans 5min, description dupliquée dans 5min).
+
+### Tests
+21 tests Node (built-in `node:test`), fixtures JSONL + hooks.log réalistes (le plus riche est `parallel-two-teams.jsonl` adapté du log réel du 2026-04-23, 2 TeamCreate + 12 agents + 1 retry). Pas de test UI automatisé — validation manuelle via 3 scénarios browser (happy path, session parallèle complète, fetch KO).
+
+### Détails notables
+- Lien agent↔team **explicite** via `Agent.input.team_name` indexé par `tool_use_id` (task_started.tool_use_id le référence). Pas d'inférence temporelle — la ligne est posée à l'appel `Agent`.
+- Bash tool calls ont leur durée exacte via `local_bash` task_notification corrélé par `tool_use_id` ; les autres outils ont une durée approximée (`~Xs`) par delta de timestamps avec l'event suivant dans la même phase.
+- Blocking hooks (`block-bash-*`, `circuit-breaker.sh`, `silent-mode-check.sh`) identifiés par liste blanche : leur EXIT=2 est un comportement attendu, pas une erreur.
+- Nouveau bind-mount `./chat-service/lib:/chat-service/lib:ro` dans `docker-compose.yml` pour itérer sur l'aggregator sans rebuild.
+
+### Workflow
+Implémentation via la skill `superpowers:subagent-driven-development` — 17 commits (1 par task + 1 fix docker-compose), chaque task en TDD (test rouge → impl → test vert → commit). Spec: [docs/superpowers/specs/2026-04-23-session-stats-panel-design.md](docs/superpowers/specs/2026-04-23-session-stats-panel-design.md), plan: [docs/superpowers/plans/2026-04-23-session-stats-panel.md](docs/superpowers/plans/2026-04-23-session-stats-panel.md).
+
+---
+
 ## Open items / known limits
 
 - **`medium-new-field` test** times out at 15 min (bumped to 35 min). Real agent-team flow on a multi-file feature naturally takes 20-30 min.
@@ -621,4 +651,4 @@ Copied `/app-variants/App.fakerest.tsx → /app/src/App.tsx` live in the running
 
 ---
 
-_Last updated: 2026-04-23 (Phase 27)_
+_Last updated: 2026-04-24 (Phase 28)_
