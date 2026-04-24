@@ -54,6 +54,7 @@ let currentState = 'in_progress';
 const STATE_LABELS = {
   in_progress: 'In progress',
   completed: 'Completed',
+  cancelled: 'Cancelled',
 };
 
 // Monotonic sequence assigned to every persistent message (user/assistant
@@ -282,9 +283,13 @@ function setDisplayedState(s) {
   currentState = s;
   stateBtn.textContent = STATE_LABELS[s] || s;
   stateBtn.className = `state-${s}`;
-  stateBtn.title = s === 'completed'
-    ? 'Claude session ended — send a message to restart'
-    : 'Claude is working…';
+  if (s === 'cancelled') {
+    stateBtn.title = 'Session cancelled by user — send a message to restart';
+  } else if (s === 'completed') {
+    stateBtn.title = 'Claude session ended — send a message to restart';
+  } else {
+    stateBtn.title = 'Claude is working…';
+  }
 }
 
 function appendChoices(content, options, seq = ++seqCounter) {

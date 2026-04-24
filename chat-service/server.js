@@ -171,7 +171,7 @@ async function openSession(requestedId) {
   };
 }
 
-const ALLOWED_STATES = new Set(['in_progress', 'completed']);
+const ALLOWED_STATES = new Set(['in_progress', 'completed', 'cancelled']);
 
 async function listSessions() {
   await mkdir(LOG_DIR, { recursive: true }).catch(() => {});
@@ -541,7 +541,7 @@ async function processMessage(runtime, prompt) {
     if (runtime.stopping) {
       const stopText = '⏹ Session stopped.';
       broadcast(runtime, { type: 'message', role: 'assistant', content: stopText });
-      runtime.session?.recordMessage('assistant', stopText).catch(() => {});
+      await runtime.session?.recordMessage('assistant', stopText).catch(() => {});
     } else if (exitCode !== 0 || !receivedText || resultError || rateLimit) {
       const errText = friendlyError({ exitCode, stderr: stderrBuf, rateLimit, resultError });
       broadcast(runtime, { type: 'message', role: 'assistant', content: errText });
@@ -572,8 +572,9 @@ async function processMessage(runtime, prompt) {
       if (wasStopped) runtime.queue = [];
       runtime.busy = false;
       // All queued turns processed and claude is idle → session is done
-      // (until the user sends another message).
-      await transitionState(runtime, 'completed');
+      // (until the user sends another message). If the user pressed STOP,
+      // mark the session as cancelled instead of completed.
+      await transitionState(runtime, wasStopped ? 'cancelled' : 'completed');
       // If no client is currently viewing this session, release the runtime
       // now that the turn is done. A later reconnect will re-open it.
       if (runtime.clients.size === 0) {
