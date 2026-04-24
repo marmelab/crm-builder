@@ -27,3 +27,9 @@
 * to discuss with françois
 * -  stop -> clean worktrees / sessions / etc.
 * -  tester "stop" sur grosse task
+
+* ajout de tests automatisés sur la CI github (jobs)
+
+* impossibilité de merge si la CI est KO
+
+* lors ce qu'on quitte une session vides (vide = sans message utilisateur ou uniquement le message "quick modif"/"full setup") on doit la supprimer

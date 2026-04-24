@@ -1,5 +1,6 @@
-import { el, formatTokens, formatRelative } from './lib/dom.js';
+import { el, formatTokens } from './lib/dom.js';
 import { renderStatsPanel } from './lib/stats/index.js';
+import { initConnection, initDisplay, initHistory } from './lib/sessions/index.js';
 
 const widget   = document.getElementById('chat-widget');
 const fab      = document.getElementById('chat-fab');
@@ -27,17 +28,7 @@ const statsPanel = document.getElementById('chat-stats-panel');
 let working  = false;
 let debugMode = false;
 let hasUserMessage = false;
-let currentSessionId = null;
-let currentTitle = '';
-let currentState = 'in_progress';
 let statsMode = false;
-
-const STATE_LABELS = {
-  in_progress: 'In progress',
-  completed: 'Completed',
-  cancelled: 'Cancelled',
-  waiting: 'Waiting',
-};
 
 function updateStatsBtnVisibility() {
   if (!hasUserMessage) { statsBtn.hidden = true; return; }
@@ -88,42 +79,34 @@ const TOOL_LABELS = {
   result:       '✅ Turn complete',
 };
 
-function buildWsUrl() {
-  const params = new URLSearchParams(location.search);
-  const id = params.get('session');
-  const qs = id ? `?session=${encodeURIComponent(id)}` : '';
-  return `ws://${location.host}${qs}`;
-}
+const display = initDisplay({
+  chatTitle,
+  stateBtn,
+  newBtn,
+  switchSession: (id) => connection.switchSession(id),
+  refreshHistoryIfOpen: () => historyApi.refreshHistoryIfOpen(),
+});
 
-let ws;
-let switchingSession = false;
+const historyApi = initHistory({
+  historyPanel,
+  historyList,
+  historyEmpty,
+  historyBtn,
+  historyClose,
+  getSessionId: () => display.getSessionId(),
+  switchSession: (id) => connection.switchSession(id),
+});
 
-function connectWs() {
-  ws = new WebSocket(buildWsUrl());
-  ws.onmessage = handleWsMessage;
-  ws.onclose = () => {
-    if (switchingSession) { switchingSession = false; return; }
-    appendMessage('assistant', 'Connection lost. Please reload the page.');
-  };
-}
-
-// Switch to another session (or start a fresh one with id=null) without
-// reloading the page — keeps the CRM iframe state intact.
-function switchSession(id) {
-  switchingSession = true;
-  try { ws?.close(); } catch {}
-  const url = new URL(location.href);
-  if (id) url.searchParams.set('session', id);
-  else url.searchParams.delete('session');
-  history.pushState({}, '', url);
-  resetChatUi();
-  connectWs();
-}
+const connection = initConnection({
+  handleWsMessage,
+  appendMessage,
+  resetChatUi,
+});
 
 function resetChatUi() {
   messages.innerHTML = '';
-  currentSessionId = null;
-  currentTitle = '';
+  display.setSessionId(null);
+  display.setTitle('');
   working = false;
   send.disabled = false;
   statusDots.style.display = 'none';
@@ -132,13 +115,6 @@ function resetChatUi() {
   historyPanel.hidden = true;
   stats.textContent = '';
 }
-
-window.addEventListener('popstate', () => {
-  switchingSession = true;
-  try { ws?.close(); } catch {}
-  resetChatUi();
-  connectWs();
-});
 
 // Sync the dots, stop button, and "Working on it..." bubble to the current
 // value of `working`. Called from both init (on reconnect) and the status
@@ -171,9 +147,9 @@ function handleWsMessage(event) {
   try { msg = JSON.parse(event.data); } catch { return; }
 
   if (msg.type === 'init') {
-    currentSessionId = msg.sessionId;
-    setDisplayedTitle(msg.title || 'New session');
-    setDisplayedState(msg.state || 'in_progress');
+    display.setSessionId(msg.sessionId);
+    display.setDisplayedTitle(msg.title || 'New session');
+    display.setDisplayedState(msg.state || 'in_progress');
     messages.innerHTML = '';
     const list = msg.messages || [];
     // The last `queuedCount` user messages are still sitting in the server's
@@ -193,19 +169,19 @@ function handleWsMessage(event) {
     }
     hasUserMessage = list.some((m) => m.role === 'user');
     updateStatsBtnVisibility();
-    refreshHistoryIfOpen();
+    historyApi.refreshHistoryIfOpen();
     return;
   }
 
   if (msg.type === 'state') {
-    setDisplayedState(msg.state);
-    refreshHistoryIfOpen();
+    display.setDisplayedState(msg.state);
+    historyApi.refreshHistoryIfOpen();
     return;
   }
 
   if (msg.type === 'title') {
-    setDisplayedTitle(msg.title);
-    refreshHistoryIfOpen();
+    display.setDisplayedTitle(msg.title);
+    historyApi.refreshHistoryIfOpen();
     return;
   }
 
@@ -259,31 +235,11 @@ function handleWsMessage(event) {
     const existing = messages.querySelector('.msg-working');
     if (existing) existing.remove();
     appendMessage('assistant', msg.content);
-    refreshHistoryIfOpen();
+    historyApi.refreshHistoryIfOpen();
   }
 }
 
-connectWs();
-
-function setDisplayedTitle(t) {
-  currentTitle = t;
-  chatTitle.textContent = t;
-}
-
-function setDisplayedState(s) {
-  currentState = s;
-  stateBtn.textContent = STATE_LABELS[s] || s;
-  stateBtn.className = `state-${s}`;
-  if (s === 'cancelled') {
-    stateBtn.title = 'Session cancelled by user — send a message to restart';
-  } else if (s === 'waiting') {
-    stateBtn.title = 'Claude is waiting for your reply';
-  } else if (s === 'completed') {
-    stateBtn.title = 'Claude session ended — send a message to restart';
-  } else {
-    stateBtn.title = 'Claude is working…';
-  }
-}
+connection.connectWs();
 
 function appendChoices(content, options, seq = ++seqCounter) {
   const wrap = document.createElement('div');
@@ -310,10 +266,10 @@ function appendChoices(content, options, seq = ++seqCounter) {
     btn.addEventListener('click', () => {
       wrap.remove();
       appendMessage('user', label);
-      ws.send(JSON.stringify({ content: id, display: label }));
+      connection.getWs().send(JSON.stringify({ content: id, display: label }));
       hasUserMessage = true;
       updateStatsBtnVisibility();
-      refreshHistoryIfOpen();
+      historyApi.refreshHistoryIfOpen();
     });
     wrap.appendChild(btn);
   });
@@ -532,102 +488,13 @@ function renderDebugRaw(msg, seq = ++seqCounter) {
   appendRaw(ev, seq);
 }
 
-// ─── History panel ──────────────────────────────────────────
-// Debounced refresh for the open panel. Triggered by WS events that change
-// list data (new message → messageCount/lastMessageAt, title/state changes)
-// and by local sends (the server updates meta before we get any echo back).
-let historyRefreshTimer = null;
-function refreshHistoryIfOpen() {
-  if (historyPanel.hidden) return;
-  clearTimeout(historyRefreshTimer);
-  historyRefreshTimer = setTimeout(openHistory, 250);
-}
-
-async function openHistory() {
-  try {
-    const res = await fetch('/api/sessions');
-    const list = await res.json();
-    historyList.innerHTML = '';
-    if (list.length === 0) {
-      historyEmpty.hidden = false;
-    } else {
-      historyEmpty.hidden = true;
-      list.forEach((d) => historyList.appendChild(renderHistoryItem(d)));
-    }
-    historyPanel.hidden = false;
-  } catch (err) {
-    console.error('Failed to load history:', err);
-  }
-}
-
-function renderHistoryItem(d) {
-  const li = document.createElement('li');
-  li.className = 'history-item';
-  if (d.id === currentSessionId) li.classList.add('active');
-
-  const title = document.createElement('div');
-  title.className = 'history-title';
-  title.textContent = d.title || '(untitled)';
-  li.appendChild(title);
-
-  const meta = document.createElement('div');
-  meta.className = 'history-meta';
-  const statePill = document.createElement('span');
-  const st = d.state || 'in_progress';
-  statePill.className = `history-state state-${st}`;
-  statePill.textContent = STATE_LABELS[st] || st;
-  meta.appendChild(statePill);
-  meta.appendChild(document.createTextNode(` · ${formatRelative(d.lastMessageAt || d.createdAt)} · ${d.messageCount} message${d.messageCount > 1 ? 's' : ''}`));
-  li.appendChild(meta);
-
-  li.addEventListener('click', () => {
-    if (d.id === currentSessionId) {
-      historyPanel.hidden = true;
-      return;
-    }
-    switchSession(d.id);
-  });
-  return li;
-}
-
-historyBtn.addEventListener('click', () => {
-  if (historyPanel.hidden) openHistory();
-  else historyPanel.hidden = true;
-});
-historyClose.addEventListener('click', () => { historyPanel.hidden = true; });
-
 stopBtn.addEventListener('click', () => {
   if (!working || stopBtn.disabled) return;
+  const ws = connection.getWs();
   if (ws?.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: 'stop' }));
   }
   stopBtn.disabled = true; // re-enabled on next status flip
-});
-
-newBtn.addEventListener('click', () => {
-  switchSession(null);
-});
-
-// ─── Title rename ───────────────────────────────────────────
-chatTitle.addEventListener('click', async () => {
-  if (!currentSessionId) return;
-  const next = prompt('Rename session:', currentTitle);
-  if (next == null) return;
-  const trimmed = next.trim();
-  if (!trimmed || trimmed === currentTitle) return;
-  try {
-    const res = await fetch(`/api/sessions/${currentSessionId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: trimmed }),
-    });
-    if (!res.ok) throw new Error('rename failed');
-    const meta = await res.json();
-    setDisplayedTitle(meta.title || 'New session');
-    refreshHistoryIfOpen();
-  } catch (err) {
-    console.error('Rename failed:', err);
-  }
 });
 
 // Auto-resize textarea
@@ -649,8 +516,8 @@ form.addEventListener('submit', (e) => {
   const content = input.value.trim();
   if (!content) return;
   appendMessage('user', content, { queued: working });
-  ws.send(JSON.stringify({ content }));
-  refreshHistoryIfOpen();
+  connection.getWs().send(JSON.stringify({ content }));
+  historyApi.refreshHistoryIfOpen();
   input.value = '';
   input.style.height = 'auto';
   hasUserMessage = true;
@@ -696,7 +563,7 @@ debugBtn.addEventListener('click', () => {
 });
 
 async function enterStatsMode() {
-  if (!currentSessionId) return;
+  if (!display.getSessionId()) return;
   statsMode = true;
   widget.classList.add('chat-stats-mode');
   statsPanel.hidden = false;
@@ -705,7 +572,7 @@ async function enterStatsMode() {
 
   statsPanel.replaceChildren(el('div', { className: 'stats-loading' }, 'Loading stats…'));
   try {
-    const res = await fetch(`/api/stats?sessionId=${encodeURIComponent(currentSessionId)}`);
+    const res = await fetch(`/api/stats?sessionId=${encodeURIComponent(display.getSessionId())}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     renderStatsPanel(statsPanel, data);
