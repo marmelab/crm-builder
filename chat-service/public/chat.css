@@ -287,6 +287,8 @@ body { height: 100vh; overflow: hidden; font-family: system-ui, sans-serif; back
 .child-dur { color: #636366; font-variant-numeric: tabular-nums; }
 .child-hook .child-label { color: #a78bfa; }
 .child-skill .child-label { color: #34d399; }
+.child-agent_processing { opacity: 0.6; font-style: italic; }
+.child-agent_processing .child-label { color: #8e8e93; }
 
 .stats-top-grid {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));

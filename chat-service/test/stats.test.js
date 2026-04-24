@@ -121,13 +121,63 @@ test('aggregateSession: topAgents sorted by durationMs desc', async () => {
   }
 });
 
-test('aggregateSession: topToolCalls flags ops >30s as flaggedSlow', async () => {
+test('aggregateSession: tool durations come from tool_use_id → tool_result pairing', async () => {
+  const out = await aggregateSession({
+    sessionLogPath: fx('tool-timings-with-gaps.jsonl'),
+    hooksLogPath: null,
+    sessionId: 'sess-gaps',
+  });
+  const read = out.phases[0].children.find((c) => c.kind === 'tool_use' && c.tool === 'Read');
+  assert.equal(read.durationMs, 500);
+  assert.equal(read.isApprox, false);
+  const bashFast = out.phases[0].children.find((c) => c.kind === 'tool_use' && c.tool === 'Bash' && c.durationMs === 200);
+  assert.ok(bashFast);
+  // batched Grep tool_uses share the same assistant-message ts but have separate results
+  const greps = out.phases[0].children.filter((c) => c.kind === 'tool_use' && c.tool === 'Grep');
+  assert.equal(greps.length, 2);
+  assert.deepEqual(greps.map((g) => g.durationMs).sort((a, b) => a - b), [250, 450]);
+});
+
+test('aggregateSession: inserts agent_processing rows for gaps ≥ threshold, not within a tool_use batch', async () => {
+  const out = await aggregateSession({
+    sessionLogPath: fx('tool-timings-with-gaps.jsonl'),
+    hooksLogPath: null,
+    sessionId: 'sess-gaps',
+  });
+  const processing = out.phases[0].children.filter((c) => c.kind === 'agent_processing');
+  // Two gaps meet the threshold: ~4500ms (Read→Bash) and ~1200ms (Grep batch→slow Bash).
+  // The 150ms gap between Bash→Grep batch is below the threshold, and the gap between the two
+  // batched Greps is zero (they share the same assistant-message timestamp) — neither should appear.
+  assert.equal(processing.length, 2);
+  const durs = processing.map((p) => p.durationMs).sort((a, b) => a - b);
+  assert.equal(durs[0], 1200);
+  assert.equal(durs[1], 4500);
+});
+
+test('aggregateSession: topToolCalls flags ops >30s as flaggedSlow (real tool_result durations)', async () => {
+  const out = await aggregateSession({
+    sessionLogPath: fx('tool-timings-with-gaps.jsonl'),
+    hooksLogPath: null,
+    sessionId: 'sess-gaps',
+  });
+  const slow = out.topToolCalls.filter((c) => c.flaggedSlow);
+  assert.equal(slow.length, 1);
+  assert.equal(slow[0].tool, 'Bash');
+  assert.ok(slow[0].durationMs >= 30000);
+});
+
+test('aggregateSession: orchestrator duration uses interval-union over parallel agents', async () => {
   const out = await aggregateSession({
     sessionLogPath: fx('parallel-two-teams.jsonl'),
-    hooksLogPath: fx('hooks.log.parallel-teams'),
+    hooksLogPath: null,
     sessionId: 'sess-parallel',
   });
-  assert.ok(out.topToolCalls.filter((c) => c.flaggedSlow).length >= 1);
+  const orch = out.phases.find((p) => p.kind === 'orchestrator');
+  // Sanity: agents overlap (TASK-003/004 dispatched within ~1s, then parallel reviews),
+  // so sum(agentDurations) >> totalMs. The old totalMs - sum formula would clamp to 0.
+  // Interval-union yields a small but positive orchestrator window covering the bits between dispatches.
+  assert.ok(orch.durationMs > 0, `orchestrator durationMs should be > 0, got ${orch.durationMs}`);
+  assert.ok(orch.durationMs < out.durationMs);
 });
 
 test('aggregateSession: correlates hooks.log with session window (single-team)', async () => {

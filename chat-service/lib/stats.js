@@ -15,7 +15,27 @@ function extractToolUsesFromAssistant(ev) {
   return (ev.message?.content || []).filter((b) => b.type === 'tool_use');
 }
 
+function extractToolResultsFromUser(ev) {
+  if (ev.type !== 'user') return [];
+  return (ev.message?.content || []).filter((b) => b.type === 'tool_result');
+}
+
 function msBetween(a, b) { return new Date(b).getTime() - new Date(a).getTime(); }
+
+function mergeIntervals(intervals) {
+  if (intervals.length === 0) return [];
+  const sorted = intervals.slice().sort((a, b) => a[0] - b[0]);
+  const out = [[...sorted[0]]];
+  for (let i = 1; i < sorted.length; i++) {
+    const [s, e] = sorted[i];
+    const last = out[out.length - 1];
+    if (s <= last[1]) last[1] = Math.max(last[1], e);
+    else out.push([s, e]);
+  }
+  return out;
+}
+
+const AGENT_PROCESSING_THRESHOLD_MS = 1000;
 
 function computeSummary(events) {
   let opsCount = 0, tokensTotal = 0, costUsd = 0;
@@ -101,8 +121,12 @@ function extractPhases(events, agentToolIdToTeam) {
 }
 
 function buildOrchestratorPhase(events, agentPhases, startTs, endTs) {
-  const agentTotalMs = agentPhases.reduce((a, p) => a + p.durationMs, 0);
   const totalMs = startTs && endTs ? msBetween(startTs, endTs) : 0;
+  const intervals = agentPhases
+    .filter((p) => p.startTs && p.endTs)
+    .map((p) => [new Date(p.startTs).getTime(), new Date(p.endTs).getTime()]);
+  const merged = mergeIntervals(intervals);
+  const agentCoverageMs = merged.reduce((a, [s, e]) => a + (e - s), 0);
   let opsCount = 0;
   const skip = new Set(['Agent', 'Task', 'TeamCreate', 'TeamDelete']);
   for (const rec of events) {
@@ -115,7 +139,7 @@ function buildOrchestratorPhase(events, agentPhases, startTs, endTs) {
   return {
     phaseId: 'orchestrator', kind: 'orchestrator', agentType: 'orchestrator',
     description: 'Orchestrator', teamName: null,
-    startTs, endTs, durationMs: Math.max(0, totalMs - agentTotalMs),
+    startTs, endTs, durationMs: Math.max(0, totalMs - agentCoverageMs),
     opsCount, tokensTotal: 0, errorsCount: 0, retriesCount: 0, children: [],
   };
 }
@@ -155,69 +179,87 @@ function toolDetail(toolName, input) {
 
 const SKIP_CHILD = new Set(['Agent', 'Task', 'TeamCreate', 'TeamDelete']);
 
+function buildToolResultMap(events) {
+  const m = new Map();
+  for (const rec of events) {
+    if (rec.type !== 'debug_raw' || rec.event?.type !== 'user') continue;
+    for (const b of extractToolResultsFromUser(rec.event)) {
+      if (b.tool_use_id && !m.has(b.tool_use_id)) m.set(b.tool_use_id, rec.ts);
+    }
+  }
+  return m;
+}
+
 function populateChildrenAndCounts(events, phases, orchestrator) {
   const agentPhases = phases.filter((p) => p.kind === 'agent');
   const phaseByToolUseId = buildPhaseOwnerMap(events, agentPhases);
+  const toolResultTsByToolUseId = buildToolResultMap(events);
   const toolCounts = new Map();
   const allToolCalls = [];
-  const prevTsByPhase = new Map();
+  const lastToolResultTsByPhase = new Map();
 
   for (const rec of events) {
     if (rec.type !== 'debug_raw' || rec.event?.type !== 'assistant') continue;
     const owner = resolvePhase(rec.event, phaseByToolUseId) ?? orchestrator;
     if (!owner) continue;
-    for (const b of extractToolUsesFromAssistant(rec.event)) {
-      if (SKIP_CHILD.has(b.name)) continue;
-      const prev = prevTsByPhase.get(owner.phaseId);
-      const approxDurationMs = prev ? msBetween(prev, rec.ts) : 0;
-      prevTsByPhase.set(owner.phaseId, rec.ts);
-      if (b.name === 'Skill') {
-        owner.children.push({
-          kind: 'skill',
-          skill: b.input?.skill || 'unknown',
-          ts: rec.ts,
-          approxDurationMs, isApprox: true,
-        });
-      } else {
-        owner.children.push({
-          kind: 'tool_use',
-          tool: b.name, detail: toolDetail(b.name, b.input),
-          ts: rec.ts,
-          approxDurationMs, isApprox: true,
-          agentType: owner.agentType,
-        });
-        const tc = toolCounts.get(b.name) || { tool: b.name, count: 0, totalDurationMs: 0, isApprox: true };
-        tc.count++; tc.totalDurationMs += approxDurationMs;
-        toolCounts.set(b.name, tc);
-        allToolCalls.push({
-          phaseId: owner.phaseId, tool: b.name, detail: toolDetail(b.name, b.input),
-          durationMs: approxDurationMs, isApprox: true,
-          teamName: owner.teamName ?? null,
-          flaggedSlow: approxDurationMs > 30000,
-          ts: rec.ts, _toolUseId: b.id,
-        });
+    const allUses = extractToolUsesFromAssistant(rec.event);
+    if (allUses.length === 0) continue;
+
+    // Every tool_use (including dispatches like Agent/Team*) advances the phase's
+    // wall-clock cursor — a subagent running is not orchestrator thinking time.
+    // Track the max tool_result ts across all of them so the next "thinking" gap
+    // measures from when the prior work actually finished.
+    let maxToolResultTsThisMsg = null;
+    for (const b of allUses) {
+      const toolResultTs = toolResultTsByToolUseId.get(b.id) ?? null;
+      if (toolResultTs && (!maxToolResultTsThisMsg || toolResultTs > maxToolResultTsThisMsg)) {
+        maxToolResultTsThisMsg = toolResultTs;
       }
     }
+
+    const visibleUses = allUses.filter((b) => !SKIP_CHILD.has(b.name));
+    if (visibleUses.length > 0) {
+      const lastTR = lastToolResultTsByPhase.get(owner.phaseId);
+      if (lastTR) {
+        const gapMs = msBetween(lastTR, rec.ts);
+        if (gapMs >= AGENT_PROCESSING_THRESHOLD_MS) {
+          owner.children.push({ kind: 'agent_processing', ts: lastTR, durationMs: gapMs });
+        }
+      }
+      for (const b of visibleUses) {
+        const toolResultTs = toolResultTsByToolUseId.get(b.id) ?? null;
+        const durationMs = toolResultTs ? Math.max(0, msBetween(rec.ts, toolResultTs)) : 0;
+        const isApprox = !toolResultTs;
+        if (b.name === 'Skill') {
+          owner.children.push({
+            kind: 'skill',
+            skill: b.input?.skill || 'unknown',
+            ts: rec.ts, durationMs, isApprox,
+          });
+        } else {
+          owner.children.push({
+            kind: 'tool_use',
+            tool: b.name, detail: toolDetail(b.name, b.input),
+            ts: rec.ts, durationMs, isApprox,
+            agentType: owner.agentType,
+          });
+          const tc = toolCounts.get(b.name) || { tool: b.name, count: 0, totalDurationMs: 0 };
+          tc.count++; tc.totalDurationMs += durationMs;
+          toolCounts.set(b.name, tc);
+          allToolCalls.push({
+            phaseId: owner.phaseId, tool: b.name, detail: toolDetail(b.name, b.input),
+            durationMs, isApprox,
+            teamName: owner.teamName ?? null,
+            flaggedSlow: durationMs > 30000,
+            ts: rec.ts, _toolUseId: b.id,
+          });
+        }
+      }
+    }
+    lastToolResultTsByPhase.set(owner.phaseId, maxToolResultTsThisMsg ?? rec.ts);
   }
 
-  // Refine Bash durations from local_bash task_notifications (they share tool_use_id)
-  const bashDurByToolUseId = new Map();
-  for (const rec of events) {
-    if (rec.type !== 'debug_raw' || !rec.event) continue;
-    const ev = rec.event;
-    if (ev.type === 'system' && ev.subtype === 'task_notification' && ev.task_type === 'local_bash' && ev.tool_use_id) {
-      bashDurByToolUseId.set(ev.tool_use_id, ev.usage?.duration_ms || 0);
-    }
-  }
-  for (const c of allToolCalls) {
-    if (c.tool === 'Bash' && c._toolUseId && bashDurByToolUseId.has(c._toolUseId)) {
-      const dur = bashDurByToolUseId.get(c._toolUseId);
-      if (dur > 0) {
-        c.durationMs = dur; c.isApprox = false; c.flaggedSlow = dur > 30000;
-      }
-    }
-    delete c._toolUseId;
-  }
+  for (const c of allToolCalls) delete c._toolUseId;
 
   return {
     toolCounts: [...toolCounts.values()].sort((a, b) => b.count - a.count),
@@ -375,7 +417,7 @@ function aggregateSkills(phases) {
       if (child.kind !== 'skill') continue;
       const row = byName.get(child.skill) ?? { skill: child.skill, count: 0, totalDurationMs: 0, invocations: [] };
       row.count++;
-      row.totalDurationMs += child.approxDurationMs || 0;
+      row.totalDurationMs += child.durationMs || 0;
       row.invocations.push({ ts: child.ts, agentType: phase.agentType, phaseId: phase.phaseId });
       byName.set(child.skill, row);
     }

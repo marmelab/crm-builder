@@ -618,10 +618,11 @@ function renderChildRow(child, relLabel) {
   if (child.kind === 'tool_use') { icon = toolIcon(child.tool); label = child.tool; detail = child.detail ?? ''; }
   else if (child.kind === 'skill') { icon = '🧠'; label = 'Skill'; detail = child.skill; }
   else if (child.kind === 'hook') { icon = '🪝'; label = child.hookName; detail = `${child.worktree || ''} ${child.result || ''}`.trim(); }
+  else if (child.kind === 'agent_processing') { icon = '💭'; label = 'thinking'; detail = ''; }
 
-  const dur = child.kind === 'hook'
-    ? formatDuration(child.durationMs)
-    : (child.isApprox ? `~${formatDuration(child.approxDurationMs)}` : formatDuration(child.approxDurationMs));
+  const dur = child.isApprox
+    ? `~${formatDuration(child.durationMs)}`
+    : formatDuration(child.durationMs);
 
   const detailSpan = el('span', { className: 'child-detail', title: String(detail) });
   detailSpan.textContent = String(detail);
