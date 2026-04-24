@@ -255,3 +255,35 @@ body { height: 100vh; overflow: hidden; font-family: system-ui, sans-serif; back
 .stats-breakdown-seg:nth-child(3n) { background: #f97316; }
 .stats-breakdown-seg:nth-child(4n) { background: #10b981; }
 .stats-breakdown-seg:nth-child(5n) { background: #f59e0b; }
+
+.stats-section-title { font-size: 13px; font-weight: 600; margin-bottom: 8px; color: #d1d5db; }
+
+.phase-row { margin-bottom: 4px; border-radius: 8px; background: #2c2c2e; }
+.phase-row summary {
+  list-style: none; padding: 8px 10px;
+  display: grid; grid-template-columns: auto auto auto 1fr auto auto auto auto;
+  gap: 8px; align-items: center; font-size: 12px; cursor: pointer;
+}
+.phase-row summary::before { content: '▸'; font-size: 9px; opacity: .5; }
+.phase-row[open] summary::before { content: '▾'; }
+.phase-time { font-variant-numeric: tabular-nums; color: #8e8e93; font-size: 11px; }
+.phase-icon { font-size: 13px; }
+.phase-name { font-weight: 600; color: #f2f2f7; }
+.phase-desc { color: #8e8e93; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.phase-stats { color: #8e8e93; font-size: 11px; font-variant-numeric: tabular-nums; }
+.phase-warn { color: #f59e0b; font-size: 11px; }
+.phase-team { border: 1px solid; padding: 1px 6px; border-radius: 10px; font-size: 10px; font-weight: 600; }
+.phase-team.muted { color: #636366; border-color: #3a3a3c; }
+
+.phase-children { padding: 6px 10px 10px 30px; border-top: 1px solid #3a3a3c; }
+.phase-empty { padding: 6px 10px 10px 30px; color: #636366; font-size: 11px; font-style: italic; }
+.child-row {
+  display: grid; grid-template-columns: auto auto auto 1fr auto;
+  gap: 8px; font-size: 11px; padding: 3px 0; align-items: center;
+}
+.child-time { color: #636366; font-variant-numeric: tabular-nums; }
+.child-label { color: #f2f2f7; font-weight: 500; }
+.child-detail { color: #8e8e93; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.child-dur { color: #636366; font-variant-numeric: tabular-nums; }
+.child-hook .child-label { color: #a78bfa; }
+.child-skill .child-label { color: #34d399; }
