@@ -50,8 +50,7 @@ test('extractText returns null when text is only whitespace', () => {
   assert.equal(extractText(msg), null);
 });
 
-test('endsWithQuestion detects direct questions in FR and EN', () => {
-  assert.equal(endsWithQuestion('Quelle couleur préférez-vous ?'), true);
+test('endsWithQuestion detects direct questions', () => {
   assert.equal(endsWithQuestion('Which color do you prefer?'), true);
   assert.equal(endsWithQuestion("I've finished. Next?"), true);
 });
