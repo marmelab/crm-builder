@@ -32,8 +32,47 @@
 **Implication for the design:**
 
 - W1 is the **intended** mechanism but **not reliable enough on its own** in this probe. Possible explanations: (a) `general-purpose + in-process` agents don't process inbox the way `subagent_type` named agents do; (b) the probe's "synchronous-then-sleep" pattern is wrong (the lead is still inside its own turn when it sleeps, blocking inference). Real flow has the lead naturally yield the turn after `SendMessage`.
-- **Recommendation for Phase 1+:** The skill v2 should include a fallback. Either (1) the lead's prompt instructs an explicit `sleep 30 && check inbox` loop after the initial `SendMessage(developer, "GO")`, or (2) the chat-service watchdog polls the team's inbox file at `~/.claude/teams/<team>/inboxes/team-lead.json` and forwards new messages as user turns. **A second deeper probe of W1 should be run with named subagent_types (developer, not general-purpose) before committing the prod skill.**
+- **A deeper probe (Q1b) was run** to test hypothesis (b) with a named subagent_type. See **Q1b** below.
 - **Cleanup gotcha (new):** `TeamDelete` cannot be relied on to terminate teammates — a `rm -rf ~/.claude/teams/<team>` step is mandatory in the lead's cleanup. This was already documented in spec 4.2; this probe confirms the necessity.
+
+## Q1b — W1 deeper probe (named subagent_type, no bash-sleep)
+
+**Probe:** TeamCreate(`q1bprobe`) + spawn `merger` (named subagent_type) with `name: "merger"` + SendMessage(merger, "echo2") + **yield turn immediately** (no bash-sleep) + observe what arrives next.
+
+**Run log:** `/tmp/q1bprobe/run-1777321986.jsonl` (in container).
+
+**Result:** ✅ **W1 CONFIRMED**.
+
+Verbatim from the lead's PROBE_REPORT:
+
+```
+- merger_agent_id: merger@q1bprobe
+- woke_up_via: A fresh user turn — the merger's reply arrived as
+  <teammate-message teammate_id="merger" color="blue"> tags injected
+  into the next incoming message. Not a tool-call result. Not a polled
+  inbox. Pure push delivery into the next turn.
+- echo2_text_seen: yes (twice as plain text + once in idle_notification
+  summary field)
+- did_you_call_taskoutput: no
+- did_you_read_inbox_file: no
+- elapsed_turns_between_send_and_recv: 1
+```
+
+**Confirmed mechanics:**
+
+1. The lead must **yield its turn** after the initial `SendMessage(<member>, ...)`. No bash-sleep, no further tool call — just stop and end the turn.
+2. The teammate's reply arrives in the **next user turn** as `<teammate-message teammate_id="..." color="...">...</teammate-message>` tags injected into the user-turn body.
+3. Total ticket flow remains a single `claude -p` invocation, but the LLM goes through multiple turns inside it: act → yield → receive teammate message → act → yield → ...
+4. **Idle notifications** can also surface as separate follow-up turns after the payload turn (no harm, just noise).
+5. Slight quirk: the message text was duplicated (`ECHO2_OK` arrived twice in the same turn as plain text). Likely an in-process backend artifact. Cosmetic — doesn't break the protocol.
+
+**Implication for the design (updated from Q1):**
+
+- ✅ **No watchdog needed in chat-service.** Spec Section 4.1 is correct as-is for W1. The lead's prompt does not need any polling instructions.
+- The lead's prompt must explicitly instruct it to **end its turn after the initial SendMessage(developer, "GO")** rather than continuing with bash sleeps or any other action. This is a one-line addition to the lead's protocol in skill v2.
+- Same rule applies to dev/reviewers/merger — after each SendMessage, **yield the turn** and let teammate replies arrive naturally.
+
+**Q1 risk downgraded to RESOLVED.**
 
 ## Q2 — Does `subagent_type + name` produce `name@team` agentId?
 
