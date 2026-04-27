@@ -4,6 +4,9 @@ import { createWriteStream } from 'node:fs';
 import { join } from 'node:path';
 import cron from 'node-cron';
 
+const CRON_SCHEDULE = '0 3 * * *';
+const CRON_TIMEZONE = 'Europe/Paris';
+
 /**
  * @param {string} lastRunPath  Path to the last-run marker file (mtime is used).
  * @param {string} sessionsDir  Path to /chat-service/logs/ (one subdir per session).
@@ -114,22 +117,35 @@ export async function runDocumentator(opts) {
   proc.stderr.on('data', (d) => audit.write(`[stderr] ${d}`));
 
   const TIMEOUT_MS = 30 * 60 * 1000;
+  const SIGKILL_GRACE_MS = 5000;
   const exitCode = await new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      audit.write(`\n[timeout] killed after ${TIMEOUT_MS / 1000}s\n`);
+    let resolved = false;
+    let timedOut = false;
+    const settle = (code) => { if (!resolved) { resolved = true; resolve(code); } };
+
+    const killTimer = setTimeout(() => {
+      timedOut = true;
+      audit.write(`\n[timeout] sending SIGTERM after ${TIMEOUT_MS / 1000}s\n`);
       proc.kill('SIGTERM');
-      resolve(-2);
+      setTimeout(() => {
+        if (!proc.killed) {
+          audit.write(`\n[timeout] sending SIGKILL\n`);
+          try { proc.kill('SIGKILL'); } catch {}
+        }
+      }, SIGKILL_GRACE_MS);
+      // Do NOT resolve here — wait for 'close' so documentatorRunning stays held.
     }, TIMEOUT_MS);
+
     proc.once('close', (code) => {
-      clearTimeout(timer);
-      resolve(code);
+      clearTimeout(killTimer);
+      settle(timedOut ? -2 : (code ?? -1));
     });
     proc.once('error', (err) => {
-      clearTimeout(timer);
+      clearTimeout(killTimer);
       proc.stdout.unpipe(audit);
       proc.stderr.removeAllListeners('data');
       audit.write(`\n[spawn-error] ${err.message}\n`);
-      resolve(-1);
+      settle(-1);
     });
   });
   proc.stdout.unpipe(audit);
@@ -150,12 +166,18 @@ export async function runDocumentator(opts) {
  * Returns the ScheduledTask so callers can stop it in tests.
  */
 export function scheduleDocumentator(opts) {
-  return cron.schedule('0 3 * * *', async () => {
+  console.log(`[documentator] cron registered: ${CRON_SCHEDULE} ${CRON_TIMEZONE}`);
+  return cron.schedule(CRON_SCHEDULE, async () => {
     try {
       const result = await runDocumentator(opts);
-      console.log('[documentator]', result.skipped ? 'skipped (no activity)' : `ran exit=${result.exitCode}`);
+      console.log(
+        '[documentator]',
+        result.skipped
+          ? `skipped (${result.reason || 'no activity'})`
+          : `ran exit=${result.exitCode}${result.auditPath ? ` audit=${result.auditPath}` : ''}`
+      );
     } catch (err) {
       console.error('[documentator] run failed:', err.message);
     }
-  });
+  }, { timezone: CRON_TIMEZONE });
 }

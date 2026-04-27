@@ -339,6 +339,16 @@ const httpServer = createServer(async (req, res) => {
 
   // API: trigger documentator run manually
   if (req.url === '/api/documentator/run' && req.method === 'POST') {
+    const remote = req.socket.remoteAddress || '';
+    const isLoopback =
+      remote === '127.0.0.1' ||
+      remote === '::1' ||
+      remote === '::ffff:127.0.0.1';
+    if (!isLoopback) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'documentator manual trigger restricted to loopback' }));
+      return;
+    }
     runDocumentator(DOCUMENTATOR_OPTS)
       .then((result) => {
         res.writeHead(200, { 'Content-Type': 'application/json' });
