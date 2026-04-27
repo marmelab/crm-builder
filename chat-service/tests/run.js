@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 // Test runner — connects to chat-service WS, runs cases, compares to baseline.
 // Usage:
-//   node run.js                       # run all cases, compare to baseline
-//   node run.js --update-baseline     # run all cases, overwrite baseline
-//   node run.js --case <id>           # run a single case by id
+//   node run.js                                  # run all cases, compare to baseline
+//   node run.js --update-baseline                # run all cases, overwrite baseline
+//   node run.js --case <id>                      # run a single case by id
+//   node run.js --case <id> --from-session <sid> # replay metrics from an existing session log
 
 import { readFile, writeFile, mkdir } from 'fs/promises';
 import { existsSync } from 'fs';
@@ -16,13 +17,16 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const CASES_PATH = join(__dirname, 'cases.json');
 const RESULTS_DIR = join(__dirname, 'results');
 const BASELINE_PATH = join(RESULTS_DIR, 'baseline.json');
+const SESSIONS_DIR = process.env.SESSIONS_DIR || join(__dirname, '..', '..', 'sessions');
 const WS_URL = process.env.CHAT_WS_URL || 'ws://localhost:8080';
 
 const args = process.argv.slice(2);
 const caseIdx = args.indexOf('--case');
+const sessIdx = args.indexOf('--from-session');
 const flags = {
   updateBaseline: args.includes('--update-baseline'),
   caseId: caseIdx >= 0 ? args[caseIdx + 1] : null,
+  fromSession: sessIdx >= 0 ? args[sessIdx + 1] : null,
   noReset: args.includes('--no-reset'),
 };
 
@@ -43,6 +47,92 @@ function resetCrmSource() {
   } catch {
     console.warn('  (warning: could not reset /app/src in container — continuing)');
   }
+}
+
+function aggregateFromDebugRaw(metrics, ev) {
+  if (ev?.type === 'assistant') {
+    for (const block of ev.message?.content || []) {
+      if (block.type === 'tool_use') {
+        metrics.tools.push(block.name);
+        if (block.name === 'Agent' || block.name === 'Task') {
+          const sub = block.input?.subagent_type;
+          if (sub) metrics.agents.push(sub);
+        }
+      }
+    }
+  }
+  if (ev?.type === 'result') {
+    metrics.turns += ev.num_turns || 0;
+    metrics.costUsd += ev.total_cost_usd || 0;
+    const u = ev.usage || {};
+    metrics.tokensIn += (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
+    metrics.tokensOut += u.output_tokens || 0;
+  }
+}
+
+function validateExpectations(metrics, exp) {
+  if (exp.mustNotInvoke) {
+    for (const agent of exp.mustNotInvoke) {
+      if (metrics.agents.includes(agent)) {
+        metrics.success = false;
+        metrics.errors.push(`forbidden agent invoked: ${agent}`);
+      }
+    }
+  }
+  if (exp.mustInvoke) {
+    for (const agent of exp.mustInvoke) {
+      if (!metrics.agents.includes(agent)) {
+        metrics.success = false;
+        metrics.errors.push(`required agent missing: ${agent}`);
+      }
+    }
+  }
+  if (exp.maxDurationMs && metrics.durationMs > exp.maxDurationMs) {
+    metrics.success = false;
+    metrics.errors.push(`duration ${metrics.durationMs}ms > max ${exp.maxDurationMs}ms`);
+  }
+  if (exp.maxCostUsd && metrics.costUsd > exp.maxCostUsd) {
+    metrics.success = false;
+    metrics.errors.push(`cost $${metrics.costUsd.toFixed(3)} > max $${exp.maxCostUsd}`);
+  }
+}
+
+async function runCaseFromSession(caseDef, sessionId) {
+  const logPath = join(SESSIONS_DIR, sessionId, 'log.jsonl');
+  if (!existsSync(logPath)) throw new Error(`session log not found: ${logPath}`);
+  const lines = (await readFile(logPath, 'utf8')).trim().split('\n');
+
+  const metrics = {
+    caseId: caseDef.id,
+    category: caseDef.category,
+    mode: caseDef.mode,
+    durationMs: 0,
+    tokensIn: 0,
+    tokensOut: 0,
+    costUsd: 0,
+    turns: 0,
+    agents: [],
+    tools: [],
+    success: true,
+    errors: [],
+    sessionId,
+  };
+
+  let tFirstUser = null;
+  let tLastStatusFalse = null;
+  for (const line of lines) {
+    let o;
+    try { o = JSON.parse(line); } catch { continue; }
+    if (o.type === 'user_message' && !tFirstUser) tFirstUser = o.ts;
+    if (o.type === 'status' && o.working === false) tLastStatusFalse = o.ts;
+    if (o.type === 'debug_raw') aggregateFromDebugRaw(metrics, o.event);
+  }
+  if (tFirstUser && tLastStatusFalse) {
+    metrics.durationMs = new Date(tLastStatusFalse) - new Date(tFirstUser);
+  }
+
+  validateExpectations(metrics, caseDef.expect || {});
+  return metrics;
 }
 
 async function runCase(caseDef) {
@@ -85,27 +175,7 @@ async function runCase(caseDef) {
     let msg;
     try { msg = JSON.parse(raw.toString()); } catch { return; }
 
-    if (msg.type === 'debug_raw') {
-      const ev = msg.event;
-      if (ev.type === 'assistant') {
-        for (const block of ev.message?.content || []) {
-          if (block.type === 'tool_use') {
-            metrics.tools.push(block.name);
-            if (block.name === 'Agent' || block.name === 'Task') {
-              const sub = block.input?.subagent_type;
-              if (sub) metrics.agents.push(sub);
-            }
-          }
-        }
-      }
-      if (ev.type === 'result') {
-        metrics.turns += ev.num_turns || 0;
-        metrics.costUsd += ev.total_cost_usd || 0;
-        const u = ev.usage || {};
-        metrics.tokensIn += (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
-        metrics.tokensOut += u.output_tokens || 0;
-      }
-    }
+    if (msg.type === 'debug_raw') aggregateFromDebugRaw(metrics, msg.event);
 
     if (msg.type === 'status' && msg.working === false && waitingForTurn) {
       const r = waitingForTurn;
@@ -125,33 +195,7 @@ async function runCase(caseDef) {
   metrics.durationMs = Date.now() - start;
   ws.close();
 
-  // Validate expectations
-  const exp = caseDef.expect || {};
-  if (exp.mustNotInvoke) {
-    for (const agent of exp.mustNotInvoke) {
-      if (metrics.agents.includes(agent)) {
-        metrics.success = false;
-        metrics.errors.push(`forbidden agent invoked: ${agent}`);
-      }
-    }
-  }
-  if (exp.mustInvoke) {
-    for (const agent of exp.mustInvoke) {
-      if (!metrics.agents.includes(agent)) {
-        metrics.success = false;
-        metrics.errors.push(`required agent missing: ${agent}`);
-      }
-    }
-  }
-  if (exp.maxDurationMs && metrics.durationMs > exp.maxDurationMs) {
-    metrics.success = false;
-    metrics.errors.push(`duration ${metrics.durationMs}ms > max ${exp.maxDurationMs}ms`);
-  }
-  if (exp.maxCostUsd && metrics.costUsd > exp.maxCostUsd) {
-    metrics.success = false;
-    metrics.errors.push(`cost $${metrics.costUsd.toFixed(3)} > max $${exp.maxCostUsd}`);
-  }
-
+  validateExpectations(metrics, caseDef.expect || {});
   return metrics;
 }
 
@@ -209,16 +253,23 @@ async function main() {
     console.error(`No cases to run (id: ${flags.caseId})`);
     process.exit(1);
   }
+  if (flags.fromSession && !flags.caseId) {
+    console.error('--from-session requires --case <id>');
+    process.exit(1);
+  }
 
-  console.log(`Running ${toRun.length} case(s) against ${WS_URL}...\n`);
+  const mode = flags.fromSession ? `replaying session ${flags.fromSession}` : `against ${WS_URL}`;
+  console.log(`Running ${toRun.length} case(s) ${mode}...\n`);
 
   const results = [];
   for (let i = 0; i < toRun.length; i++) {
     const c = toRun[i];
     process.stdout.write(`[${i + 1}/${toRun.length}] ${c.id.padEnd(30)} `);
-    if (!flags.noReset) resetCrmSource();
+    if (!flags.noReset && !flags.fromSession) resetCrmSource();
     try {
-      const m = await runCase(c);
+      const m = flags.fromSession
+        ? await runCaseFromSession(c, flags.fromSession)
+        : await runCase(c);
       results.push(m);
       const status = m.success ? '\x1b[32mOK\x1b[0m' : '\x1b[31mFAIL\x1b[0m';
       console.log(`${status} (${(m.durationMs / 1000).toFixed(1)}s, $${m.costUsd.toFixed(3)}, ${formatTokens(m.tokensIn)} in, agents: ${m.agents.join(',') || '-'})`);
