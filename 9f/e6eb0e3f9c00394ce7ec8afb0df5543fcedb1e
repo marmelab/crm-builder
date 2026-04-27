@@ -1,0 +1,30 @@
+chat-service/lib/documentator-cron.js
+  6c0b708f3772f275 7-9,120,122-128,130-136,138,140-141,144,148,169-170,173-178,182
+chat-service/server.js
+  6c0b708f3772f275 342-351
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "9fe6eb0e3f9c00394ce7ec8afb0df5543fcedb1e",
+  "prompts": {
+    "6c0b708f3772f275": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "73e170b2-dbb5-4758-a10c-62ccd068a0e1",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Jerome",
+      "messages": [],
+      "total_additions": 42,
+      "total_deletions": 10,
+      "accepted_lines": 42,
+      "overriden_lines": 0
+    }
+  },
+  "humans": {
+    "h_84c0d888491a2d": {
+      "author": "Jerome"
+    }
+  }
+}
