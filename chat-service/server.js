@@ -463,13 +463,23 @@ function sendStats(runtime) {
 }
 
 // Tickets live in the session folder (alongside log.jsonl / meta.json) since
-// the TICKETS_DIR refactor — see chat-orchestrator.md. Progress is the count
-// of TASK-*.json files with status === "merged" over the total.
+// the TICKETS_DIR refactor — see chat-orchestrator.md. Progress is scoped to
+// the current turn: tickets present at spawn-start are baselined out so the
+// counter doesn't leak prior-turn work into a fresh prompt.
 const TICKET_FILE_RE = /^TASK-.*\.json$/;
-async function computeProgress(sessionDir) {
+async function snapshotTickets(sessionDir) {
+  try {
+    const entries = await readdir(sessionDir);
+    return new Set(entries.filter((f) => TICKET_FILE_RE.test(f)));
+  } catch {
+    return new Set();
+  }
+}
+
+async function computeProgress(sessionDir, baseline = new Set()) {
   let entries;
   try { entries = await readdir(sessionDir); } catch { return { total: 0, done: 0 }; }
-  const files = entries.filter((f) => TICKET_FILE_RE.test(f));
+  const files = entries.filter((f) => TICKET_FILE_RE.test(f) && !baseline.has(f));
   if (files.length === 0) return { total: 0, done: 0 };
   let done = 0;
   for (const file of files) {
@@ -483,7 +493,8 @@ async function computeProgress(sessionDir) {
 
 async function sendProgress(runtime) {
   if (!runtime?.session) return;
-  const { total, done } = await computeProgress(`${LOG_DIR}/${runtime.session.id}`);
+  const baseline = runtime.turnTicketBaseline || new Set();
+  const { total, done } = await computeProgress(`${LOG_DIR}/${runtime.session.id}`, baseline);
   broadcast(runtime, { type: 'progress', total, done });
 }
 
@@ -515,6 +526,13 @@ async function transitionState(runtime, newState) {
 
 async function processMessage(runtime, prompt) {
   if (!runtime) return;
+
+  // Snapshot existing tickets so this turn's counter only reflects work
+  // initiated by *this* prompt — prior-turn tickets stay baselined out.
+  // Reset the client-side counter immediately, before the working bubble
+  // mounts, so it doesn't briefly flash the previous turn's value.
+  runtime.turnTicketBaseline = await snapshotTickets(`${LOG_DIR}/${runtime.session.id}`);
+  broadcast(runtime, { type: 'progress', total: 0, done: 0 });
 
   // Claude (re)starts → session is active again.
   transitionState(runtime, 'in_progress');
