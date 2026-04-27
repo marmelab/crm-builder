@@ -1,0 +1,23 @@
+docs/superpowers/specs/2026-04-27-agent-teams-redesign-design.md
+  e08a40853c09e533 1-411
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "40a3edc7311331339da4a864fa474b63f6d7adbb",
+  "prompts": {
+    "e08a40853c09e533": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ce83bf49-dc02-4c23-a007-ca4c6044d443",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Jerome",
+      "messages": [],
+      "total_additions": 411,
+      "total_deletions": 0,
+      "accepted_lines": 411,
+      "overriden_lines": 0
+    }
+  }
+}
