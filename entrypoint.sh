@@ -59,7 +59,24 @@ chmod 777 /chat-service/logs 2>/dev/null || true
 # chown the planner cannot write TASK-XXX.json and the whole flow silently
 # cascades into confusion — previously caused a full-session regression where
 # reviewers wandered because the ticket file they were reading never existed.
-mkdir -p /app/docs/tickets /app/docs/reflections 2>/dev/null || true
+mkdir -p /app/docs/tickets /app/docs/reflections /app/docs/learnings/runs 2>/dev/null || true
+
+if [ ! -f /app/docs/learnings/patterns.md ]; then
+  cat > /app/docs/learnings/patterns.md <<'PATTERNS_EOF'
+# Patterns ledger
+
+This file is maintained by the `documentator` agent. Each entry below is a recurring friction pattern detected across reflections, hook failures, agent retries, stats, and user-side signals.
+
+In phase 1 the entries are **read-only for humans**: no agent loads this file at runtime, no automatic action is taken. The maintainer reviews entries to validate the documentator's detection quality and the appliquability of its proposed actions.
+
+See [docs/superpowers/specs/2026-04-27-documentator-design.md](../superpowers/specs/2026-04-27-documentator-design.md) for the full design.
+
+---
+
+<!-- Patterns appear below this line. Documentator preserves the file header verbatim. -->
+PATTERNS_EOF
+fi
+
 chown -R developer:developer /app/docs 2>/dev/null || true
 
 # Worktrees root — same reasoning. Bind-mounted from host, needs developer write
