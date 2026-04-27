@@ -49,6 +49,7 @@ const MIME_TYPES = {
   '.html': 'text/html',
   '.js':   'text/javascript',
   '.css':  'text/css',
+  '.svg':  'image/svg+xml',
 };
 
 // Exported for unit testing
