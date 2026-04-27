@@ -139,6 +139,7 @@ function renderWorkingUi() {
   if (working && !existing) {
     const el = document.createElement('div');
     el.className = 'msg msg-working';
+    el.dataset.seq = String(Number.MAX_SAFE_INTEGER);
     const dots = document.createElement('div');
     dots.className = 'bouncing-dots';
     dots.appendChild(document.createElement('span'));
@@ -240,8 +241,9 @@ function handleWsMessage(event) {
   }
 
   if (msg.type === 'message' && msg.role === 'assistant') {
-    const existing = messages.querySelector('.msg-working');
-    if (existing) existing.remove();
+    // Keep the working bubble visible — the turn isn't over until a
+    // `status: working=false` frame arrives. The bubble's sentinel seq
+    // ensures the new message lands above it.
     appendMessage('assistant', msg.content);
     historyApi.refreshHistoryIfOpen();
   }
