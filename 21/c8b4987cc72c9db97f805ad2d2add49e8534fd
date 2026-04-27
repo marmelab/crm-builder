@@ -1,0 +1,23 @@
+docker-compose.yml
+  6c0b708f3772f275 44-47,66-67
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "21c8b4987cc72c9db97f805ad2d2add49e8534fd",
+  "prompts": {
+    "6c0b708f3772f275": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "73e170b2-dbb5-4758-a10c-62ccd068a0e1",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Jerome",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 6,
+      "overriden_lines": 0
+    }
+  }
+}
