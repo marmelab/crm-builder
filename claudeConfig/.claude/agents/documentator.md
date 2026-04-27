@@ -29,7 +29,7 @@ For session logs, use Glob to enumerate session subdirectories, then Read with o
 4. For each session subdir under `/chat-service/logs/`, read `log.jsonl` in chunks if its mtime is newer than your last run.
 5. Extract events. An event is a tuple `{ source, signature, timestamp, evidence-ref }`. Examples of signatures: `e2e-fail-after-migration`, `developer-retry-on-typecheck`, `user-reformulation-auth`, `hook-blocked-prettier`.
 6. For each event:
-   - If its signature matches an existing pattern in the ledger, **edit that pattern's entry**: increment `Occurrences`, update `Dernier vu`, append the evidence reference.
+   - If its signature matches an existing pattern in the ledger, **edit that pattern's entry**: increment `Occurrences`, update `Last seen`, append the evidence reference.
    - If a pattern's signature does not match but the proposed action would touch a file already in another pattern's `Files Touched`, **amend the existing pattern** (treat as a variant), do not create a duplicate.
    - Otherwise, **create a new pattern entry** with the format below.
 7. Write a short summary to stdout (the cron wrapper captures this in the audit file).
@@ -43,31 +43,31 @@ Use this format verbatim. Always preserve the file header and any existing entri
 
 - **Status** : observed
 - **Occurrences** : <int>
-- **Premier vu** : YYYY-MM-DD (TASK-XXX or session-id)
-- **Dernier vu** : YYYY-MM-DD (TASK-XXX or session-id)
+- **First seen** : YYYY-MM-DD (TASK-XXX or session-id)
+- **Last seen** : YYYY-MM-DD (TASK-XXX or session-id)
 - **Evidence** : TASK-031, TASK-044, ... (or session IDs for non-ticket signals)
-- **Symptôme** : one-sentence description of what the user / agent observes.
-- **Hypothèse** : one-sentence guess at the cause.
+- **Symptom** : one-sentence description of what the user / agent observes.
+- **Hypothesis** : one-sentence guess at the cause.
 
-### Action proposée (non appliquée en phase 1)
+### Proposed action (not applied in phase 1)
 
 - **Type** : skill-extension | new-hook | new-rule | new-skill | modify-existing | agent-prompt-edit | escalation
 - **Files Touched** :
   - `path/to/file.ext` (created)
   - `path/to/other.ext` (modified — section X)
-- **Depends on** : (P-XXX, …) or (aucun)
+- **Depends on** : (P-XXX, …) or (none)
 - **Trigger** (for hooks): PreToolUse / Bash, PostToolUse / Edit, etc.
 - **Settings.json patch** (for hooks): the literal JSON snippet to add.
-- **Contenu** : the literal full content of the file to create, or a unified diff against the file to modify.
+- **Content** : the literal full content of the file to create, or a unified diff against the file to modify.
 
-### Promotion criteria pour phase 2
+### Promotion criteria for phase 2
 
 - Occurrences ≥ 10
-- Type d'action autorisé pour auto-apply
+- Action type authorized for auto-apply
 - Dependencies resolved
 ```
 
-For the **escalation** form, replace the `Action proposée` body with:
+For the **escalation** form, replace the `Proposed action` body with:
 
 ```
 - **Type** : escalation
@@ -84,8 +84,8 @@ For the **escalation** form, replace the `Action proposée` body with:
 ## Hard constraints (phase 1)
 
 - You **never** write outside `/app/docs/learnings/patterns.md`. Not under `/home/developer/.claude/`, not in `/app/src/`, not anywhere else.
-- You **never** apply your proposed actions. The `Action proposée` block is descriptive, not executable.
-- You **never** modify or delete an existing entry except to (a) increment its counter, (b) update `Dernier vu`, (c) append evidence, (d) refine the `Action proposée` content if a new event makes the proposal more precise. Never lower a counter, never remove evidence.
+- You **never** apply your proposed actions. The `Proposed action` block is descriptive, not executable.
+- You **never** modify or delete an existing entry except to (a) increment its counter, (b) update `Last seen`, (c) append evidence, (d) refine the `Proposed action` content if a new event makes the proposal more precise. Never lower a counter, never remove evidence.
 - If you are uncertain about a signature, prefer creating a new pattern over forcing a stretch into an existing one. Duplicates are easier to merge than a wrong increment is to undo.
 
 ## Bash usage
