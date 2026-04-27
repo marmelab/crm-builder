@@ -754,6 +754,69 @@ Added a fourth state `waiting`:
 
 ---
 
+## Phase 31 — Progress counter, bouncing dots, favicon, Makefile (2026-04-27, branch `feat/progress-bar`)
+
+A round of UX-and-tooling polish on top of the multi-session work: replace the static spinner with bouncing dots, surface ticket progress *inside* the working bubble (instead of a separate UI strip), pin the bubble below the latest assistant message until the turn truly ends, and add a few quality-of-life primitives (favicon, Makefile).
+
+### Working bubble: bouncing dots + sticky bottom anchor
+- `chat.css` — `.msg-working` is now an assistant-style bubble (radius / border-bottom-left-radius matching `.msg-assistant`) wrapping a 3-span `.bouncing-dots` element. Animation (`@keyframes dotBounce`) staggers each dot by `-.16s`, vertically translating 5px.
+- `chat.js` — the working bubble's `dataset.seq` is set to `Number.MAX_SAFE_INTEGER` so `placeIntoMessages` always inserts new content (queued user messages, intermediate assistant messages) *before* it. The previous handler in `msg.type === 'message' && role === 'assistant'` removed the bubble explicitly; that line is gone — only the `status: working=false` frame at end-of-turn drops it.
+
+**Why**: when Claude streams multiple assistant messages within a single turn (long answers, planner narration), the dots used to disappear after the first message and the user thought processing had stopped. The seq sentinel + removal-on-status-only fix keeps the dots glued under the latest message until the turn actually ends.
+
+### In-bubble progress counter ("tasks completed N/M")
+- New WS frame `{type: 'progress', total, done}`. Server emits it from `sendProgress(runtime)` which reads the session folder, filters `TASK-*.json`, counts those with `status === "merged"` over the total.
+- Client renders the counter as a sub-element of `.msg-working` (`.msg-working-progress`), only when `total > 0`. Reset to 0/0 (counter hidden) when no ticket-driven work is going on.
+- An earlier draft used a separate horizontal progress *bar* mounted just below the chat header — thrown out before merge in favour of the textual line under the dots, which is less visually heavy and self-hides when irrelevant.
+
+**Why**: complex requests (FULL_SETUP, multi-feature edits) spawn N tickets via the planner and the merger flips them to `merged` one by one. Without a counter, the user has no signal that "5 of 8 tickets done" — the working bubble alone is binary (working / not working). The textual "N/M" makes progress visible without taking up vertical space when irrelevant.
+
+### Tickets relocated next to the session log
+- Tickets used to live in `docs/tickets/TASK-XXX.json` (a single global pile). Now they're written **per session** at `<LOG_DIR>/<sessionId>/TASK-XXX.json`, alongside `log.jsonl` and `meta.json`.
+- `chat-orchestrator.md` and ticket-related skills/agents updated to point planner/merger writes at the per-session folder.
+- `computeProgress()` reads from the session folder directly — no global cross-talk between concurrent sessions.
+
+**Why**: a global ticket pile was already broken under multi-session; tickets from session A would leak into session B's progress count. Per-session folders are the natural fix and align with the "everything for a session lives in one folder" invariant introduced in Phase 28.
+
+### Turn-scoped progress (baseline snapshot)
+Without scoping, the counter showed *cumulative* per-session ticket counts: at the start of turn N+1 it would still display "tasks completed 1/1" from turn N, irrelevant to the new prompt.
+
+- `snapshotTickets(sessionDir)` — returns the `Set<filename>` of `TASK-*.json` present at a given point in time.
+- `computeProgress(sessionDir, baseline)` — accepts an optional baseline Set; files in it are excluded from the count.
+- `processMessage()` snapshots `runtime.turnTicketBaseline` *before* spawning Claude, then immediately broadcasts `progress: 0/0` so the client UI resets *before* the working bubble mounts (preventing a flash of stale "1/1").
+- `sendProgress()` reads `runtime.turnTicketBaseline ?? new Set()` and forwards it to `computeProgress`.
+
+**Why**: between turns the working bubble isn't visible anyway, but the moment the user submits a new prompt the bubble reappears — and would briefly paint the previous turn's totals. Scoping per-turn keeps "N/M" honest: it counts only what *this* prompt produced.
+
+### Hot-reload of progress: fire on `tool_result`, not `tool_use`
+The first version of the progress refresh fired `sendProgress()` when an `assistant` event contained a `tool_use` of `Write`/`Edit` against `*/TASK-*.json` — but at that moment the file wasn't yet on disk, so `readdir` missed it and the counter stayed at `0/N`.
+
+Fix in `processMessage`:
+- On `assistant` events, stage `tool.id` in a per-spawn `pendingTicketWrites: Set<string>` whenever the tool_use targets a TASK ticket.
+- On `user` events (which carry `tool_result` blocks), if any `tool_result.tool_use_id` matches a staged id, delete it and *then* fire `sendProgress()` — the file is now on disk.
+- `sendProgress()` on `result` events stays as a fallback for end-of-turn merges.
+
+**Why**: the earlier path was racy and the user reported "the counter doesn't change without a page refresh". The fix keys the broadcast off the post-write event, eliminating the race entirely.
+
+### AI-mode favicon
+- New `chat-service/public/favicon.svg` — heavy reuse of the original Atomic-CRM logo (orbital arc + nucleus) with the comet-tail at the upper-right replaced by a 4-point sparkle (the same `✦` glyph used as `#chat-header-icon`). Blue→purple gradient (`#3b82f6 → #8b5cf6`) matches the chat's accent palette.
+- Wired in `index.html` via `<link rel="icon" type="image/svg+xml" href="/favicon.svg">`.
+- `MIME_TYPES` in `server.js` extended with `'.svg': 'image/svg+xml'` — without this, the static handler fell back to `text/plain` and the browser refused to render the file as a favicon.
+
+**Why**: the chat had no favicon (default browser globe). The new icon signals "Atomic-CRM, AI-flavoured" at a glance in the tab bar.
+
+### Makefile
+First-class wrapper for the docker-compose lifecycle and chat-service test commands. Auto-documented `make help` (extracted via `awk` from `## description` comments in target lines).
+
+Targets: `build`, `up` (demo profile), `up-full` (full profile), `down`, `restart`, `logs`, `shell` (exec into `atomic-crm-demo`), `test`, `test-smoke`, `bench`, `bench-update`, `clean-sessions`, `reset`.
+
+- `make clean-sessions` — interactive `[y/N]` prompt by default, skipped via `YES=1`. Uses `find sessions -mindepth 1 -delete` so the gitignored `sessions/` directory itself stays.
+- `make reset` — orchestrates `down → clean-sessions YES=1 → build → up`. Used after destructive iterations on the orchestrator/agents to start from a known-clean state.
+
+**Why**: the README documented `docker compose --profile demo up` etc. but typing the long form repeatedly is friction; a Makefile is the conventional answer and the `## description`-driven help keeps docs and code in sync.
+
+---
+
 ## Open items / known limits
 
 - **`medium-new-field` test** times out at 15 min (bumped to 35 min). Real agent-team flow on a multi-file feature naturally takes 20-30 min.
@@ -767,4 +830,4 @@ Added a fourth state `waiting`:
 
 ---
 
-_Last updated: 2026-04-24 (Phase 30)_
+_Last updated: 2026-04-27 (Phase 31)_
