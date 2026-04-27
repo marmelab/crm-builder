@@ -7,6 +7,7 @@ import { spawn } from 'child_process';
 import { createInterface } from 'readline';
 import { randomUUID } from 'crypto';
 import { WebSocketServer } from 'ws';
+import { scheduleDocumentator, runDocumentator } from './lib/documentator-cron.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const PORT = Number(process.env.PORT) || 8080;
@@ -24,6 +25,15 @@ const WELCOME_CHOICES = {
 };
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const DOCUMENTATOR_OPTS = {
+  sessionsDir: LOG_DIR,
+  lastRunPath: '/app/docs/learnings/runs/last-run.txt',
+  runsDir: '/app/docs/learnings/runs',
+  agentMdPath: `${CLAUDE_HOME}/.claude/agents/documentator.md`,
+  claudeHome: CLAUDE_HOME,
+  cwd: CWD,
+};
 
 async function loadSystemPrompt() {
   try {
@@ -325,6 +335,20 @@ const httpServer = createServer(async (req, res) => {
       }
       return;
     }
+  }
+
+  // API: trigger documentator run manually
+  if (req.url === '/api/documentator/run' && req.method === 'POST') {
+    runDocumentator(DOCUMENTATOR_OPTS)
+      .then((result) => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(result));
+      })
+      .catch((err) => {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      });
+    return;
   }
 
   // Static file server
@@ -804,6 +828,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     const t = tools?.length ? tools.join(',') : 'default';
     console.log(content ? `Orchestrator loaded (model: ${model || 'default'}, tools: ${t}).` : 'No orchestrator prompt, using default.');
   });
+  scheduleDocumentator(DOCUMENTATOR_OPTS);
   httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`Chat service listening on port ${PORT}`);
   });
