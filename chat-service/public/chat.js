@@ -18,7 +18,6 @@ const chatTitle = document.getElementById('chat-title');
 const form     = document.getElementById('chat-form');
 const input    = document.getElementById('chat-input');
 const send     = document.getElementById('chat-send');
-const statusDots = document.getElementById('chat-status-dots');
 const stopBtn = document.getElementById('chat-stop');
 const messages = document.getElementById('chat-messages');
 const stats = document.getElementById('chat-stats');
@@ -100,7 +99,6 @@ function resetChatUi() {
   display.setSessionId(null);
   working = false;
   send.disabled = false;
-  statusDots.style.display = 'none';
   stopBtn.hidden = true;
   stopBtn.disabled = false;
   historyPanel.hidden = true;
@@ -108,19 +106,18 @@ function resetChatUi() {
 }
 
 function renderWorkingUi() {
-  statusDots.style.display = working ? 'inline-flex' : 'none';
   stopBtn.hidden = !working;
   stopBtn.disabled = false;
   const existing = messages.querySelector('.msg-working');
   if (working && !existing) {
     const el = document.createElement('div');
     el.className = 'msg msg-working';
-    const spinner = document.createElement('div');
-    spinner.className = 'spinner';
-    const label = document.createElement('span');
-    label.textContent = 'Working on it...';
-    el.appendChild(spinner);
-    el.appendChild(label);
+    const dots = document.createElement('div');
+    dots.className = 'bouncing-dots';
+    dots.appendChild(document.createElement('span'));
+    dots.appendChild(document.createElement('span'));
+    dots.appendChild(document.createElement('span'));
+    el.appendChild(dots);
     messages.appendChild(el);
     messages.scrollTop = messages.scrollHeight;
   } else if (!working && existing) {
