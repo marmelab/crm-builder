@@ -520,6 +520,7 @@ async function processMessage(runtime, prompt) {
   transitionState(runtime, 'in_progress');
   broadcast(runtime, { type: 'status', working: true });
   const toolMap = new Map();
+  const pendingTicketWrites = new Set();
   let receivedText = false;
   let rateLimit = null;
   let resultError = false;
@@ -608,17 +609,26 @@ async function processMessage(runtime, prompt) {
           sendProgress(runtime).catch(() => {});
         }
 
-        // Planner Write/Edit on TASK-*.json appears as tool_use blocks within
-        // assistant events. Cheaper than rescanning every turn: detect the path
-        // and re-read on the spot.
+        // Planner Write/Edit on TASK-*.json: stage the tool_use_id when we
+        // see the assistant emit the call, then fire sendProgress once the
+        // matching tool_result lands (the file isn't on disk before that).
         if (event.type === 'assistant') {
           for (const tool of extractToolUses(event)) {
             const fp = tool.input?.file_path;
             if ((tool.name === 'Write' || tool.name === 'Edit') && fp && /\/TASK-[^/]+\.json$/.test(fp)) {
-              sendProgress(runtime).catch(() => {});
-              break;
+              pendingTicketWrites.add(tool.id);
             }
           }
+        }
+        if (event.type === 'user' && pendingTicketWrites.size > 0) {
+          const blocks = event.message?.content || [];
+          let resolved = false;
+          for (const b of blocks) {
+            if (b?.type === 'tool_result' && pendingTicketWrites.delete(b.tool_use_id)) {
+              resolved = true;
+            }
+          }
+          if (resolved) sendProgress(runtime).catch(() => {});
         }
       } catch {}
     }
