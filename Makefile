@@ -37,14 +37,18 @@ bench: ## Replay tests/cases.json against ws://localhost:8080
 bench-update: ## Rewrite the bench baseline with the current run
 	cd chat-service && npm run bench:update
 
-reset: ## Full reset: down + wipe sessions + rebuild image + up (demo)
+reset: ## Full reset: down + archive sessions + rebuild image + up (demo)
 	$(MAKE) down
-	$(MAKE) clean-sessions YES=1
+	$(MAKE) clean-sessions
 	$(MAKE) build
 	$(MAKE) up
 
-clean-sessions: ## Delete every session under ./sessions (skip prompt with YES=1)
-	@if [ "$(YES)" != "1" ]; then \
-		printf "Delete every session under ./sessions? [y/N] " && read ans && [ "$$ans" = "y" ] || { echo "Aborted."; exit 1; }; \
+clean-sessions: ## Archive ./sessions into ./old-sessions/<timestamp>/ (non-destructive)
+	@if [ ! -d sessions ] || [ -z "$$(ls -A sessions 2>/dev/null)" ]; then \
+		echo "sessions/ is empty — nothing to archive."; \
+	else \
+		ts="$$(date +%Y-%m-%dT%H-%M-%S)"; \
+		mkdir -p "old-sessions/$$ts" && \
+		find sessions -mindepth 1 -maxdepth 1 -exec mv -t "old-sessions/$$ts/" {} + && \
+		echo "sessions/ → old-sessions/$$ts/"; \
 	fi
-	@find sessions -mindepth 1 -delete 2>/dev/null; echo "sessions/ cleaned."
