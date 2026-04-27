@@ -53,13 +53,13 @@ chown -R developer:developer /home/developer/.claude 2>/dev/null || true
 mkdir -p /chat-service/logs 2>/dev/null || true
 chmod 777 /chat-service/logs 2>/dev/null || true
 
-# Runtime-generated docs (tickets, reflections) — bind-mounted from host ./crm-docs.
+# Runtime-generated docs (reflections, learnings) — bind-mounted from host ./crm-docs.
 # On a fresh host, the directory may be empty and owned by root (if Docker runs as
 # root on Linux) or by a host UID that doesn't match developer's UID. Without this
-# chown the planner cannot write TASK-XXX.json and the whole flow silently
-# cascades into confusion — previously caused a full-session regression where
-# reviewers wandered because the ticket file they were reading never existed.
-mkdir -p /app/docs/tickets /app/docs/reflections /app/docs/learnings/runs 2>/dev/null || true
+# chown the developer cannot write reflections and Mode 2 silently fails.
+# Note: ticket files (TASK-XXX.json) live in /chat-service/logs/<sessionId>/ now,
+# alongside log.jsonl and meta.json — chown'd via the chat-service logs block above.
+mkdir -p /app/docs/reflections /app/docs/learnings/runs 2>/dev/null || true
 
 if [ ! -f /app/docs/learnings/patterns.md ]; then
   cat > /app/docs/learnings/patterns.md <<'PATTERNS_EOF'

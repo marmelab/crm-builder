@@ -21,7 +21,7 @@ functional validation happens in CI on the PR (where the e2e Supabase
 stack runs via `make start-supabase-e2e`) — your job is the local
 pre-filter.
 
-Read the ticket from docs/tickets/TASK-XXX.json before starting.
+Read the ticket from `${TICKETS_DIR}/TASK-XXX.json` before starting. `TICKETS_DIR` is an absolute path passed in your caller's prompt (the per-session folder).
 Follow the output format in .claude/rules/agent-output-format.md.
 You run in parallel with other reviewers.
 

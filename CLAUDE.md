@@ -29,7 +29,7 @@ The chat-service is the non-technical entry point. `ttyd` is the raw terminal fo
 Volumes (see [docker-compose.yml](docker-compose.yml)):
 - `crm-source` → `/app/src` (persists user's code changes)
 - `crm-worktrees` → `/worktrees` (one directory per ticket)
-- `crm-docs` → `/app/docs` (tickets + reflections knowledge base)
+- `crm-docs` → `/app/docs` (project-context + reflections knowledge base; ticket JSONs live alongside session logs, not here)
 - `claude-auth` → `/home/developer/.claude` (OAuth tokens across restarts)
 - `supabase-cache` → `/root/.docker` (full mode only)
 

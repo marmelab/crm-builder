@@ -20,18 +20,18 @@ Check `/app/docs/project-context.json` at project root:
 
 ### Phase 1 — Ticket planning (once per feature/need)
 
-Dispatch PLANNER:
+Dispatch PLANNER. Pass `TICKETS_DIR` (the session folder from `<session_dir>`) so the planner writes ticket files alongside the conversation's `log.jsonl` and `meta.json`:
 
 ```
 Agent({
   subagent_type: "planner",
   description: "Plan tickets for: <user request>",
-  prompt: "MODE=<mode>\n\n<user request>"
+  prompt: "MODE=<mode>\nTICKETS_DIR=<session_dir>\n\n<user request>"
 })
 ```
 
 Planner produces:
-- ordered list of TASK-XXX tickets written to `/app/docs/tickets/TASK-XXX.json`
+- ordered list of TASK-XXX tickets written to `${TICKETS_DIR}/TASK-XXX.json`
 - each ticket has `dependencies: []`, `parallel_safe: true/false`, `branch_name: feature/...`
 - ticket list appended to `/app/docs/project-context.json` under `tickets`
 
@@ -108,7 +108,7 @@ Agent({
   team_name: "ticket-TASK-XXX",
   model: "opus",
   description: "Implement TASK-XXX",
-  prompt: "WORKTREE_PATH=/worktrees/TASK-XXX\nBRANCH_NAME=<ticket.branch_name>\nMODE=<mode>\n\nTASK: docs/tickets/TASK-XXX.json"
+  prompt: "WORKTREE_PATH=/worktrees/TASK-XXX\nBRANCH_NAME=<ticket.branch_name>\nMODE=<mode>\nTICKETS_DIR=<session_dir>\n\nTASK: ${TICKETS_DIR}/TASK-XXX.json"
 })
 ```
 
@@ -120,16 +120,18 @@ Agent({
   team_name: "ticket-TASK-XXX",
   model: "sonnet",
   description: "Review TASK-XXX",
-  prompt: "Review docs/tickets/TASK-XXX.json implementation in worktree /worktrees/TASK-XXX"
+  prompt: "TICKETS_DIR=<session_dir>\n\nReview ${TICKETS_DIR}/TASK-XXX.json implementation in worktree /worktrees/TASK-XXX"
 })
 Agent({
   subagent_type: "test-validator",
   team_name: "ticket-TASK-XXX",
   model: "haiku",
   description: "Validate TASK-XXX",
-  prompt: "Validate docs/tickets/TASK-XXX.json implementation in worktree /worktrees/TASK-XXX"
+  prompt: "TICKETS_DIR=<session_dir>\n\nValidate ${TICKETS_DIR}/TASK-XXX.json implementation in worktree /worktrees/TASK-XXX"
 })
 ```
+
+`<session_dir>` above is a placeholder — substitute the literal absolute path from your system prompt's `<session_dir>` tag.
 
 ### Developer (fix mode, after BLOCKED)
 
@@ -143,7 +145,7 @@ Agent({
   team_name: "ticket-TASK-XXX",
   model: "sonnet",
   description: "Write reflection for TASK-XXX",
-  prompt: "MODE 2 — REFLECTION.\n\nWORKTREE_PATH=/worktrees/TASK-XXX\nBRANCH_NAME=<ticket.branch_name>\nTASK_ID=TASK-XXX\n\nThe ticket is implemented and reviewed. Your job now: invoke Skill({skill: 'reflection-writing'}) first, then read past reflections in /app/docs/reflections/, then write /app/docs/reflections/TASK-XXX-reflection.md. Do NOT touch code. Commit the reflection file in the worktree with message 'docs(TASK-XXX): reflection'."
+  prompt: "MODE 2 — REFLECTION.\n\nWORKTREE_PATH=/worktrees/TASK-XXX\nBRANCH_NAME=<ticket.branch_name>\nTASK_ID=TASK-XXX\nTICKETS_DIR=<session_dir>\n\nThe ticket is implemented and reviewed. Your job now: invoke Skill({skill: 'reflection-writing'}) first, then read past reflections in /app/docs/reflections/, then write /app/docs/reflections/TASK-XXX-reflection.md. Do NOT touch code. Commit the reflection file in the worktree with message 'docs(TASK-XXX): reflection'."
 })
 ```
 
@@ -157,7 +159,7 @@ Agent({
   team_name: "ticket-TASK-XXX",
   model: "haiku",
   description: "Merge TASK-XXX",
-  prompt: "TASK_ID=TASK-XXX\nBRANCH_NAME=<ticket.branch_name>\nWORKTREE_PATH=/worktrees/TASK-XXX"
+  prompt: "TASK_ID=TASK-XXX\nBRANCH_NAME=<ticket.branch_name>\nWORKTREE_PATH=/worktrees/TASK-XXX\nTICKETS_DIR=<session_dir>"
 })
 ```
 
@@ -179,7 +181,7 @@ Call this only after merger reported success.
 
 ---
 
-## Ticket format in docs/tickets/TASK-XXX.json
+## Ticket format in `${TICKETS_DIR}/TASK-XXX.json`
 
 ```json
 {
@@ -204,7 +206,7 @@ Call this only after merger reported success.
 }
 ```
 
-All agents read tickets from `/app/docs/tickets/TASK-XXX.json` — this is the source of truth.
+All agents read tickets from `${TICKETS_DIR}/TASK-XXX.json` (the per-session folder, e.g. `/chat-service/logs/<uuid>/TASK-XXX.json`) — this is the source of truth. The orchestrator passes the absolute path as `TICKETS_DIR` in every dispatch prompt.
 
 ---
 
@@ -229,7 +231,7 @@ All agents read tickets from `/app/docs/tickets/TASK-XXX.json` — this is the s
 - **Any BLOCKED = no merge**: one blocking verdict from any reviewer stops the merge. Re-dispatch developer to fix, then re-run reviewers.
 - **Reflection before merge**: after all reviews APPROVED, developer Mode 2 writes reflection, THEN merger merges.
 - **Merger is mandatory**: no ticket completes without merger success. No shortcuts.
-- **Ticket source of truth**: `/app/docs/tickets/TASK-XXX.json`. All agents read here, never from memory alone.
+- **Ticket source of truth**: `${TICKETS_DIR}/TASK-XXX.json` (per-session folder). All agents read here, never from memory alone.
 - **Worktree isolation**: each ticket works in `/worktrees/TASK-XXX/` — see `.claude/rules/worktree-scope.md`.
 - **e2e tests**: mandatory for any UI/filter/interaction task unless acceptance_criteria explicitly states otherwise.
 - **Parallel tickets**: tickets in the same wave with no deps between them MUST be dispatched in ONE assistant message (see CRITICAL RULE above).

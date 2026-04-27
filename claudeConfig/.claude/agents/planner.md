@@ -110,10 +110,12 @@ For normal feature tickets (type / component / config prop) → `parallel_safe: 
 
 ### Step 4 — Persist tickets to project
 
+Your caller's prompt contains a `TICKETS_DIR=<absolute path>` line — that path is the per-session folder where ticket files live (alongside `log.jsonl` / `meta.json`). Use the literal value, do not invent a path.
+
 After producing all tickets:
 
 1. Write each ticket as an individual file:
-   docs/tickets/TASK-XXX.json
+   `${TICKETS_DIR}/TASK-XXX.json` (substitute `${TICKETS_DIR}` with the absolute path from your prompt)
 
 2. Update project-context.json with the full ticket list:
 
@@ -162,6 +164,6 @@ The task description may include a MODE directive. Respect it strictly:
 
 ## Output
 
-Ordered list of tickets + confirmation that docs/tickets/ files
+Ordered list of tickets + confirmation that ticket files (in `${TICKETS_DIR}`)
 and project-context.json have been updated + short summary of
 risks and open questions.

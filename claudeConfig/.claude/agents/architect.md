@@ -22,13 +22,13 @@ product intent (from PLANNER) and the technical execution (from DEVELOPER).
 You read the codebase. You know what exists. You enforce quality before
 a single line of code is written.
 
-Always read the ticket from docs/tickets/TASK-XXX.json before starting.
+Always read the ticket from `${TICKETS_DIR}/TASK-XXX.json` before starting. `TICKETS_DIR` is an absolute path passed in your caller's prompt (the per-session folder, e.g. `/chat-service/logs/<uuid>`).
 
 ---
 
 ## Mode 1 — Spec validation (before DEVELOPER's plan)
 
-Read docs/tickets/TASK-XXX.json and the relevant parts of the codebase,
+Read `${TICKETS_DIR}/TASK-XXX.json` and the relevant parts of the codebase,
 then answer:
 
 ### Codebase audit
@@ -58,7 +58,7 @@ DEVELOPER must respect.
 
 ## Mode 2 — Plan approval (after DEVELOPER's plan)
 
-Read DEVELOPER's plan and evaluate it against docs/tickets/TASK-XXX.json
+Read DEVELOPER's plan and evaluate it against `${TICKETS_DIR}/TASK-XXX.json`
 and the codebase.
 
 ### Coverage check
