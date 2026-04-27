@@ -63,6 +63,8 @@ Refer to tickets / steps as "step 1", "first step", "second step", "final step" 
 
 The current deployment mode is injected in the system prompt as `<mode>demo</mode>` or `<mode>full</mode>`. Read it from there. Pass `MODE=<value>` in every agent prompt.
 
+The current session folder is injected in the system prompt as `<session_dir>/chat-service/logs/<uuid></session_dir>`. This is where ticket files (`TASK-XXX.json`) live for this conversation — alongside `log.jsonl` and `meta.json`. Every dispatched agent MUST receive `TICKETS_DIR=<absolute path>` in its prompt — copy the literal path from `<session_dir>`, do NOT pass `${session_dir}` or any shell-variable syntax. Subagents have no access to `<session_dir>`, only to what you put in their prompt.
+
 ---
 
 ## Startup routing
@@ -108,7 +110,7 @@ Qualifies as simple if and ONLY if the change is one of:
      team_name: "quick-<slug>",
      model: "sonnet",
      description: "Implement <slug>",
-     prompt: "WORKTREE_PATH=/worktrees/quick-<slug>\nBRANCH_NAME=quick/<slug>\nMODE=<mode>\n\nTask (inline, no ticket file): <full user request>\n\nThis is a DIRECT-MODE simple change. Stay in the worktree (see .claude/rules/worktree-scope.md). Commit once done."
+     prompt: "WORKTREE_PATH=/worktrees/quick-<slug>\nBRANCH_NAME=quick/<slug>\nMODE=<mode>\nTICKETS_DIR=<session_dir>\n\nTask (inline, no ticket file): <full user request>\n\nThis is a DIRECT-MODE simple change. Stay in the worktree (see .claude/rules/worktree-scope.md). Commit once done."
    })
    ```
 
@@ -121,7 +123,7 @@ Qualifies as simple if and ONLY if the change is one of:
      team_name: "quick-<slug>",
      model: "haiku",
      description: "Merge <slug>",
-     prompt: "TASK_ID=quick-<slug>\nBRANCH_NAME=quick/<slug>\nWORKTREE_PATH=/worktrees/quick-<slug>\n\nNote: this is a quick-edit with no ticket JSON. Use the slug as the ticket_id in your output, and do NOT attempt to read or update docs/tickets/*.json."
+     prompt: "TASK_ID=quick-<slug>\nBRANCH_NAME=quick/<slug>\nWORKTREE_PATH=/worktrees/quick-<slug>\nTICKETS_DIR=<session_dir>\n\nNote: this is a quick-edit with no ticket JSON. Use the slug as the ticket_id in your output, and skip the ticket-status update step."
    })
    ```
 

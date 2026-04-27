@@ -128,7 +128,7 @@ Use Bash ONLY for:
 - Supabase is running. Schema changes require a migration file in `supabase/migrations/`.
 
 ### Pre-plan checklist
-1. Read docs/tickets/TASK-XXX.json
+1. Read `${TICKETS_DIR}/TASK-XXX.json` (the absolute path is in your caller's prompt as `TICKETS_DIR=<path>` — substitute the literal value)
 2. **Start from `files_to_modify`**: the planner has listed 2-6 probable file paths. Read each one BEFORE exploring further. These paths are best-guess hints — you may add, remove, or substitute, but use them as your first map.
 3. Extend existing code, don't recreate it
 

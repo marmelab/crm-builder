@@ -49,6 +49,7 @@ const MIME_TYPES = {
   '.html': 'text/html',
   '.js':   'text/javascript',
   '.css':  'text/css',
+  '.svg':  'image/svg+xml',
 };
 
 // Exported for unit testing
@@ -348,11 +349,12 @@ const httpServer = createServer(async (req, res) => {
   }
 });
 
-function spawnClaude(userMessage, claudeSessionId) {
+function spawnClaude(userMessage, claudeSessionId, sessionDir) {
   const mode = process.env.MODE || 'demo';
+  const env = `<mode>${mode}</mode>\n<session_dir>${sessionDir}</session_dir>`;
   const prompt = systemPrompt
-    ? `<instructions>\n${systemPrompt}\n</instructions>\n\n<mode>${mode}</mode>\n\n${userMessage}`
-    : userMessage;
+    ? `<instructions>\n${systemPrompt}\n</instructions>\n\n${env}\n\n${userMessage}`
+    : `${env}\n\n${userMessage}`;
   const args = [
     '--output-format', 'stream-json',
     '--verbose',
@@ -460,6 +462,42 @@ function sendStats(runtime) {
   });
 }
 
+// Tickets live in the session folder (alongside log.jsonl / meta.json) since
+// the TICKETS_DIR refactor — see chat-orchestrator.md. Progress is scoped to
+// the current turn: tickets present at spawn-start are baselined out so the
+// counter doesn't leak prior-turn work into a fresh prompt.
+const TICKET_FILE_RE = /^TASK-.*\.json$/;
+async function snapshotTickets(sessionDir) {
+  try {
+    const entries = await readdir(sessionDir);
+    return new Set(entries.filter((f) => TICKET_FILE_RE.test(f)));
+  } catch {
+    return new Set();
+  }
+}
+
+async function computeProgress(sessionDir, baseline = new Set()) {
+  let entries;
+  try { entries = await readdir(sessionDir); } catch { return { total: 0, done: 0 }; }
+  const files = entries.filter((f) => TICKET_FILE_RE.test(f) && !baseline.has(f));
+  if (files.length === 0) return { total: 0, done: 0 };
+  let done = 0;
+  for (const file of files) {
+    try {
+      const j = JSON.parse(await readFile(`${sessionDir}/${file}`, 'utf8'));
+      if (j?.status === 'merged') done++;
+    } catch {}
+  }
+  return { total: files.length, done };
+}
+
+async function sendProgress(runtime) {
+  if (!runtime?.session) return;
+  const baseline = runtime.turnTicketBaseline || new Set();
+  const { total, done } = await computeProgress(`${LOG_DIR}/${runtime.session.id}`, baseline);
+  broadcast(runtime, { type: 'progress', total, done });
+}
+
 function friendlyError({ exitCode, stderr, rateLimit, resultError }) {
   if (rateLimit?.resetsAt) {
     const minutes = Math.max(1, Math.ceil((rateLimit.resetsAt * 1000 - Date.now()) / 60000));
@@ -489,17 +527,25 @@ async function transitionState(runtime, newState) {
 async function processMessage(runtime, prompt) {
   if (!runtime) return;
 
+  // Snapshot existing tickets so this turn's counter only reflects work
+  // initiated by *this* prompt — prior-turn tickets stay baselined out.
+  // Reset the client-side counter immediately, before the working bubble
+  // mounts, so it doesn't briefly flash the previous turn's value.
+  runtime.turnTicketBaseline = await snapshotTickets(`${LOG_DIR}/${runtime.session.id}`);
+  broadcast(runtime, { type: 'progress', total: 0, done: 0 });
+
   // Claude (re)starts → session is active again.
   transitionState(runtime, 'in_progress');
   broadcast(runtime, { type: 'status', working: true });
   const toolMap = new Map();
+  const pendingTicketWrites = new Set();
   let receivedText = false;
   let rateLimit = null;
   let resultError = false;
   let lastAssistantText = '';
   let exitCode = null;
   try {
-    const proc = spawnClaude(prompt, runtime.claudeSessionId);
+    const proc = spawnClaude(prompt, runtime.claudeSessionId, `${LOG_DIR}/${runtime.session.id}`);
     runtime.currentProc = proc; // expose for the stop handler
     let stderrBuf = '';
     // Prevent unhandled 'error' from crashing the process (e.g. claude binary missing).
@@ -575,6 +621,32 @@ async function processMessage(runtime, prompt) {
           runtime.stats.activeAgents = 0;
           runtime.stats.activeAgentIds.clear();
           sendStats(runtime);
+          // The merger updates ticket status to "merged" near the end of a turn —
+          // refresh the progress counter after `result`. Fire-and-forget; an
+          // out-of-order arrival is harmless (latest read wins on the client).
+          sendProgress(runtime).catch(() => {});
+        }
+
+        // Planner Write/Edit on TASK-*.json: stage the tool_use_id when we
+        // see the assistant emit the call, then fire sendProgress once the
+        // matching tool_result lands (the file isn't on disk before that).
+        if (event.type === 'assistant') {
+          for (const tool of extractToolUses(event)) {
+            const fp = tool.input?.file_path;
+            if ((tool.name === 'Write' || tool.name === 'Edit') && fp && /\/TASK-[^/]+\.json$/.test(fp)) {
+              pendingTicketWrites.add(tool.id);
+            }
+          }
+        }
+        if (event.type === 'user' && pendingTicketWrites.size > 0) {
+          const blocks = event.message?.content || [];
+          let resolved = false;
+          for (const b of blocks) {
+            if (b?.type === 'tool_result' && pendingTicketWrites.delete(b.tool_use_id)) {
+              resolved = true;
+            }
+          }
+          if (resolved) sendProgress(runtime).catch(() => {});
         }
       } catch {}
     }
@@ -735,6 +807,9 @@ wss.on('connection', async (ws, req) => {
   if (session.isNew) {
     safeSend(ws, WELCOME_CHOICES);
   }
+  // Send the current progress snapshot so a (re)joining tab paints the
+  // counter immediately instead of waiting for the next merge / write event.
+  sendProgress(runtime).catch(() => {});
 
   ws.on('message', (data) => {
     let parsed;
