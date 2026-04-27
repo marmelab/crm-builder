@@ -47,3 +47,23 @@ test('shouldSkipRun returns false when at least one session log is newer than la
   assert.strictEqual(result, false);
   await rm(root, { recursive: true, force: true });
 });
+
+import { fileURLToPath } from 'node:url';
+import { dirname } from 'node:path';
+import { loadDocumentatorPrompt } from '../lib/documentator-cron.js';
+
+const here = dirname(fileURLToPath(import.meta.url));
+const fixturePath = join(here, 'fixtures', 'documentator-agent.md');
+
+test('loadDocumentatorPrompt returns model and content from a valid agent file', async () => {
+  const result = await loadDocumentatorPrompt(fixturePath);
+  assert.strictEqual(result.model, 'sonnet');
+  assert.match(result.content, /You are the documentator\./);
+  assert.doesNotMatch(result.content, /^---/m);
+});
+
+test('loadDocumentatorPrompt returns null model and empty content when file is missing', async () => {
+  const result = await loadDocumentatorPrompt('/nonexistent/path.md');
+  assert.strictEqual(result.model, null);
+  assert.strictEqual(result.content, '');
+});

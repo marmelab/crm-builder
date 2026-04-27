@@ -1,4 +1,4 @@
-import { stat, readdir } from 'node:fs/promises';
+import { stat, readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 /**
@@ -32,4 +32,24 @@ export async function shouldSkipRun(lastRunPath, sessionsDir) {
     }
   }
   return true;
+}
+
+/**
+ * Reads a Claude agent markdown file (frontmatter + prose) and returns the
+ * model identifier from frontmatter and the body text. Mirrors the
+ * loadSystemPrompt() function in server.js.
+ *
+ * @param {string} agentMdPath
+ * @returns {Promise<{ content: string, model: string|null }>}
+ */
+export async function loadDocumentatorPrompt(agentMdPath) {
+  try {
+    const raw = await readFile(agentMdPath, 'utf8');
+    const fm = raw.match(/^---\n([\s\S]*?)\n---\n/);
+    const model = fm?.[1].match(/^model:\s*(\S+)/m)?.[1] || null;
+    const content = raw.replace(/^---\n[\s\S]*?\n---\n/, '').trim();
+    return { content, model };
+  } catch {
+    return { content: '', model: null };
+  }
 }
