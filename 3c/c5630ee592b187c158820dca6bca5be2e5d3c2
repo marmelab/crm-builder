@@ -1,0 +1,43 @@
+chat-service/test/documentator-cron.test.js
+  6c0b708f3772f275 1-49
+chat-service/lib/documentator-cron.js
+  6c0b708f3772f275 1-35
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "3cc5630ee592b187c158820dca6bca5be2e5d3c2",
+  "prompts": {
+    "6c0b708f3772f275": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "73e170b2-dbb5-4758-a10c-62ccd068a0e1",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Jerome",
+      "messages": [],
+      "total_additions": 84,
+      "total_deletions": 0,
+      "accepted_lines": 84,
+      "overriden_lines": 0
+    },
+    "e08a40853c09e533": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ce83bf49-dc02-4c23-a007-ca4c6044d443",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Jerome",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 84,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    }
+  },
+  "humans": {
+    "h_84c0d888491a2d": {
+      "author": "Jerome"
+    }
+  }
+}
