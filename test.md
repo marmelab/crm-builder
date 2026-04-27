@@ -19,10 +19,6 @@
 
 * tests/ et test/ -> à renommer
 
-******************************************************************************
-* progress bar
-******************************************************************************
-
 * to discuss with françois
 * -  stop -> clean worktrees / sessions / etc.
 * -  tester "stop" sur grosse task
