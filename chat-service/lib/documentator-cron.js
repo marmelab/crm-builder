@@ -68,9 +68,16 @@ export async function loadDocumentatorPrompt(agentMdPath) {
  * @param {string} opts.agentMdPath   path to documentator.md
  * @param {string} opts.claudeHome    HOME for the spawned claude process
  * @param {string} opts.cwd           cwd for the spawned claude process
- * @returns {Promise<{ skipped: boolean, exitCode?: number, auditPath?: string }>}
+ * @returns {Promise<{ skipped: boolean, reason?: string, exitCode?: number, auditPath?: string }>}
  */
+let documentatorRunning = false;
+
 export async function runDocumentator(opts) {
+  if (documentatorRunning) {
+    return { skipped: true, reason: 'already-running' };
+  }
+  documentatorRunning = true;
+  try {
   const { sessionsDir, lastRunPath, runsDir, agentMdPath, claudeHome, cwd } = opts;
   if (await shouldSkipRun(lastRunPath, sessionsDir)) {
     return { skipped: true };
@@ -106,17 +113,36 @@ export async function runDocumentator(opts) {
   proc.stdout.pipe(audit, { end: false });
   proc.stderr.on('data', (d) => audit.write(`[stderr] ${d}`));
 
+  const TIMEOUT_MS = 30 * 60 * 1000;
   const exitCode = await new Promise((resolve) => {
-    proc.once('close', resolve);
+    const timer = setTimeout(() => {
+      audit.write(`\n[timeout] killed after ${TIMEOUT_MS / 1000}s\n`);
+      proc.kill('SIGTERM');
+      resolve(-2);
+    }, TIMEOUT_MS);
+    proc.once('close', (code) => {
+      clearTimeout(timer);
+      resolve(code);
+    });
     proc.once('error', (err) => {
+      clearTimeout(timer);
+      proc.stdout.unpipe(audit);
+      proc.stderr.removeAllListeners('data');
       audit.write(`\n[spawn-error] ${err.message}\n`);
       resolve(-1);
     });
   });
+  proc.stdout.unpipe(audit);
+  proc.stderr.removeAllListeners('data');
   audit.end();
 
-  await writeFile(lastRunPath, new Date().toISOString());
+  if (exitCode === 0) {
+    await writeFile(lastRunPath, new Date().toISOString());
+  }
   return { skipped: false, exitCode, auditPath };
+  } finally {
+    documentatorRunning = false;
+  }
 }
 
 /**
