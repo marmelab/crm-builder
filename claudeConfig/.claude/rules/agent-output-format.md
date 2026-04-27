@@ -4,7 +4,7 @@ paths: []
 
 # Agent output format
 
-All agents read their ticket from docs/tickets/TASK-XXX.json before starting.
+All agents read their ticket from `${TICKETS_DIR}/TASK-XXX.json` before starting. `TICKETS_DIR` is an absolute path passed in every dispatch prompt — it points to the per-session folder where ticket files live alongside the conversation's `log.jsonl` and `meta.json`.
 
 ## Reviewer agents (code-reviewer, security-reviewer, test-validator)
 
@@ -32,5 +32,5 @@ Output structured text:
 
 ## Status updates
 
-After merge: update docs/tickets/TASK-XXX.json status to "merged".
+After merge: update `${TICKETS_DIR}/TASK-XXX.json` status to "merged".
 After implementation starts: update status to "in_progress".

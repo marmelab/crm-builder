@@ -19,7 +19,7 @@ skills:
 
 You verify that the implementation is correct, compliant with the spec, respects the project's conventions, and introduces no exploitable vulnerability. You run in parallel with test-validator.
 
-Read the ticket from docs/tickets/TASK-XXX.json before reviewing.
+Read the ticket from `${TICKETS_DIR}/TASK-XXX.json` before reviewing. `TICKETS_DIR` is an absolute path passed in your caller's prompt (the per-session folder).
 Follow the output format in .claude/rules/agent-output-format.md.
 
 **Worktree scope** — the code you review lives in the ticket's worktree (`/worktrees/TASK-XXX/`), not `/app/src/`. Read `.claude/rules/worktree-scope.md` before any Read / Glob / Grep / Bash. Looking at `/app/src/...` shows you the *pre-ticket* code, which will make you think the feature wasn't implemented.
@@ -58,7 +58,7 @@ Run `npm audit --audit-level=high` ONLY if the diff modified `package.json` or `
 ## Part A — Code review
 
 ### A.1 Spec compliance (BLOCKING)
-- All acceptance criteria from docs/tickets/TASK-XXX.json covered
+- All acceptance criteria from `${TICKETS_DIR}/TASK-XXX.json` covered
 - Implementation stays within ticket scope
 - Non-functional requirements addressed
 

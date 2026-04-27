@@ -25,6 +25,8 @@ const statsBtn = document.getElementById('chat-stats-btn');
 const statsPanel = document.getElementById('chat-stats-panel');
 
 let working  = false;
+let progressTotal = 0;
+let progressDone  = 0;
 let debugMode = false;
 let hasUserMessage = false;
 let statsMode = false;
@@ -103,6 +105,31 @@ function resetChatUi() {
   stopBtn.disabled = false;
   historyPanel.hidden = true;
   stats.textContent = '';
+  progressTotal = 0;
+  progressDone = 0;
+}
+
+function progressText() {
+  if (!progressTotal || progressTotal <= 0) return '';
+  const safeDone = Math.max(0, Math.min(progressDone, progressTotal));
+  return `tasks completed ${safeDone}/${progressTotal}`;
+}
+
+function updateWorkingProgress() {
+  const bubble = messages.querySelector('.msg-working');
+  if (!bubble) return;
+  const text = progressText();
+  let line = bubble.querySelector('.msg-working-progress');
+  if (!text) {
+    if (line) line.remove();
+    return;
+  }
+  if (!line) {
+    line = document.createElement('span');
+    line.className = 'msg-working-progress';
+    bubble.appendChild(line);
+  }
+  line.textContent = text;
 }
 
 function renderWorkingUi() {
@@ -119,6 +146,7 @@ function renderWorkingUi() {
     dots.appendChild(document.createElement('span'));
     el.appendChild(dots);
     messages.appendChild(el);
+    updateWorkingProgress();
     messages.scrollTop = messages.scrollHeight;
   } else if (!working && existing) {
     existing.remove();
@@ -180,6 +208,13 @@ function handleWsMessage(event) {
 
   if (msg.type === 'choices') {
     appendChoices(msg.content, msg.options);
+    return;
+  }
+
+  if (msg.type === 'progress') {
+    progressTotal = msg.total || 0;
+    progressDone  = msg.done  || 0;
+    updateWorkingProgress();
     return;
   }
 

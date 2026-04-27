@@ -348,11 +348,12 @@ const httpServer = createServer(async (req, res) => {
   }
 });
 
-function spawnClaude(userMessage, claudeSessionId) {
+function spawnClaude(userMessage, claudeSessionId, sessionDir) {
   const mode = process.env.MODE || 'demo';
+  const env = `<mode>${mode}</mode>\n<session_dir>${sessionDir}</session_dir>`;
   const prompt = systemPrompt
-    ? `<instructions>\n${systemPrompt}\n</instructions>\n\n<mode>${mode}</mode>\n\n${userMessage}`
-    : userMessage;
+    ? `<instructions>\n${systemPrompt}\n</instructions>\n\n${env}\n\n${userMessage}`
+    : `${env}\n\n${userMessage}`;
   const args = [
     '--output-format', 'stream-json',
     '--verbose',
@@ -460,6 +461,31 @@ function sendStats(runtime) {
   });
 }
 
+// Tickets live in the session folder (alongside log.jsonl / meta.json) since
+// the TICKETS_DIR refactor — see chat-orchestrator.md. Progress is the count
+// of TASK-*.json files with status === "merged" over the total.
+const TICKET_FILE_RE = /^TASK-.*\.json$/;
+async function computeProgress(sessionDir) {
+  let entries;
+  try { entries = await readdir(sessionDir); } catch { return { total: 0, done: 0 }; }
+  const files = entries.filter((f) => TICKET_FILE_RE.test(f));
+  if (files.length === 0) return { total: 0, done: 0 };
+  let done = 0;
+  for (const file of files) {
+    try {
+      const j = JSON.parse(await readFile(`${sessionDir}/${file}`, 'utf8'));
+      if (j?.status === 'merged') done++;
+    } catch {}
+  }
+  return { total: files.length, done };
+}
+
+async function sendProgress(runtime) {
+  if (!runtime?.session) return;
+  const { total, done } = await computeProgress(`${LOG_DIR}/${runtime.session.id}`);
+  broadcast(runtime, { type: 'progress', total, done });
+}
+
 function friendlyError({ exitCode, stderr, rateLimit, resultError }) {
   if (rateLimit?.resetsAt) {
     const minutes = Math.max(1, Math.ceil((rateLimit.resetsAt * 1000 - Date.now()) / 60000));
@@ -499,7 +525,7 @@ async function processMessage(runtime, prompt) {
   let lastAssistantText = '';
   let exitCode = null;
   try {
-    const proc = spawnClaude(prompt, runtime.claudeSessionId);
+    const proc = spawnClaude(prompt, runtime.claudeSessionId, `${LOG_DIR}/${runtime.session.id}`);
     runtime.currentProc = proc; // expose for the stop handler
     let stderrBuf = '';
     // Prevent unhandled 'error' from crashing the process (e.g. claude binary missing).
@@ -575,6 +601,23 @@ async function processMessage(runtime, prompt) {
           runtime.stats.activeAgents = 0;
           runtime.stats.activeAgentIds.clear();
           sendStats(runtime);
+          // The merger updates ticket status to "merged" near the end of a turn —
+          // refresh the progress counter after `result`. Fire-and-forget; an
+          // out-of-order arrival is harmless (latest read wins on the client).
+          sendProgress(runtime).catch(() => {});
+        }
+
+        // Planner Write/Edit on TASK-*.json appears as tool_use blocks within
+        // assistant events. Cheaper than rescanning every turn: detect the path
+        // and re-read on the spot.
+        if (event.type === 'assistant') {
+          for (const tool of extractToolUses(event)) {
+            const fp = tool.input?.file_path;
+            if ((tool.name === 'Write' || tool.name === 'Edit') && fp && /\/TASK-[^/]+\.json$/.test(fp)) {
+              sendProgress(runtime).catch(() => {});
+              break;
+            }
+          }
         }
       } catch {}
     }
@@ -735,6 +778,9 @@ wss.on('connection', async (ws, req) => {
   if (session.isNew) {
     safeSend(ws, WELCOME_CHOICES);
   }
+  // Send the current progress snapshot so a (re)joining tab paints the
+  // counter immediately instead of waiting for the next merge / write event.
+  sendProgress(runtime).catch(() => {});
 
   ws.on('message', (data) => {
     let parsed;

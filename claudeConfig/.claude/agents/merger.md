@@ -18,6 +18,7 @@ You receive in your prompt:
 - `TASK_ID` (e.g. `TASK-006`)
 - `BRANCH_NAME` (e.g. `feature/company-importance-type`)
 - `WORKTREE_PATH` (e.g. `/worktrees/TASK-006`)
+- `TICKETS_DIR` — absolute path to the per-session folder where the ticket JSON lives (e.g. `/chat-service/logs/<uuid>`)
 
 Follow the output format in `.claude/rules/agent-output-format.md`.
 
@@ -57,7 +58,7 @@ cd /app && git reset --hard HEAD && /entrypoint-helpers/apply-app-variant.sh
 
 - `git reset --hard HEAD` resets every tracked file to its committed state — this is the "discard stale debris" step.
 - `apply-app-variant.sh` re-copies `/app-variants/App.fakerest.tsx` (MODE=demo) or `App.supabase.tsx` (MODE=full) over `src/App.tsx`. Without this, the reset silently reverts `src/App.tsx` to its tracked upstream form (which has no explicit data provider wiring) and the demo UI breaks until the next container restart.
-- Untracked files (`docs/tickets/*.json`, `docs/project-context.json`) survive — they belong to other concurrent tickets.
+- Untracked files (`docs/project-context.json`) survive — they belong to other concurrent tickets. Ticket JSONs live outside `/app` (in `${TICKETS_DIR}`, the per-session folder), so they are unaffected.
 - Run this **every time**, even if `git status` looks clean. It's cheap and idempotent.
 
 **Explicitly forbidden** — these commands rewrite history or fabricate commits on the base branch:
@@ -65,7 +66,7 @@ cd /app && git reset --hard HEAD && /entrypoint-helpers/apply-app-variant.sh
 - `git add <anything>` — your job is `git merge`, not committing arbitrary files
 - `git commit` — `git merge --no-ff` generates its own merge commit; you never hand-author commits
 - `git stash` / `git stash pop` — stashing stale state and re-applying it is still pollution
-- `git clean -fd` — would delete `docs/tickets/` and break concurrent tickets
+- `git clean -fd` — would delete untracked `docs/` artifacts (project-context, reflections-in-flight) and break concurrent tickets
 - `git checkout -- <file>` — overlaps with `git reset --hard` above; don't do it piecemeal
 
 **Why this matters** — two past incidents tied to this exact step:
@@ -75,7 +76,7 @@ cd /app && git reset --hard HEAD && /entrypoint-helpers/apply-app-variant.sh
 ### Step 3 — Merge the feature branch
 
 ```bash
-git merge <BRANCH_NAME> --no-ff -m "feat(<TASK_ID>): <ticket title from docs/tickets/<TASK_ID>.json>"
+git merge <BRANCH_NAME> --no-ff -m "feat(<TASK_ID>): <ticket title from ${TICKETS_DIR}/<TASK_ID>.json>"
 ```
 
 - **On conflict** (`git merge` exit code non-zero with `CONFLICT` in output):
@@ -96,19 +97,19 @@ If `git worktree remove` fails because the worktree has leftover files, use `git
 
 ### Step 5 — Update ticket status (skip for quick-edits)
 
-If `TASK_ID` starts with `TASK-` (regular ticket): update the ticket's `status` field in `docs/tickets/<TASK_ID>.json` to `"merged"`.
+If `TASK_ID` starts with `TASK-` (regular ticket): update the ticket's `status` field in `${TICKETS_DIR}/<TASK_ID>.json` to `"merged"`.
 
 **Use the Edit tool exactly like this** (do NOT use shell — `cat | jq > tmp && mv` is blocked by the `block-bash-file-write` hook and silently leaves the ticket at `pending`):
 
 ```
 Edit(
-  file_path: "/app/docs/tickets/<TASK_ID>.json",
+  file_path: "<TICKETS_DIR>/<TASK_ID>.json",   // substitute the absolute path
   old_string: '"status": "pending"',
   new_string: '"status": "merged"'
 )
 ```
 
-If the current status is `in_progress` instead of `pending`, substitute accordingly. After the Edit, verify with `Read("/app/docs/tickets/<TASK_ID>.json")` that the status is now `"merged"`.
+If the current status is `in_progress` instead of `pending`, substitute accordingly. After the Edit, verify with `Read("<TICKETS_DIR>/<TASK_ID>.json")` that the status is now `"merged"`.
 
 **Past incident (2026-04-23)** — a merger tried `cat docs/tickets/TASK-003.json | jq '.status = "merged"' > /tmp/... && mv ...`, got blocked by the hook, and silently moved on. Both tickets ended the run at `status: "pending"` despite being merged. Always use the Edit tool.
 
