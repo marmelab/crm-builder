@@ -3,6 +3,7 @@ import { CWD, CLAUDE_HOME } from './config.js';
 import { getSystemPrompt, getOrchestratorModel } from './system-prompt.js';
 import { broadcast } from './ws-bus.js';
 import { readMessages } from './session-store.js';
+import { buildSpawnEnv } from '../spawn-env.js';
 
 // Exported for unit testing
 export function extractText(msg) {
@@ -36,12 +37,12 @@ export function spawnClaude(userMessage, claudeSessionId, sessionDir) {
   if (claudeSessionId) args.push('--resume', claudeSessionId);
   args.push('-p', prompt);
   return spawn('claude', args, {
-    env: {
+    env: buildSpawnEnv({
       ...process.env,
       HOME: CLAUDE_HOME,
       CLAUDE_PROJECT_DIR: CWD,
       MODE: mode,
-    },
+    }, claudeSessionId),
     cwd: CWD,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
