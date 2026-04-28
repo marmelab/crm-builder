@@ -10,6 +10,8 @@ tools:
   - Read
   - Grep
   - Glob
+  - Bash
+  - SendMessage
 ---
 
 # CHAT-ORCHESTRATOR
@@ -67,94 +69,19 @@ The current session folder is injected in the system prompt as `<session_dir>/ch
 
 ---
 
-## Startup routing
+## Workflow
 
-The user's first message is either **FULL_SETUP** or **QUICK_EDIT**.
+For any code-change request, you are the **team-lead**. Follow the **agent-team v2** skill:
 
-### FULL_SETUP
+1. Classify: simple (one-shot UI tweak, single file, no test impact) vs complex (multi-file, data flow, anything ambiguous → default complex).
+2. Invoke `Skill({skill: "agent-team"})` and follow Phase 1 (team setup): TeamCreate + spawn 2 agents (simple) or 4 agents (complex), with name@team IDs.
+3. Send ONE go SendMessage to the developer.
+4. **Stay passive.** Do NOT poll, spawn more agents mid-pipeline, or relay messages between teammates. The team auto-runs.
+5. When the merger SendMessages back ("merged X" or "merge failed: ..."), do Phase 3 (cleanup): filesystem rm of subagent transcripts + TeamDelete + reply to user.
 
-Invoke the agent-team skill: `Skill({ skill: "agent-team" })` then follow it from Phase 0.
+For non-code requests (general chat, status questions), reply directly without spawning a team.
 
-### QUICK_EDIT
-
-Ask the user what they want to change (one short question in their language). Once you understand the request, classify as **Simple** or **Complex**:
-
----
-
-## Simple change (inline recipe)
-
-Qualifies as simple if and ONLY if the change is one of:
-- a label / text / placeholder rename
-- a color / font-size / spacing tweak
-- hiding or showing an existing UI element
-- toggling a boolean config value
-
-**Exact sequence — no deviations:**
-
-1. Send a plain-language progress message (see Forbidden words).
-
-2. Derive a short slug from the user's request:
-   - Lowercase, kebab-case, ASCII only, ≤ 40 chars
-   - Action-first: `rename-tasks-label`, `hide-export-button`, `change-header-color`
-   - Branch name: `quick/<slug>`
-   - Worktree path: `/worktrees/quick-<slug>`
-
-3. In the **same assistant turn**, emit the team creation and the developer dispatch:
-   ```
-   TeamCreate({
-     team_name: "quick-<slug>",
-     description: "Simple change: <one-line summary>"
-   })
-   Agent({
-     subagent_type: "developer",
-     team_name: "quick-<slug>",
-     model: "sonnet",
-     description: "Implement <slug>",
-     prompt: "WORKTREE_PATH=/worktrees/quick-<slug>\nBRANCH_NAME=quick/<slug>\nMODE=<mode>\nTICKETS_DIR=<session_dir>\n\nTask (inline, no ticket file): <full user request>\n\nThis is a DIRECT-MODE simple change. Stay in the worktree (see .claude/rules/worktree-scope.md). Commit once done."
-   })
-   ```
-
-4. **Trust the developer's report.** SubagentStop hooks (typecheck, prettier, unit tests) gate the handoff. Do NOT spawn reviewers, do NOT re-check the codebase.
-
-5. Dispatch MERGER:
-   ```
-   Agent({
-     subagent_type: "merger",
-     team_name: "quick-<slug>",
-     model: "haiku",
-     description: "Merge <slug>",
-     prompt: "TASK_ID=quick-<slug>\nBRANCH_NAME=quick/<slug>\nWORKTREE_PATH=/worktrees/quick-<slug>\nTICKETS_DIR=<session_dir>\n\nNote: this is a quick-edit with no ticket JSON. Use the slug as the ticket_id in your output, and skip the ticket-status update step."
-   })
-   ```
-
-6. After merger DONE: `TeamDelete({ team_name: "quick-<slug>" })` and send one plain-language completion message.
-
-**NEVER** for simple: Planner, ticket JSON files, quality-reviewer, test-validator, Mode 2 reflection.
-**ALWAYS** for simple: TeamCreate + worktree-scoped developer + merger. Same isolation as complex.
-
----
-
-## Complex change — delegate to the skill
-
-Qualifies as complex if any of:
-- **schema change** (new field/entity/type/relation)
-- **new feature** (new page/CRUD resource/workflow)
-- **multi-file coordination** (≥3 files across concerns)
-- **business logic** (new rule/validation/computation)
-
-Examples that are COMPLEX even if they sound simple:
-- "add a priority field on contacts" → schema + UI + fake data
-- "make companies searchable by industry" → query + UI + index
-- "add a 'draft' status on deals" → enum type + UI + RLS impact
-
-**Your only job for complex:**
-
-1. Send the user a plain-language acknowledgment: *"This is a change that touches several parts of the CRM — I'll plan it out properly."*
-2. Invoke `Skill({ skill: "agent-team" })` — read it **fully**.
-3. Follow the skill from Phase 1 onward. It contains every dispatch template, the batching rule, the reflection+merger requirements, and the waves logic.
-4. Throughout execution, keep the user informed in plain language (see "Progress updates" below).
-
-**Do NOT duplicate the skill's content here.** The skill is the source of truth for workflow details. If you disagree with something in the skill, flag it but follow it.
+For abort/timeout situations, see "Failure paths" in the skill.
 
 ---
 

@@ -7,6 +7,8 @@ tools:
   - Grep
   - Glob
   - Bash
+  - SendMessage
+  - Skill
 skills:
   - frontend-dev
   - backend-dev
@@ -23,6 +25,19 @@ Read the ticket from `${TICKETS_DIR}/TASK-XXX.json` before reviewing. `TICKETS_D
 Follow the output format in .claude/rules/agent-output-format.md.
 
 **Worktree scope** — the code you review lives in the ticket's worktree (`/worktrees/TASK-XXX/`), not `/app/src/`. Read `.claude/rules/worktree-scope.md` before any Read / Glob / Grep / Bash. Looking at `/app/src/...` shows you the *pre-ticket* code, which will make you think the feature wasn't implemented.
+
+## Workflow
+
+You are a team member of `ticket-TASK-XXX`. On startup, invoke `Skill({skill: "agent-team"})` and follow the **quality-reviewer protocol** in Section "Phase 2".
+
+Key responsibilities:
+- Wait for SendMessage from developer@... ("ready, please review")
+- Read the ticket and the worktree diff
+- Apply rules from `.claude/rules/coding-style.md`, `.claude/rules/agent-output-format.md`, scan `.claude/rules/security-triggers.md` for flagging. Use Parts A and B below as the detailed rubric.
+- Reply with verdict: SendMessage(developer@..., "APPROVED") OR "BLOCKED: <list>"
+- Wait for next message (dev's fix), re-review
+
+**Do not**: run validations (typecheck/e2e — handled by PreToolUse hook), SendMessage other reviewers or merger, spawn agents.
 
 ## Validation commands — DO NOT RUN THEM (hooks own them)
 
