@@ -198,21 +198,39 @@ CRITICAL — what merger NEVER does:
 
 ## Phase 3 — Cleanup (lead only)
 
-When the lead receives `SendMessage(to: "team-lead", "merged X")` or `"merge failed: ..."` from the merger, it does **one** explicit TeamDelete with the team_name (NOT empty input):
+When the lead receives `SendMessage(to: "team-lead", "merged X")` or `"merge failed: ..."` from the merger, it does **two** things in this exact order. Both are mandatory; one without the other leaks state.
+
+### Step 3a — TeamDelete with the explicit team_name
 
 ```
-TeamDelete({team_name: "ticket-TASK-XXX"})
+TeamDelete({"team_name": "ticket-TASK-XXX"})
 ```
 
-Replace `ticket-TASK-XXX` with the actual team_name from Phase 1. Empty `{}` is a no-op — the runtime needs the explicit key.
+Replace `ticket-TASK-XXX` with the literal team_name from Phase 1. **Do NOT call `TeamDelete({})` (empty input) — it is observed to be a no-op in the current runtime and silently leaves the team config in place.**
 
-`TeamDelete` removes the team config dir (`/home/developer/.claude/teams/<team>/`). Subagent transcripts (`/home/developer/.claude/projects/-app/<CLAUDE_SESSION_ID>/subagents/agent-<task_id>.jsonl`) are intentionally **kept** — they are session-scoped logs useful for debugging and the stats panel, not "leaked" state. They are removed when the chat-service session ends (or when the user explicitly clears it).
+### Step 3b — Belt-and-suspenders rm of the team config dir
 
-After TeamDelete, the lead replies to the user:
+`TeamDelete` is observed (Phase 0 W1b) to leave `/home/developer/.claude/teams/<team>/` on disk in some cases. Always follow up with:
+
+```
+Bash({command: "rm -rf /home/developer/.claude/teams/ticket-TASK-XXX"})
+```
+
+Replace `ticket-TASK-XXX` with the literal team_name. This is the only filesystem `rm` the lead does — it targets only the team config dir, not the subagent transcripts.
+
+### What is intentionally NOT cleaned
+
+Subagent transcripts (`/home/developer/.claude/projects/-app/<CLAUDE_SESSION_ID>/subagents/agent-<task_id>.{jsonl,meta.json}`) are kept. They are session-scoped logs useful for debugging and the stats panel; they are removed when the chat-service session ends.
+
+### After cleanup
+
+The lead replies to the user:
 - On success: "TASK-XXX done, merge commit `<sha>`."
 - On failure: "TASK-XXX failed: `<reason>`. Branch retained at `<branch_name>`. (no auto-cleanup of the worktree on failure — user investigates)."
 
-**Multi-ticket flows:** call TeamDelete once per ticket-team after each merger reports back. Do not batch.
+### Multi-ticket flows
+
+Call Steps 3a + 3b once per ticket-team after each merger reports back. Do not batch — keep the per-team scope explicit.
 
 ## Failure paths
 
@@ -230,8 +248,9 @@ If the lead decides to abort (timeout, user cancel, irrecoverable error):
 
 ```
 1. SendMessage(to: "developer", "ABORT") — best-effort, dev may or may not act on it
-2. TeamDelete({team_name: "ticket-TASK-XXX"}) — explicit team_name required
-3. Reply to user with abort reason
+2. TeamDelete({"team_name": "ticket-TASK-XXX"}) — explicit team_name; empty {} is a no-op
+3. Bash({command: "rm -rf /home/developer/.claude/teams/ticket-TASK-XXX"}) — belt-and-suspenders
+4. Reply to user with abort reason
 ```
 
 The worktree is left intact on abort, so the user can inspect or recover manually. Subagent transcripts persist as logs.
