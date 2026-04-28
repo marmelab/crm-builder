@@ -39,7 +39,14 @@ function updateStatsBtnVisibility() {
 
 let seqCounter = 0;
 
+// Capped: an orchestrator turn emits hundreds of debug_raw frames; without a
+// bound the buffer grows unboundedly across long sessions.
+const DEBUG_BUFFER_MAX = 1000;
 const debugEventBuffer = [];
+function pushDebugEvent(entry) {
+  debugEventBuffer.push(entry);
+  if (debugEventBuffer.length > DEBUG_BUFFER_MAX) debugEventBuffer.shift();
+}
 
 function placeIntoMessages(el, seq) {
   el.dataset.seq = seq;
@@ -97,7 +104,7 @@ const connection = initConnection({
 });
 
 function resetChatUi() {
-  messages.innerHTML = '';
+  messages.replaceChildren();
   display.setSessionId(null);
   working = false;
   send.disabled = false;
@@ -107,6 +114,7 @@ function resetChatUi() {
   stats.textContent = '';
   progressTotal = 0;
   progressDone = 0;
+  debugEventBuffer.length = 0;
 }
 
 function progressText() {
@@ -228,14 +236,14 @@ function handleWsMessage(event) {
 
   if (msg.type === 'debug') {
     const s = ++seqCounter;
-    debugEventBuffer.push({ msg, seq: s });
+    pushDebugEvent({ msg, seq: s });
     if (debugMode) appendDebug(msg.tool, msg.input, msg.agent, s);
     return;
   }
 
   if (msg.type === 'debug_raw') {
     const s = ++seqCounter;
-    debugEventBuffer.push({ msg, seq: s });
+    pushDebugEvent({ msg, seq: s });
     if (debugMode) renderDebugRaw(msg, s);
     return;
   }
@@ -274,9 +282,9 @@ function appendChoices(content, options, seq = ++seqCounter) {
       btn.appendChild(sub);
     }
     btn.addEventListener('click', () => {
+      if (!connection.safeSend({ content: id, display: label })) return;
       wrap.remove();
       appendMessage('user', label);
-      connection.getWs().send(JSON.stringify({ content: id, display: label }));
       hasUserMessage = true;
       updateStatsBtnVisibility();
       historyApi.refreshHistoryIfOpen();
@@ -498,10 +506,7 @@ function renderDebugRaw(msg, seq = ++seqCounter) {
 
 stopBtn.addEventListener('click', () => {
   if (!working || stopBtn.disabled) return;
-  const ws = connection.getWs();
-  if (ws?.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: 'stop' }));
-  }
+  connection.safeSend({ type: 'stop' });
   stopBtn.disabled = true; // re-enabled on next status flip
 });
 
@@ -523,8 +528,11 @@ form.addEventListener('submit', (e) => {
   e.preventDefault();
   const content = input.value.trim();
   if (!content) return;
+  if (!connection.safeSend({ content })) {
+    appendMessage('assistant', 'Connection lost. Please reload the page.');
+    return;
+  }
   appendMessage('user', content, { queued: working });
-  connection.getWs().send(JSON.stringify({ content }));
   historyApi.refreshHistoryIfOpen();
   input.value = '';
   input.style.height = 'auto';
