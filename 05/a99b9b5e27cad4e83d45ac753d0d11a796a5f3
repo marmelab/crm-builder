@@ -1,0 +1,23 @@
+chat-service/server.js
+  cd9c53b573313b19 12,57-60
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "05a99b9b5e27cad4e83d45ac753d0d11a796a5f3",
+  "prompts": {
+    "cd9c53b573313b19": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "170ba2fe-5a9a-46ee-8023-86e024e8a69e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Jerome",
+      "messages": [],
+      "total_additions": 856,
+      "total_deletions": 2,
+      "accepted_lines": 8,
+      "overriden_lines": 0
+    }
+  }
+}
