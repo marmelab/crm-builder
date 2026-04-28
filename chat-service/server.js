@@ -9,6 +9,7 @@ import { loadSystemPrompt, applySystemPrompt } from './lib/server/system-prompt.
 import { openSession } from './lib/server/session-store.js';
 import { createRequestHandler } from './lib/server/http-routes.js';
 import { runtimes, wsToRuntime, runtimeForWs, createRuntime, safeSend } from './lib/server/runtime.js';
+import { sendToWs } from './lib/server/ws-bus.js';
 import { sendProgress } from './lib/server/ticket-progress.js';
 import { regenerateTitleWithHaiku, extractText, extractToolUses } from './lib/server/claude-spawn.js';
 import { processMessage } from './lib/server/turn.js';
@@ -53,7 +54,10 @@ wss.on('connection', async (ws, req) => {
   wsToRuntime.set(ws, runtime.session.id);
   console.log(`Session ${session.isNew ? 'created' : joining ? 'rejoined' : 'resumed'}: ${runtime.session.id}`);
 
-  safeSend(ws, {
+  // init is a per-WS snapshot rebuilt from the log on each (re)connect — don't
+  // re-log it, otherwise long sessions with many reconnects accumulate large
+  // duplicate message arrays in log.jsonl with no replay value.
+  sendToWs(ws, {
     type: 'init',
     sessionId: runtime.session.id,
     title: runtime.session.meta.title,

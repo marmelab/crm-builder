@@ -1,4 +1,4 @@
-import { spawn } from 'child_process';
+import { spawn } from 'node:child_process';
 import { CWD, CLAUDE_HOME } from './config.js';
 import { getSystemPrompt, getOrchestratorModel } from './system-prompt.js';
 import { broadcast } from './ws-bus.js';
@@ -7,7 +7,9 @@ import { readMessages } from './session-store.js';
 // Exported for unit testing
 export function extractText(msg) {
   if (msg.type !== 'assistant') return null;
-  const text = msg.message.content
+  const blocks = msg.message?.content;
+  if (!Array.isArray(blocks)) return null;
+  const text = blocks
     .filter((b) => b.type === 'text')
     .map((b) => b.text)
     .join('');
@@ -16,7 +18,9 @@ export function extractText(msg) {
 
 export function extractToolUses(msg) {
   if (msg.type !== 'assistant') return [];
-  return msg.message.content.filter((b) => b.type === 'tool_use');
+  const blocks = msg.message?.content;
+  if (!Array.isArray(blocks)) return [];
+  return blocks.filter((b) => b.type === 'tool_use');
 }
 
 export function spawnClaude(userMessage, claudeSessionId, sessionDir) {

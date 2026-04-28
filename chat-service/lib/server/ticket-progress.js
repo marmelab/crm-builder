@@ -1,4 +1,4 @@
-import { readFile, readdir } from 'fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { LOG_DIR } from './config.js';
 import { broadcast } from './ws-bus.js';
 

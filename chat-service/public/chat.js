@@ -44,20 +44,32 @@ function updateStatsBtnVisibility() {
 
 let seqCounter = 0;
 
+// Capped: an orchestrator turn emits hundreds of debug_raw frames; without a
+// bound the buffer grows unboundedly across long sessions.
+const DEBUG_BUFFER_MAX = 1000;
 const debugEventBuffer = [];
+function pushDebugEvent(entry) {
+  debugEventBuffer.push(entry);
+  if (debugEventBuffer.length > DEBUG_BUFFER_MAX) debugEventBuffer.shift();
+}
 
 function placeIntoMessages(el, seq) {
   el.dataset.seq = seq;
+  // Don't yank the scroll back to bottom if the user has scrolled up to read.
+  // Only auto-follow when they were already near the bottom before insertion.
+  const NEAR_BOTTOM_PX = 80;
+  const wasNearBottom =
+    messages.scrollHeight - messages.scrollTop - messages.clientHeight < NEAR_BOTTOM_PX;
   for (const child of messages.children) {
     const cs = Number(child.dataset.seq);
     if (!Number.isNaN(cs) && cs > seq) {
       messages.insertBefore(el, child);
-      messages.scrollTop = messages.scrollHeight;
+      if (wasNearBottom) messages.scrollTop = messages.scrollHeight;
       return;
     }
   }
   messages.appendChild(el);
-  messages.scrollTop = messages.scrollHeight;
+  if (wasNearBottom) messages.scrollTop = messages.scrollHeight;
 }
 
 const TOOL_LABELS = {
@@ -120,7 +132,7 @@ const connection = initConnection({
 });
 
 function resetChatUi() {
-  messages.innerHTML = '';
+  messages.replaceChildren();
   display.setSessionId(null);
   working = false;
   send.disabled = false;
@@ -131,6 +143,7 @@ function resetChatUi() {
   stats.textContent = '';
   progressTotal = 0;
   progressDone = 0;
+  debugEventBuffer.length = 0;
 }
 
 function progressText() {
@@ -252,14 +265,14 @@ function handleWsMessage(event) {
 
   if (msg.type === 'debug') {
     const s = ++seqCounter;
-    debugEventBuffer.push({ msg, seq: s });
+    pushDebugEvent({ msg, seq: s });
     if (debugMode) appendDebug(msg.tool, msg.input, msg.agent, s);
     return;
   }
 
   if (msg.type === 'debug_raw') {
     const s = ++seqCounter;
-    debugEventBuffer.push({ msg, seq: s });
+    pushDebugEvent({ msg, seq: s });
     if (debugMode) renderDebugRaw(msg, s);
     return;
   }
@@ -298,9 +311,9 @@ function appendChoices(content, options, seq = ++seqCounter) {
       btn.appendChild(sub);
     }
     btn.addEventListener('click', () => {
+      if (!connection.safeSend({ content: id, display: label })) return;
       wrap.remove();
       appendMessage('user', label);
-      connection.getWs().send(JSON.stringify({ content: id, display: label }));
       hasUserMessage = true;
       updateStatsBtnVisibility();
       refreshSessionPanels();
@@ -522,10 +535,7 @@ function renderDebugRaw(msg, seq = ++seqCounter) {
 
 stopBtn.addEventListener('click', () => {
   if (!working || stopBtn.disabled) return;
-  const ws = connection.getWs();
-  if (ws?.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: 'stop' }));
-  }
+  connection.safeSend({ type: 'stop' });
   stopBtn.disabled = true; // re-enabled on next status flip
 });
 
@@ -547,8 +557,11 @@ form.addEventListener('submit', (e) => {
   e.preventDefault();
   const content = input.value.trim();
   if (!content) return;
+  if (!connection.safeSend({ content })) {
+    appendMessage('assistant', 'Connection lost. Please reload the page.');
+    return;
+  }
   appendMessage('user', content, { queued: working });
-  connection.getWs().send(JSON.stringify({ content }));
   refreshSessionPanels();
   input.value = '';
   input.style.height = 'auto';

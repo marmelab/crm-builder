@@ -1,7 +1,8 @@
-import { readFile } from 'fs/promises';
-import { extname, join } from 'path';
+import { readFile } from 'node:fs/promises';
+import { extname, join } from 'node:path';
 import { LOG_DIR, HOOKS_LOG_PATH, ALLOWED_STATES, MIME_TYPES, UUID_RE, DOCUMENTATOR_OPTS } from './config.js';
 import { listSessions, getSession, patchSession, touchSession } from './session-store.js';
+import { runtimes } from './runtime.js';
 import { runDocumentator } from '../documentator-cron.js';
 
 function readJsonBody(req) {
@@ -110,7 +111,13 @@ export function createRequestHandler({ publicDir }) {
           if (hasState && !ALLOWED_STATES.has(body.state)) {
             res.writeHead(400); res.end(`state must be one of: ${[...ALLOWED_STATES].join(', ')}`); return;
           }
-          const meta = await patchSession(id, body);
+          // If a runtime is active for this session, apply the patch through it
+          // so its in-memory meta stays in sync; otherwise fall back to the
+          // disk-only patcher.
+          const runtime = runtimes.get(id);
+          const meta = runtime?.session
+            ? await runtime.session.applyPatch(body)
+            : await patchSession(id, body);
           if (!meta) { res.writeHead(404); res.end('Not found'); return; }
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify(meta));
