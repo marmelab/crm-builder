@@ -2,7 +2,8 @@ function buildWsUrl() {
   const params = new URLSearchParams(location.search);
   const id = params.get('session');
   const qs = id ? `?session=${encodeURIComponent(id)}` : '';
-  return `ws://${location.host}${qs}`;
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${proto}//${location.host}${qs}`;
 }
 
 export function initConnection({ handleWsMessage, appendMessage, resetChatUi }) {
