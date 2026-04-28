@@ -1,6 +1,6 @@
 import { el, formatTokens } from './lib/dom.js';
 import { renderStatsPanel } from './lib/stats/index.js';
-import { initConnection, initDisplay, initHistory } from './lib/sessions/index.js';
+import { initConnection, initDisplay, initHistory, initTimeline } from './lib/sessions/index.js';
 
 const widget   = document.getElementById('chat-widget');
 const fab      = document.getElementById('chat-fab');
@@ -14,6 +14,11 @@ const historyPanel = document.getElementById('chat-history-panel');
 const historyList = document.getElementById('history-list');
 const historyEmpty = document.getElementById('history-empty');
 const historyClose = document.getElementById('history-close');
+const timelineBtn = document.getElementById('chat-timeline');
+const timelinePanel = document.getElementById('chat-timeline-panel');
+const timelineList = document.getElementById('timeline-list');
+const timelineEmpty = document.getElementById('timeline-empty');
+const timelineClose = document.getElementById('timeline-close');
 const chatTitle = document.getElementById('chat-title');
 const form     = document.getElementById('chat-form');
 const input    = document.getElementById('chat-input');
@@ -72,12 +77,17 @@ const TOOL_LABELS = {
   result:       '✅ Turn complete',
 };
 
+function refreshSessionPanels() {
+  historyApi.refreshHistoryIfOpen();
+  timelineApi.refreshIfOpen();
+}
+
 const display = initDisplay({
   chatTitle,
   stateBtn,
   newBtn,
   switchSession: (id) => connection.switchSession(id),
-  refreshHistoryIfOpen: () => historyApi.refreshHistoryIfOpen(),
+  refreshHistoryIfOpen: () => refreshSessionPanels(),
 });
 
 const historyApi = initHistory({
@@ -89,6 +99,19 @@ const historyApi = initHistory({
   getSessionId: () => display.getSessionId(),
   switchSession: (id) => connection.switchSession(id),
 });
+
+const timelineApi = initTimeline({
+  timelinePanel,
+  timelineList,
+  timelineEmpty,
+  timelineBtn,
+  timelineClose,
+  getSessionId: () => display.getSessionId(),
+  switchSession: (id) => connection.switchSession(id),
+});
+
+historyBtn.addEventListener('click', () => { timelinePanel.hidden = true; });
+timelineBtn.addEventListener('click', () => { historyPanel.hidden = true; });
 
 const connection = initConnection({
   handleWsMessage,
@@ -104,6 +127,7 @@ function resetChatUi() {
   stopBtn.hidden = true;
   stopBtn.disabled = false;
   historyPanel.hidden = true;
+  timelinePanel.hidden = true;
   stats.textContent = '';
   progressTotal = 0;
   progressDone = 0;
@@ -176,19 +200,19 @@ function handleWsMessage(event) {
     }
     hasUserMessage = list.some((m) => m.role === 'user');
     updateStatsBtnVisibility();
-    historyApi.refreshHistoryIfOpen();
+    refreshSessionPanels();
     return;
   }
 
   if (msg.type === 'state') {
     display.setDisplayedState(msg.state);
-    historyApi.refreshHistoryIfOpen();
+    refreshSessionPanels();
     return;
   }
 
   if (msg.type === 'title') {
     display.setDisplayedTitle(msg.title);
-    historyApi.refreshHistoryIfOpen();
+    refreshSessionPanels();
     return;
   }
 
@@ -245,7 +269,7 @@ function handleWsMessage(event) {
     // `status: working=false` frame arrives. The bubble's sentinel seq
     // ensures the new message lands above it.
     appendMessage('assistant', msg.content);
-    historyApi.refreshHistoryIfOpen();
+    refreshSessionPanels();
   }
 }
 
@@ -279,7 +303,7 @@ function appendChoices(content, options, seq = ++seqCounter) {
       connection.getWs().send(JSON.stringify({ content: id, display: label }));
       hasUserMessage = true;
       updateStatsBtnVisibility();
-      historyApi.refreshHistoryIfOpen();
+      refreshSessionPanels();
     });
     wrap.appendChild(btn);
   });
@@ -525,7 +549,7 @@ form.addEventListener('submit', (e) => {
   if (!content) return;
   appendMessage('user', content, { queued: working });
   connection.getWs().send(JSON.stringify({ content }));
-  historyApi.refreshHistoryIfOpen();
+  refreshSessionPanels();
   input.value = '';
   input.style.height = 'auto';
   hasUserMessage = true;

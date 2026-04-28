@@ -24,8 +24,10 @@
 * -  tester "stop" sur grosse task
 
 * ajout de tests automatisés sur la CI github (jobs)
-
+* -  ne pas run ceux qui nécéssitent une clé d'API
 * impossibilité de merge si la CI est KO
 
 * lors ce qu'on quitte une session vides (vide = sans message utilisateur ou uniquement le message "quick modif"/"full setup") on doit la supprimer
 * on unMount on supprime la NouvelleDiscussion ? Est ce que ça fonctionne au refresh aussi ?
+
+* enlever silent-mode-check

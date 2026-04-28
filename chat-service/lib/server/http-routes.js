@@ -1,7 +1,7 @@
 import { readFile } from 'fs/promises';
 import { extname, join } from 'path';
 import { LOG_DIR, HOOKS_LOG_PATH, ALLOWED_STATES, MIME_TYPES, UUID_RE, DOCUMENTATOR_OPTS } from './config.js';
-import { listSessions, getSession, patchSession } from './session-store.js';
+import { listSessions, getSession, patchSession, touchSession } from './session-store.js';
 import { runDocumentator } from '../documentator-cron.js';
 
 function readJsonBody(req) {
@@ -79,6 +79,15 @@ export function createRequestHandler({ publicDir }) {
       res.end(JSON.stringify(list));
       return;
     }
+    const touchMatch = req.url.match(/^\/api\/sessions\/([0-9a-f-]+)\/touch$/i);
+    if (touchMatch && req.method === 'POST') {
+      const meta = await touchSession(touchMatch[1]);
+      if (!meta) { res.writeHead(404); res.end('Not found'); return; }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(meta));
+      return;
+    }
+
     // API: get / rename one session
     const match = req.url.match(/^\/api\/sessions\/([0-9a-f-]+)$/i);
     if (match) {

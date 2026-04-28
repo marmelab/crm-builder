@@ -36,6 +36,7 @@
   </div>
 
   <div id="chat-actions">
+    <button id="chat-timeline" title="Timeline" aria-label="Session timeline">🕒</button>
     <button id="chat-history" title="History" aria-label="Session history">📂</button>
     <button id="chat-new" title="New session" aria-label="New session">✚</button>
     <div id="chat-history-panel" hidden>
@@ -45,6 +46,14 @@
       </div>
       <ul id="history-list"></ul>
       <div id="history-empty" hidden>No saved sessions.</div>
+    </div>
+    <div id="chat-timeline-panel" hidden>
+      <div id="timeline-panel-header">
+        <span>Timeline</span>
+        <button id="timeline-close" aria-label="Close timeline">✕</button>
+      </div>
+      <ol id="timeline-list"></ol>
+      <div id="timeline-empty" hidden>No saved sessions.</div>
     </div>
   </div>
 

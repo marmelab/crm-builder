@@ -159,6 +159,19 @@ export async function getSession(id) {
   }
 }
 
+export async function touchSession(id) {
+  if (!UUID_RE.test(id)) return null;
+  try {
+    const path = `${LOG_DIR}/${id}/meta.json`;
+    const meta = JSON.parse(await readFile(path, 'utf8'));
+    meta.lastMessageAt = new Date().toISOString();
+    await writeFile(path, JSON.stringify(meta, null, 2));
+    return meta;
+  } catch {
+    return null;
+  }
+}
+
 export async function patchSession(id, patch) {
   if (!UUID_RE.test(id)) return null;
   try {
