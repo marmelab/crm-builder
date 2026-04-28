@@ -817,6 +817,56 @@ Targets: `build`, `up` (demo profile), `up-full` (full profile), `down`, `restar
 
 ---
 
+## Phase 32 — Documentator agent (phase 1, 2026-04-27, branch `feat/agent-documentator`)
+
+A new agent that observes the team's activity and writes a structured "patterns ledger" for the maintainer to review. Phase 1 is **read-only**: no config mutation, no auto-application of proposed actions. The trajectory is calibration first (the maintainer reviews detection quality + applicability), acting later (phase 2 — counter-gated auto-apply per action category, designed but not implemented).
+
+### Documentator agent
+- New `claudeConfig/.claude/agents/documentator.md` (sonnet, restricted tool list).
+- Reads 5 sources every run: `docs/reflections/*.md`, `/chat-service/logs/hooks.log`, per-session `log.jsonl` files (offset/limit reads — these get large), and the existing ledger.
+- Writes only to `/app/docs/learnings/patterns.md`. Never touches anything under `/app/src/`, `/home/developer/.claude/`, or shipped config.
+- Pattern entry format with fields: `Status`, `Occurrences`, `First seen`, `Last seen`, `Evidence` (TASK-IDs / session-IDs / hooks.log line ranges), `Symptom`, `Hypothesis`, `Proposed action` (`Type`, `Files Touched`, `Depends on`, `Content`), `Promotion criteria for phase 2`.
+- Action-type hierarchy from least to most invasive: `skill-extension < new-hook < new-rule < new-skill < modify-existing < agent-prompt-edit`, plus `escalation` for cases no additive lever captures.
+
+### Cron module + manual endpoint
+- New `chat-service/lib/documentator-cron.js` (~160 lines): `shouldSkipRun`, `loadDocumentatorPrompt`, `runDocumentator`, `scheduleDocumentator`. Five unit tests cover the deterministic helpers (TDD).
+- Daily cron at `0 3 * * *` Europe/Paris via `node-cron`. Skips when no session log has mtime newer than the last-run marker.
+- `POST /api/documentator/run` for ad-hoc runs — **loopback only** (`req.socket.remoteAddress` checked against `127.0.0.1`, `::1`, `::ffff:127.0.0.1`, otherwise 403). Triggers a paid claude run, so an open external endpoint would be a free-money pump.
+- Hardening: 30-min wall-clock timeout with `SIGTERM → 5s grace → SIGKILL` escalation; single-flight guard via module-local `documentatorRunning` flag held until `'close'` actually fires; `last-run.txt` only updated when `exitCode === 0` (spawn errors / timeouts must NOT silently mark the run as successful — that would suppress the next 24h of detections).
+- Audit trail per run at `docs/learnings/runs/YYYY-MM-DD-run.md` — raw stream-json frames + spawn-error / timeout markers.
+
+**Why**: today the team produces reflections (per-ticket narratives by DEVELOPER, read only by DEVELOPER), but no mechanism aggregates patterns across reflections + hook failures + retries + user friction. Adding a daily synthesizer means recurring frictions become visible (with counter + evidence trail), which is the prerequisite for any later "evolve the team based on real signals" work.
+
+### Bash whitelist hook
+- New `claudeConfig/.claude/hooks/restrict-documentator-bash.sh`, registered as the 5th `PreToolUse / Bash` hook. Gated on `DOCUMENTATOR_RUN=1` env var (set in the spawn env from the cron module) — pass-through for every other agent and for non-documentator claude sessions.
+- Whitelist: `git log`, `git show`, `ls`, `wc -l`. Anything else → exit 2 + stderr message.
+- **Metachar guard before the prefix check**. The first version was prefix-only and let `git log; rm -rf /app/docs/learnings/patterns.md` through (`;` chains the second command after the whitelisted first). The hardened version rejects any command containing `;`, `&&`, `||`, `|`, backtick, `$(`, `>`, `<`, or newline before the regex prefix check, so shell-metachar exploits land on exit 2.
+
+**Why**: documentator's "read-only mandate" depends on Bash being unable to exfiltrate or mutate. The hook is the only enforcement (frontmatter `tools` is informational with `-p` spawn). Caught in the e2e smoke: agent attempted `ls -la /chat-service/logs/ | tail -30`, hook blocked the pipe, agent adapted to `ls` + `wc -l` separately.
+
+### Bootstrap + bind for inspection
+- `entrypoint.sh` extended to create `/app/docs/learnings/runs/` and seed `patterns.md` with the canonical header on first boot (heredoc guarded by `[ ! -f ... ]`).
+- The named volume `crm-docs:/app/docs` was switched to a host bind-mount `./crm-docs:/app/docs` in the demo and full profiles. `./crm-docs/` is gitignored. Lets the maintainer open `crm-docs/learnings/patterns.md` directly in VS Code without `docker exec` or `docker cp`. Existing volume content was migrated via `docker cp` before the swap; the orphaned named volume can be removed with `docker volume rm crm-builder_crm-docs`.
+
+### Wiring
+- `chat-service/server.js` calls `scheduleDocumentator(DOCUMENTATOR_OPTS)` in the boot block before `httpServer.listen()`.
+- `DOCUMENTATOR_OPTS` exported from `chat-service/lib/server/config.js` (composed from `LOG_DIR`, `CLAUDE_HOME`, `CWD`).
+- The POST route lives in `chat-service/lib/server/http-routes.js`, which imports `runDocumentator` from `../documentator-cron.js`.
+
+### Field labels — English-only
+- The initial agent prompt used French field labels (`Premier vu`, `Dernier vu`, `Symptôme`, `Hypothèse`, `Action proposée`, `Contenu`, etc.) carried over from the design discussion. Fixed to English (`First seen`, `Last seen`, `Symptom`, `Hypothesis`, `Proposed action`, `Content`) to match the CLAUDE.md "agent prompts → English" convention. Existing 7 patterns produced in the smoke run were sed-replaced in place to keep the ledger consistent.
+
+### Design + plan
+- `docs/superpowers/specs/2026-04-27-documentator-design.md` — full spec with phase 1 / phase 2 trajectory, ledger format, validation criteria, deferred questions.
+- `docs/superpowers/plans/2026-04-27-documentator-phase1.md` — 10-task implementation plan executed via subagent-driven development (fresh subagent per task + spec compliance + code quality reviewer between tasks).
+
+### Smoke test
+- `docker compose --profile demo up -d`, manual trigger via `curl -X POST http://localhost:8080/api/documentator/run` from inside the container. Exit 0, 7 minutes, $1.08 sonnet.
+- 7 patterns detected on the first run (P-001 `prettier-exit2-persistent-worktree` through P-007 `base-branch-typecheck-contamination`). Each entry has the canonical format, evidence trail to `hooks.log` line ranges + TASK-IDs, and a concrete `Proposed action` with `Files Touched` and `Content`.
+- `node-cron` was `npm install`-ed at runtime against the live container; **a fresh `docker build -t atomic-crm-dev .` is required** before any clean-environment deploy (otherwise `chat-service` FATALs with `ERR_MODULE_NOT_FOUND: 'node-cron'`). `package.json` and `package-lock.json` already carry the dep.
+
+---
+
 ## Open items / known limits
 
 - **`medium-new-field` test** times out at 15 min (bumped to 35 min). Real agent-team flow on a multi-file feature naturally takes 20-30 min.
@@ -830,4 +880,4 @@ Targets: `build`, `up` (demo profile), `up-full` (full profile), `down`, `restar
 
 ---
 
-_Last updated: 2026-04-27 (Phase 31)_
+_Last updated: 2026-04-27 (Phase 32)_

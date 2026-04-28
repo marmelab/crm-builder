@@ -54,6 +54,19 @@
                     {
                         "type": "command",
                         "command": "/home/developer/.claude/hooks/block-bash-validation.sh"
+                    },
+                    {
+                        "type": "command",
+                        "command": "/home/developer/.claude/hooks/restrict-documentator-bash.sh"
+                    }
+                ]
+            },
+            {
+                "matcher": "Write|Edit",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "/home/developer/.claude/hooks/restrict-documentator-write.sh"
                     }
                 ]
             }
