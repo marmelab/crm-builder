@@ -104,8 +104,27 @@ export async function openSession(requestedId) {
       await saveMeta();
       return true;
     },
+    // In-memory equivalent of patchSession — keeps the runtime's meta object
+    // in sync when an HTTP PATCH lands on a session that's currently active.
+    // Without this, a subsequent saveMeta() from the running turn would
+    // overwrite the user's change with stale data.
+    applyPatch: async (patch) => {
+      applyMetaPatch(meta, patch);
+      await saveMeta();
+      return meta;
+    },
     close: () => logStream.end(),
   };
+}
+
+function applyMetaPatch(meta, patch) {
+  if (typeof patch.title === 'string') {
+    meta.title = patch.title.slice(0, 200);
+    meta.titleLocked = true;
+  }
+  if (typeof patch.state === 'string' && ALLOWED_STATES.has(patch.state)) {
+    meta.state = patch.state;
+  }
 }
 
 // Heuristic: Claude's final message ends with a question → session is waiting
@@ -164,11 +183,7 @@ export async function patchSession(id, patch) {
   try {
     const path = `${LOG_DIR}/${id}/meta.json`;
     const meta = JSON.parse(await readFile(path, 'utf8'));
-    if (typeof patch.title === 'string') {
-      meta.title = patch.title.slice(0, 200);
-      meta.titleLocked = true; // manual rename wins over future auto-regens
-    }
-    if (typeof patch.state === 'string' && ALLOWED_STATES.has(patch.state)) meta.state = patch.state;
+    applyMetaPatch(meta, patch);
     await writeFile(path, JSON.stringify(meta, null, 2));
     return meta;
   } catch {
