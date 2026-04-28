@@ -210,13 +210,13 @@ Replace `ticket-TASK-XXX` with the literal team_name from Phase 1. **Do NOT call
 
 ### Step 3b — Belt-and-suspenders rm of the team config dir
 
-`TeamDelete` is observed (Phase 0 W1b) to leave `/home/developer/.claude/teams/<team>/` on disk in some cases. Always follow up with:
+`TeamDelete` is observed (Phase 0 W1b) to leave `/home/developer/.claude/teams/<team>/` on disk in some cases. Always follow up with a brace-expanded rm covering both possible case variants the runtime may use on disk:
 
 ```
-Bash({command: "rm -rf /home/developer/.claude/teams/ticket-TASK-XXX"})
+Bash({command: "rm -rf /home/developer/.claude/teams/ticket-{TASK,task}-XXX"})
 ```
 
-Replace `ticket-TASK-XXX` with the literal team_name. This is the only filesystem `rm` the lead does — it targets only the team config dir, not the subagent transcripts.
+The brace expansion `{TASK,task}` produces two literal paths so the rm hits the team config whether the runtime stored it uppercase or lowercase. Replace `XXX` with the numeric part of the team_name from Phase 1 (e.g. `001`). This is the only filesystem `rm` the lead does — it targets only the team config dir, not the subagent transcripts.
 
 ### What is intentionally NOT cleaned
 
