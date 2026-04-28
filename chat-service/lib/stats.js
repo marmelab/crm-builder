@@ -454,10 +454,12 @@ function assignHookExecsToPhases(events, phases, hookAggregates) {
       worktreeByPhaseId.set(ev.task_id, toolUseIdToWorktree.get(ev.tool_use_id));
     }
   }
+  const phaseIdByWorktree = new Map();
+  for (const [phaseId, wt] of worktreeByPhaseId) phaseIdByWorktree.set(wt, phaseId);
   for (const agg of hookAggregates) {
     for (const exec of agg.executions) {
       if (!exec.worktree) continue;
-      const phaseId = [...worktreeByPhaseId.entries()].find(([, wt]) => wt === exec.worktree)?.[0];
+      const phaseId = phaseIdByWorktree.get(exec.worktree);
       if (!phaseId) continue;
       const phase = phases.find((p) => p.phaseId === phaseId);
       if (!phase) continue;
