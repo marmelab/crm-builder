@@ -1,6 +1,6 @@
-import { readFile, writeFile, mkdir, readdir } from 'fs/promises';
-import { createWriteStream } from 'fs';
-import { randomUUID } from 'crypto';
+import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
+import { createWriteStream } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { LOG_DIR, UUID_RE, ALLOWED_STATES } from './config.js';
 
 // ─── Session persistence ──────────────────────────────────────

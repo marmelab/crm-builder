@@ -1,5 +1,5 @@
-import { readFile } from 'fs/promises';
-import { extname, join } from 'path';
+import { readFile } from 'node:fs/promises';
+import { extname, join } from 'node:path';
 import { LOG_DIR, HOOKS_LOG_PATH, ALLOWED_STATES, MIME_TYPES, UUID_RE } from './config.js';
 import { listSessions, getSession, patchSession } from './session-store.js';
 
