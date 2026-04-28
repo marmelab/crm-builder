@@ -57,11 +57,17 @@ export function initHistory({ historyPanel, historyList, historyEmpty, historyBt
     return li;
   }
 
+  function closeHistory() {
+    clearTimeout(historyRefreshTimer);
+    historyRefreshTimer = null;
+    historyPanel.hidden = true;
+  }
+
   historyBtn.addEventListener('click', () => {
     if (historyPanel.hidden) openHistory();
-    else historyPanel.hidden = true;
+    else closeHistory();
   });
-  historyClose.addEventListener('click', () => { historyPanel.hidden = true; });
+  historyClose.addEventListener('click', closeHistory);
 
   return { refreshHistoryIfOpen, openHistory };
 }

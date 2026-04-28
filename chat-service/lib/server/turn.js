@@ -1,4 +1,4 @@
-import { createInterface } from 'readline';
+import { createInterface } from 'node:readline';
 import { LOG_DIR } from './config.js';
 import { broadcast, sendStats } from './ws-bus.js';
 import { runtimes, transitionState } from './runtime.js';

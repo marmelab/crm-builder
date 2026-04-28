@@ -2,7 +2,8 @@ function buildWsUrl() {
   const params = new URLSearchParams(location.search);
   const id = params.get('session');
   const qs = id ? `?session=${encodeURIComponent(id)}` : '';
-  return `ws://${location.host}${qs}`;
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${proto}//${location.host}${qs}`;
 }
 
 export function initConnection({ handleWsMessage, appendMessage, resetChatUi }) {
@@ -11,7 +12,13 @@ export function initConnection({ handleWsMessage, appendMessage, resetChatUi }) 
 
   function connectWs() {
     ws = new WebSocket(buildWsUrl());
-    ws.onmessage = handleWsMessage;
+    // Drop in-flight frames from a superseded socket: after switchSession,
+    // the old WebSocket can still deliver buffered messages briefly. Comparing
+    // event.target to the current `ws` filters them out without needing extra
+    // bookkeeping.
+    ws.onmessage = (event) => {
+      if (event.target === ws) handleWsMessage(event);
+    };
     ws.onclose = () => {
       if (switchingSession) { switchingSession = false; return; }
       appendMessage('assistant', 'Connection lost. Please reload the page.');
@@ -38,5 +45,13 @@ export function initConnection({ handleWsMessage, appendMessage, resetChatUi }) 
     connectWs();
   });
 
-  return { connectWs, switchSession, getWs: () => ws };
+  // Returns true if the payload was actually sent. Callers should treat false
+  // as "user must retry" (e.g. show error, keep input intact).
+  function safeSend(payload) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    ws.send(typeof payload === 'string' ? payload : JSON.stringify(payload));
+    return true;
+  }
+
+  return { connectWs, switchSession, getWs: () => ws, safeSend };
 }
