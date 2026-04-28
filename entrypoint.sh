@@ -53,13 +53,30 @@ chown -R developer:developer /home/developer/.claude 2>/dev/null || true
 mkdir -p /chat-service/logs 2>/dev/null || true
 chmod 777 /chat-service/logs 2>/dev/null || true
 
-# Runtime-generated docs (reflections) — bind-mounted from host ./crm-docs.
+# Runtime-generated docs (reflections, learnings) — bind-mounted from host ./crm-docs.
 # On a fresh host, the directory may be empty and owned by root (if Docker runs as
 # root on Linux) or by a host UID that doesn't match developer's UID. Without this
 # chown the developer cannot write reflections and Mode 2 silently fails.
 # Note: ticket files (TASK-XXX.json) live in /chat-service/logs/<sessionId>/ now,
 # alongside log.jsonl and meta.json — chown'd via the chat-service logs block above.
-mkdir -p /app/docs/reflections 2>/dev/null || true
+mkdir -p /app/docs/reflections /app/docs/learnings/runs 2>/dev/null || true
+
+if [ ! -f /app/docs/learnings/patterns.md ]; then
+  cat > /app/docs/learnings/patterns.md <<'PATTERNS_EOF'
+# Patterns ledger
+
+This file is maintained by the `documentator` agent. Each entry below is a recurring friction pattern detected across reflections, hook failures, agent retries, stats, and user-side signals.
+
+In phase 1 the entries are **read-only for humans**: only the documentator itself reads this file (to amend its own entries) — no other agent loads it as part of their working context, and no automatic action is taken. The maintainer reviews entries to validate the documentator's detection quality and the applicability of its proposed actions.
+
+See the design spec at https://github.com/marmelab/crm-builder/blob/main/docs/superpowers/specs/2026-04-27-documentator-design.md for the full design.
+
+---
+
+<!-- Patterns appear below this line. Documentator preserves the file header verbatim. -->
+PATTERNS_EOF
+fi
+
 chown -R developer:developer /app/docs 2>/dev/null || true
 
 # Worktrees root — same reasoning. Bind-mounted from host, needs developer write

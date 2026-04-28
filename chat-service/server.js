@@ -3,7 +3,8 @@ import { join } from 'path';
 import { fileURLToPath } from 'url';
 import { WebSocketServer } from 'ws';
 
-import { PORT, WELCOME_CHOICES } from './lib/server/config.js';
+import { PORT, WELCOME_CHOICES, DOCUMENTATOR_OPTS } from './lib/server/config.js';
+import { scheduleDocumentator } from './lib/documentator-cron.js';
 import { loadSystemPrompt, applySystemPrompt } from './lib/server/system-prompt.js';
 import { openSession } from './lib/server/session-store.js';
 import { createRequestHandler } from './lib/server/http-routes.js';
@@ -143,6 +144,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     const t = parsed.tools?.length ? parsed.tools.join(',') : 'default';
     console.log(parsed.content ? `Orchestrator loaded (model: ${parsed.model || 'default'}, tools: ${t}).` : 'No orchestrator prompt, using default.');
   });
+  scheduleDocumentator(DOCUMENTATOR_OPTS);
   httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`Chat service listening on port ${PORT}`);
   });

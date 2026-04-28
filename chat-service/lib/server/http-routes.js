@@ -1,7 +1,8 @@
 import { readFile } from 'fs/promises';
 import { extname, join } from 'path';
-import { LOG_DIR, HOOKS_LOG_PATH, ALLOWED_STATES, MIME_TYPES, UUID_RE } from './config.js';
+import { LOG_DIR, HOOKS_LOG_PATH, ALLOWED_STATES, MIME_TYPES, UUID_RE, DOCUMENTATOR_OPTS } from './config.js';
 import { listSessions, getSession, patchSession } from './session-store.js';
+import { runDocumentator } from '../documentator-cron.js';
 
 function readJsonBody(req) {
   return new Promise((resolve, reject) => {
@@ -46,6 +47,30 @@ async function handleStatsRequest(req, res) {
 export function createRequestHandler({ publicDir }) {
   return async (req, res) => {
     if (req.url?.startsWith('/api/stats')) return handleStatsRequest(req, res);
+
+    // API: trigger a documentator run manually (loopback only — see config.js for opts).
+    if (req.url === '/api/documentator/run' && req.method === 'POST') {
+      const remote = req.socket.remoteAddress || '';
+      const isLoopback =
+        remote === '127.0.0.1' ||
+        remote === '::1' ||
+        remote === '::ffff:127.0.0.1';
+      if (!isLoopback) {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'documentator manual trigger restricted to loopback' }));
+        return;
+      }
+      runDocumentator(DOCUMENTATOR_OPTS)
+        .then((result) => {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(result));
+        })
+        .catch((err) => {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err.message }));
+        });
+      return;
+    }
 
     // API: list sessions
     if (req.url === '/api/sessions' && req.method === 'GET') {
