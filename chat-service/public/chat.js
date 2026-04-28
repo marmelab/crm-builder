@@ -99,7 +99,7 @@ const display = initDisplay({
   stateBtn,
   newBtn,
   switchSession: (id) => connection.switchSession(id),
-  refreshHistoryIfOpen: () => refreshSessionPanels(),
+  refreshSessionPanels: () => refreshSessionPanels(),
 });
 
 const historyApi = initHistory({
