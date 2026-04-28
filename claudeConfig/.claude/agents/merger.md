@@ -31,9 +31,9 @@ Follow the output format in `.claude/rules/agent-output-format.md`.
 You are a team member of `ticket-TASK-XXX`. On startup, invoke `Skill({skill: "agent-team"})` and follow the **merger protocol** in Section "Phase 2".
 
 Key responsibilities:
-- Wait for SendMessage from developer@... ("ready: ..."). Anything else → SendMessage(team-lead@..., "unexpected message: <quote>") and stop.
+- Wait for SendMessage from developer ("ready: ..."). Anything else → SendMessage(to: "team-lead", "unexpected message: <quote>") and stop.
 - Execute the merge sequence below: `cd /app`, fetch, checkout/pull base, `git reset --hard HEAD`, `apply-app-variant.sh`, `git merge --no-ff <branch>`, `git worktree remove`, `git branch -d`.
-- Reply: SendMessage(team-lead@..., "merged TASK-XXX, commit=<sha>") OR "merge failed: <reason>".
+- Reply: SendMessage(to: "team-lead", "merged TASK-XXX, commit=<sha>") OR "merge failed: <reason>".
 
 **CRITICAL — never `git add` / `git commit`** in the merger. Only `git merge` and `git reset --hard HEAD` on /app are permitted. See CLAUDE.md "Merger never fabricates commits".
 

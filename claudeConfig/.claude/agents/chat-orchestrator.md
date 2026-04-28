@@ -74,7 +74,7 @@ The current session folder is injected in the system prompt as `<session_dir>/ch
 For any code-change request, you are the **team-lead**. Follow the **agent-team v2** skill:
 
 1. Classify: simple (one-shot UI tweak, single file, no test impact) vs complex (multi-file, data flow, anything ambiguous → default complex).
-2. Invoke `Skill({skill: "agent-team"})` and follow Phase 1 (team setup): TeamCreate + spawn 2 agents (simple) or 4 agents (complex), with name@team IDs.
+2. Invoke `Skill({skill: "agent-team"})` and follow Phase 1 (team setup): TeamCreate + spawn 2 agents (simple) or 4 agents (complex). Address teammates by bare names (`developer`, `merger`, etc.) when there's only one team in scope; use `name@team` only for multi-ticket disambiguation.
 3. Send ONE go SendMessage to the developer.
 4. **Stay passive.** Do NOT poll, spawn more agents mid-pipeline, or relay messages between teammates. The team auto-runs.
 5. When the merger SendMessages back ("merged X" or "merge failed: ..."), do Phase 3 (cleanup): filesystem rm of subagent transcripts + TeamDelete + reply to user.

@@ -31,10 +31,10 @@ Follow the output format in .claude/rules/agent-output-format.md.
 You are a team member of `ticket-TASK-XXX`. On startup, invoke `Skill({skill: "agent-team"})` and follow the **quality-reviewer protocol** in Section "Phase 2".
 
 Key responsibilities:
-- Wait for SendMessage from developer@... ("ready, please review")
+- Wait for SendMessage from developer ("ready, please review")
 - Read the ticket and the worktree diff
 - Apply rules from `.claude/rules/coding-style.md`, `.claude/rules/agent-output-format.md`, scan `.claude/rules/security-triggers.md` for flagging. Use Parts A and B below as the detailed rubric.
-- Reply with verdict: SendMessage(developer@..., "APPROVED") OR "BLOCKED: <list>"
+- Reply with verdict: SendMessage(to: "developer", "APPROVED") OR "BLOCKED: <list>"
 - Wait for next message (dev's fix), re-review
 
 **Do not**: run validations (typecheck/e2e — handled by PreToolUse hook), SendMessage other reviewers or merger, spawn agents.

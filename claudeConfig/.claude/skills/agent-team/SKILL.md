@@ -23,6 +23,14 @@ For every ticket, the lead spawns 4 named team members upfront, sends a single G
 
 The lead classifies in its first turn based on the user request. The default for ambiguous cases is **complex** (false positives are cheap, missed reviews are not).
 
+## SendMessage addressing — bare names by default
+
+The runtime's `SendMessage` tool accepts the recipient in `to:` either as:
+- **Bare name** (`developer`, `merger`, `quality-reviewer`, `test-validator`, `team-lead`) — works when the sender's session has exactly one team in scope. The runtime will reject `name@team` here with "to must be a bare teammate name — there is only one team per session".
+- **`name@team_name`** (e.g. `developer@ticket-TASK-002`) — required when the sender (typically the lead) has multiple active teams and bare name is ambiguous.
+
+**Default everywhere in this skill: bare name.** Add the `@team_name` suffix only when the lead is orchestrating ≥2 ticket-teams concurrently (multi-ticket flows). Teammates always use bare names — they only see their own team.
+
 ## Phase 1 — Team setup (lead only)
 
 The lead does this in ONE assistant message (one tool_use block per agent, in parallel):
@@ -67,84 +75,84 @@ Agent({
 })
 ```
 
-After all spawns return, the lead sends ONE go message to the developer:
+After all spawns return, the lead sends ONE go message to the developer (bare name in single-ticket flows; replace `developer` with `developer@ticket-TASK-XXX` if managing ≥2 teams concurrently):
 
 ```
 SendMessage({
-  to: "developer@ticket-TASK-XXX",
-  message: "GO — Implement TASK-XXX (worktree=/worktrees/TASK-XXX, branch=<ticket.branch_name>, mode=<demo|full>). Ticket spec: <ticket file path or inline>. After all reviewers APPROVED, write reflection (Mode 2), then SendMessage merger@ticket-TASK-XXX. Reviewers: [quality-reviewer@ticket-TASK-XXX, test-validator@ticket-TASK-XXX]. Merger: merger@ticket-TASK-XXX."
+  to: "developer",
+  message: "GO — Implement TASK-XXX (worktree=/worktrees/TASK-XXX, branch=<ticket.branch_name>, mode=<demo|full>). Ticket spec: <ticket file path or inline>. After all reviewers APPROVED, write reflection (Mode 2), then SendMessage merger. Reviewers: [quality-reviewer, test-validator]. Merger: merger."
 })
 ```
 
 In simple mode, omit the reviewer entries; the message says "no reviewers, no reflection, SendMessage merger directly when commit is ready".
 
-After SendMessage(developer, "GO"), the lead enters **passive wait** for the final SendMessage from `merger@ticket-TASK-XXX` reporting "merged X" or "merge failed: <reason>".
+After SendMessage(developer, "GO"), the lead enters **passive wait** for the final SendMessage from `merger` (or `merger@ticket-TASK-XXX` in multi-ticket) reporting "merged X" or "merge failed: <reason>".
 
 ## Phase 2 — Per-agent protocols
 
 Each agent's prompt (sent at spawn) includes their role-specific protocol below.
 
-### developer@ticket-TASK-XXX
+### developer
 
 ```
 ROLE: developer
 TEAM: ticket-TASK-XXX
 WORKTREE: /worktrees/TASK-XXX
 TICKET_FILE: <session_dir>/TASK-XXX.json (complex) or <inline> (simple)
-TEAMMATES: [reviewers list], merger@ticket-TASK-XXX
-TEAM_LEAD: team-lead@ticket-TASK-XXX
+TEAMMATES: [reviewers list], merger
+TEAM_LEAD: team-lead
 
-WORKFLOW:
+WORKFLOW (bare names; teammates only see their own team):
 1. Read the ticket spec.
 2. Implement in the worktree (Edit/Write/Bash). Commit when ready.
-3. (complex mode) SendMessage(quality-reviewer@..., "ready, please review"). SendMessage(test-validator@..., "ready, please validate"). Initialize approvals_needed=2, approvals_received=0.
+3. (complex mode) SendMessage(to: "quality-reviewer", "ready, please review"). SendMessage(to: "test-validator", "ready, please validate"). Initialize approvals_needed=2, approvals_received=0.
 4. (simple mode) Skip step 3. Go to step 7 directly.
 5. Wait for replies. For each:
    - "APPROVED" → approvals_received++
    - "BLOCKED: ..." → reset approvals_received=0, apply the fixes, commit, then re-notify ALL reviewers (R1: re-notify those that previously APPROVED too, since the diff changed). Loop step 5.
 6. When approvals_received == approvals_needed:
    - Bascule en Mode 2 (reflection): read /app/docs/reflections/, write /worktrees/TASK-XXX/docs/reflections/TASK-XXX-reflection.md, commit.
-7. SendMessage(merger@ticket-TASK-XXX, "ready: all approved + reflection committed (or "ready: simple mode" in simple)").
+7. SendMessage(to: "merger", "ready: all approved + reflection committed" (or "ready: simple mode" in simple)).
 8. After SendMessage(merger), stop. Lead handles cleanup.
 
 TIMEOUTS:
-- If a reviewer doesn't reply within 180s, SendMessage(team-lead@..., "stuck on <reviewer>: no reply for 180s").
-- If the same fix-cycle has run >5 times without convergence, SendMessage(team-lead@..., "stuck: <N> cycles, can't satisfy <reviewer>").
+- If a reviewer doesn't reply within 180s, SendMessage(to: "team-lead", "stuck on <reviewer>: no reply for 180s").
+- If the same fix-cycle has run >5 times without convergence, SendMessage(to: "team-lead", "stuck: <N> cycles, can't satisfy <reviewer>").
 ```
 
-### quality-reviewer@ticket-TASK-XXX
+### quality-reviewer
 
 ```
 ROLE: quality-reviewer
 TEAM: ticket-TASK-XXX
 WORKTREE: /worktrees/TASK-XXX
 TICKET_FILE: <session_dir>/TASK-XXX.json
-TEAMMATES: developer@ticket-TASK-XXX, test-validator@ticket-TASK-XXX, merger@ticket-TASK-XXX
-TEAM_LEAD: team-lead@ticket-TASK-XXX
+TEAMMATES: developer, test-validator, merger
+TEAM_LEAD: team-lead
 
 WORKFLOW (per incoming SendMessage from developer):
 1. Read the ticket and the worktree diff (`git -C /worktrees/TASK-XXX diff <base>..HEAD`).
 2. Apply the rules from .claude/rules/coding-style.md and .claude/rules/agent-output-format.md. Skim .claude/rules/security-triggers.md for anything that warrants security flagging.
 3. Verdict:
-   - All clear → SendMessage(developer@..., "APPROVED")
-   - Issues to fix → SendMessage(developer@..., "BLOCKED:\n- file: ...\n  line: ...\n  description: ...\n  fix: ...\n- ...\nSummary: N blocking issues.")
+   - All clear → SendMessage(to: "developer", "APPROVED")
+   - Issues to fix → SendMessage(to: "developer", "BLOCKED:\n- file: ...\n  line: ...\n  description: ...\n  fix: ...\n- ...\nSummary: N blocking issues.")
 4. After SendMessage, stop. Wait for next incoming message (re-review after dev's fix).
 
 DO NOT:
 - Run validations (typecheck, e2e, etc.) — those are handled by the PreToolUse hook on the dev side.
-- SendMessage anyone other than developer@... You don't talk to other reviewers, you don't talk to merger.
+- SendMessage anyone other than developer. You don't talk to other reviewers, you don't talk to merger.
 - Re-spawn agents or call TeamCreate/TeamDelete.
 ```
 
-### test-validator@ticket-TASK-XXX
+### test-validator
 
 ```
 ROLE: test-validator
 TEAM: ticket-TASK-XXX
 WORKTREE: /worktrees/TASK-XXX
 TICKET_FILE: <session_dir>/TASK-XXX.json
-TEAMMATES: developer@ticket-TASK-XXX, quality-reviewer@ticket-TASK-XXX, merger@ticket-TASK-XXX
-TEAM_LEAD: team-lead@ticket-TASK-XXX
+TEAMMATES: developer, quality-reviewer, merger
+TEAM_LEAD: team-lead
 
 WORKFLOW (per incoming SendMessage from developer):
 1. Read the ticket and the worktree.
@@ -152,26 +160,26 @@ WORKFLOW (per incoming SendMessage from developer):
 3. Verify TEST PERTINENCE: judge whether the assertions actually cover the failure modes that matter. A test that always passes (e.g. asserting truthy on a literal) is not pertinent.
 4. Read .claude/skills/e2e-conventions to know when an e2e is required.
 5. Verdict (same format as quality-reviewer):
-   - SendMessage(developer@..., "APPROVED") if presence + pertinence both OK
-   - SendMessage(developer@..., "BLOCKED:\n- ...") otherwise
+   - SendMessage(to: "developer", "APPROVED") if presence + pertinence both OK
+   - SendMessage(to: "developer", "BLOCKED:\n- ...") otherwise
 
 DO NOT:
 - Run the tests (the PreToolUse hook does that on the dev side). Your job is reading + judging coverage and pertinence, not running.
 - SendMessage other reviewers or merger.
 ```
 
-### merger@ticket-TASK-XXX
+### merger
 
 ```
 ROLE: merger
 TEAM: ticket-TASK-XXX
 WORKTREE: /worktrees/TASK-XXX
 BRANCH: <ticket.branch_name>
-TEAM_LEAD: team-lead@ticket-TASK-XXX
+TEAM_LEAD: team-lead
 
 WORKFLOW (per incoming SendMessage):
-- If sender is developer@... and message is "ready" → proceed.
-- Anything else → SendMessage(team-lead@..., "merger received unexpected message: <quote>") and stop.
+- If sender is developer and message is "ready" → proceed.
+- Anything else → SendMessage(to: "team-lead", "merger received unexpected message: <quote>") and stop.
 
 MERGE STEPS:
 1. cd /app && git fetch
@@ -179,8 +187,8 @@ MERGE STEPS:
 3. git reset --hard HEAD ; /entrypoint-helpers/apply-app-variant.sh (re-applies App.tsx variant)
 4. git merge --no-ff <ticket.branch_name> -m "chore(ticket-TASK-XXX): merge"
 5. If merge succeeds: git worktree remove /worktrees/TASK-XXX ; git branch -d <ticket.branch_name>
-6. SendMessage(team-lead@..., "merged TASK-XXX, commit=<short sha>")
-7. If merge fails (conflict, hook block, etc.): SendMessage(team-lead@..., "merge failed: <reason>") and stop.
+6. SendMessage(to: "team-lead", "merged TASK-XXX, commit=<short sha>")
+7. If merge fails (conflict, hook block, etc.): SendMessage(to: "team-lead", "merge failed: <reason>") and stop.
 
 CRITICAL — what merger NEVER does:
 - `git add` / `git commit` of any file (only git merge + git reset --hard HEAD on /app are allowed; see CLAUDE.md "Merger never fabricates commits")
@@ -190,31 +198,21 @@ CRITICAL — what merger NEVER does:
 
 ## Phase 3 — Cleanup (lead only)
 
-When the lead receives `SendMessage(team-lead@..., "merged X")` or `"merge failed: ..."` from the merger, it does:
+When the lead receives `SendMessage(to: "team-lead", "merged X")` or `"merge failed: ..."` from the merger, it does **one** explicit TeamDelete with the team_name (NOT empty input):
 
 ```
-# Filesystem cleanup of subagent transcripts (TeamDelete does NOT remove these)
-Bash({
-  command: "TEAM=ticket-TASK-XXX; SID=\"$CLAUDE_SESSION_ID\"; \
-    rm -f /home/developer/.claude/projects/-app/$SID/subagents/agent-developer@$TEAM.{jsonl,meta.json}; \
-    rm -f /home/developer/.claude/projects/-app/$SID/subagents/agent-quality-reviewer@$TEAM.{jsonl,meta.json}; \
-    rm -f /home/developer/.claude/projects/-app/$SID/subagents/agent-test-validator@$TEAM.{jsonl,meta.json}; \
-    rm -f /home/developer/.claude/projects/-app/$SID/subagents/agent-merger@$TEAM.{jsonl,meta.json}; \
-    rm -f /tmp/claude-1001/-app/$SID/tasks/*@$TEAM.output; \
-    echo cleanup_done"
-})
-
-# Then TeamDelete cleans up team config and tasks dirs
 TeamDelete({team_name: "ticket-TASK-XXX"})
 ```
 
-If `$CLAUDE_SESSION_ID` is not set in the env (verified in Phase 0 Q3), the chat-service must inject it (Phase 4 Task 4.2). The skill assumes it IS set.
+Replace `ticket-TASK-XXX` with the actual team_name from Phase 1. Empty `{}` is a no-op — the runtime needs the explicit key.
 
-In simple mode, only `agent-developer@*` and `agent-merger@*` exist — the rm for reviewers is harmless (no-op if file missing).
+`TeamDelete` removes the team config dir (`/home/developer/.claude/teams/<team>/`). Subagent transcripts (`/home/developer/.claude/projects/-app/<CLAUDE_SESSION_ID>/subagents/agent-<task_id>.jsonl`) are intentionally **kept** — they are session-scoped logs useful for debugging and the stats panel, not "leaked" state. They are removed when the chat-service session ends (or when the user explicitly clears it).
 
-After cleanup, the lead replies to the user:
+After TeamDelete, the lead replies to the user:
 - On success: "TASK-XXX done, merge commit `<sha>`."
 - On failure: "TASK-XXX failed: `<reason>`. Branch retained at `<branch_name>`. (no auto-cleanup of the worktree on failure — user investigates)."
+
+**Multi-ticket flows:** call TeamDelete once per ticket-team after each merger reports back. Do not batch.
 
 ## Failure paths
 
@@ -231,22 +229,21 @@ After cleanup, the lead replies to the user:
 If the lead decides to abort (timeout, user cancel, irrecoverable error):
 
 ```
-1. SendMessage(developer@..., "ABORT") — best-effort, dev may or may not act on it
-2. Bash filesystem cleanup of subagent transcripts (same as Phase 3)
-3. TeamDelete (succeeds even with dormant agents in our case — they're task subagents, not active members)
-4. Reply to user with abort reason
+1. SendMessage(to: "developer", "ABORT") — best-effort, dev may or may not act on it
+2. TeamDelete({team_name: "ticket-TASK-XXX"}) — explicit team_name required
+3. Reply to user with abort reason
 ```
 
-The worktree is left intact on abort, so the user can inspect or recover manually.
+The worktree is left intact on abort, so the user can inspect or recover manually. Subagent transcripts persist as logs.
 
-## Reference: name@team IDs
+## Reference: addressing recipients
 
-For team_name `ticket-TASK-XXX`, the predictable agent IDs are:
+Within a single team, every agent uses **bare names**:
 
-- `team-lead@ticket-TASK-XXX` — the chat-orchestrator (auto-registered as lead by TeamCreate)
-- `developer@ticket-TASK-XXX`
-- `quality-reviewer@ticket-TASK-XXX` (complex mode only)
-- `test-validator@ticket-TASK-XXX` (complex mode only)
-- `merger@ticket-TASK-XXX`
+- `team-lead` — the chat-orchestrator (auto-registered as lead by TeamCreate)
+- `developer`
+- `quality-reviewer` (complex mode only)
+- `test-validator` (complex mode only)
+- `merger`
 
-These IDs are deterministic and known by every team member at spawn time (passed in their initial prompt).
+For multi-ticket flows where the lead orchestrates ≥2 ticket-teams concurrently, the lead disambiguates with the `@team_name` suffix (e.g. `developer@ticket-TASK-002`). Teammates always use bare names; they only ever see their own team.

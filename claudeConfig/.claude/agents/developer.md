@@ -35,8 +35,8 @@ You are a team member of `ticket-TASK-XXX` (passed via your spawn prompt). On st
 
 Key responsibilities:
 - Read the ticket, implement in the worktree, commit
-- (complex mode) Notify quality-reviewer@... and test-validator@... when ready
-- (simple mode) Notify merger@... directly
+- (complex mode) Notify quality-reviewer and test-validator when ready (bare names, `to:` field)
+- (simple mode) Notify merger directly (bare name)
 - Apply R1 on any BLOCKED: re-notify ALL reviewers after a fix (including those that previously APPROVED — the diff changed)
 - Run Mode 2 reflection (complex mode only) before SendMessaging merger
 
