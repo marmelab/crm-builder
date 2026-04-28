@@ -1,237 +1,252 @@
 ---
 name: agent-team
-description: Multi-agent team workflow for implementing tickets. Use when dispatching agents or following the full lifecycle (bootstrap → planning → wave-based parallel execution → review → reflection → merge). This skill is the single source of truth for how complex changes are implemented.
+description: Multi-agent team workflow for implementing tickets with peer-to-peer communication. Use when dispatching agents or following the full lifecycle (bootstrap → planning → wave-based parallel execution → ticket-team → cleanup). This skill is the single source of truth for how the team communicates.
 ---
 
-# Agent Team — Full Workflow
+# Agent Team — Peer-to-peer workflow
 
-This skill is loaded by chat-orchestrator for any COMPLEX change. It describes every dispatch, every Phase, every mandatory step. Follow it exactly.
+This skill is invoked by `chat-orchestrator` (team-lead role) and by every ticket-team member at startup. It describes the full lifecycle and every cross-agent message.
 
----
+## TL;DR
 
-## Full lifecycle
+For every ticket, the lead spawns 4 named team members upfront, sends a single GO message to the developer, then stays passive until the merger pings it back. Reviewers and developer fix-cycle directly. Developer counts approvals; when all approved, runs Mode 2 reflection, then SendMessages merger. Merger merges, pings lead. Lead does deterministic filesystem cleanup of subagent transcripts.
 
-### Phase 0 — Bootstrap (once per project)
+## When to use
 
-Check `/app/docs/project-context.json` at project root:
+- Lead (chat-orchestrator): after classifying the user request as a code change.
+- Each team member: at the start of their first activation, to know the protocol.
 
-- Does not exist or `validated: false` → dispatch PROJECT-MANAGER to produce it
-- `validated: true` → proceed to Phase 1
+## Modes
 
-### Phase 1 — Ticket planning (once per feature/need)
+- **Simple mode:** developer + merger only (2 agents). No reviewers, no Mode 2 reflection. Used for one-shot UI tweaks ("rename label X to Y", "hide button Z"), single-file edits, no test impact.
+- **Complex mode:** developer + quality-reviewer + test-validator + merger (4 agents). Mode 2 reflection between all-APPROVED and SendMessage merger. Used for multi-file features, anything touching data flow, anything affecting tests, anything ambiguous.
 
-Dispatch PLANNER. Pass `TICKETS_DIR` (the session folder from `<session_dir>`) so the planner writes ticket files alongside the conversation's `log.jsonl` and `meta.json`:
+The lead classifies in its first turn based on the user request. The default for ambiguous cases is **complex** (false positives are cheap, missed reviews are not).
 
-```
-Agent({
-  subagent_type: "planner",
-  description: "Plan tickets for: <user request>",
-  prompt: "MODE=<mode>\nTICKETS_DIR=<session_dir>\n\n<user request>"
-})
-```
+## Phase 1 — Team setup (lead only)
 
-Planner produces:
-- ordered list of TASK-XXX tickets written to `${TICKETS_DIR}/TASK-XXX.json`
-- each ticket has `dependencies: []`, `parallel_safe: true/false`, `branch_name: feature/...`
-- ticket list appended to `/app/docs/project-context.json` under `tickets`
-
-### Phase 2 — Wave-based parallel execution
-
-Read all new tickets. Group them into **waves**:
-
-- **Wave 1**: tickets with `dependencies: []`
-- **Wave N+1**: tickets whose dependencies are all merged after wave N
-- A ticket with `parallel_safe: false` gets its own solo wave (never shares with siblings)
-
-Run each wave concurrently. Wait for all teams of wave N to complete before starting wave N+1.
-
-### Phase 2a — Ticket team lifecycle
-
-For each ticket `TASK-XXX` in the current wave:
-
-1. TeamCreate
-2. Dispatch developer (ticket mode)
-3. Dispatch reviewers (parallel)
-4. If BLOCKED → re-dispatch developer for fix → re-run reviewers
-5. All APPROVED → dispatch developer (Mode 2 reflection)
-6. Dispatch merger
-7. TeamDelete
-
-See dispatch templates below.
-
-### Phase 2b — Cross-wave gate
-
-After all teams of wave N complete (all mergers done, all worktrees cleaned up), recompute the next wave from the updated dependency graph and start Phase 2a again. Stop when no pending tickets remain.
-
----
-
-## CRITICAL RULE — Batch parallel work in ONE assistant message
-
-**For a wave of N independent tickets, you MUST emit all 2N tool_use blocks (N TeamCreate + N Agent developer) in ONE SINGLE assistant response message.** Not two messages. Not "let me start with the first one, then the second". ONE message with the full batch.
-
-### ✅ Correct — one assistant message with 4 tool_use blocks (2 tickets in wave)
+The lead does this in ONE assistant message (one tool_use block per agent, in parallel):
 
 ```
-<your ONE assistant message>
-  [tool_use: TeamCreate({ team_name: "ticket-TASK-006", description: "..." })]
-  [tool_use: TeamCreate({ team_name: "ticket-TASK-007", description: "..." })]
-  [tool_use: Agent({ subagent_type: "developer", team_name: "ticket-TASK-006", ... })]
-  [tool_use: Agent({ subagent_type: "developer", team_name: "ticket-TASK-007", ... })]
-```
+TeamCreate({team_name: "ticket-TASK-XXX", description: "<short ticket description>"})
 
-### ❌ Wrong — serialized across messages, wastes time
-
-```
-Message 1: [tool_use: TeamCreate(TASK-006)] [tool_use: TeamCreate(TASK-007)]
-Message 2: [tool_use: Agent(developer TASK-006)]
-(wait for TASK-006 to finish completely)
-Message N: [tool_use: Agent(developer TASK-007)]
-```
-
-If you announced to the user *"I'll run them in parallel"* then emit the developer dispatches in separate messages, you have contradicted yourself. Do NOT do this.
-
-**Rule of thumb**: if your next user-facing message starts with *"Je lance la première étape"* / *"I start with the first one"*, you're about to serialize a parallel wave by mistake. Change to *"Je lance les étapes en parallèle"* and emit all dispatches in that one response.
-
-This rule also applies to:
-- The two reviewers of a ticket (quality-reviewer + test-validator) → same message
-- Any read-only lookup sequence where one result doesn't feed the next
-
----
-
-## Dispatch templates
-
-### Developer (ticket mode, implementation)
-
-```
 Agent({
   subagent_type: "developer",
+  name: "developer",
   team_name: "ticket-TASK-XXX",
   model: "opus",
   description: "Implement TASK-XXX",
-  prompt: "WORKTREE_PATH=/worktrees/TASK-XXX\nBRANCH_NAME=<ticket.branch_name>\nMODE=<mode>\nTICKETS_DIR=<session_dir>\n\nTASK: ${TICKETS_DIR}/TASK-XXX.json"
+  prompt: "<see Phase 2 — developer protocol>"
 })
-```
 
-### Reviewers (parallel, same assistant message)
-
-```
-Agent({
+Agent({  // complex mode only
   subagent_type: "quality-reviewer",
+  name: "quality-reviewer",
   team_name: "ticket-TASK-XXX",
   model: "sonnet",
   description: "Review TASK-XXX",
-  prompt: "TICKETS_DIR=<session_dir>\n\nReview ${TICKETS_DIR}/TASK-XXX.json implementation in worktree /worktrees/TASK-XXX"
+  prompt: "<see Phase 2 — quality-reviewer protocol>"
 })
-Agent({
+
+Agent({  // complex mode only
   subagent_type: "test-validator",
-  team_name: "ticket-TASK-XXX",
-  model: "haiku",
-  description: "Validate TASK-XXX",
-  prompt: "TICKETS_DIR=<session_dir>\n\nValidate ${TICKETS_DIR}/TASK-XXX.json implementation in worktree /worktrees/TASK-XXX"
-})
-```
-
-`<session_dir>` above is a placeholder — substitute the literal absolute path from your system prompt's `<session_dir>` tag.
-
-### Developer (fix mode, after BLOCKED)
-
-Re-dispatch the same developer agent in the same team, with a prompt that includes the reviewer's blocking issues. Use `model: "sonnet"` for small fixes (doc missing, typecheck fix, single-line change) — cheaper and enough.
-
-### Developer (Mode 2 reflection — NOT optional before merger)
-
-```
-Agent({
-  subagent_type: "developer",
+  name: "test-validator",
   team_name: "ticket-TASK-XXX",
   model: "sonnet",
-  description: "Write reflection for TASK-XXX",
-  prompt: "MODE 2 — REFLECTION.\n\nWORKTREE_PATH=/worktrees/TASK-XXX\nBRANCH_NAME=<ticket.branch_name>\nTASK_ID=TASK-XXX\nTICKETS_DIR=<session_dir>\n\nThe ticket is implemented and reviewed. Your job now: invoke Skill({skill: 'reflection-writing'}) first, then read past reflections in /app/docs/reflections/, then write /app/docs/reflections/TASK-XXX-reflection.md. Do NOT touch code. Commit the reflection file in the worktree with message 'docs(TASK-XXX): reflection'."
+  description: "Validate TASK-XXX",
+  prompt: "<see Phase 2 — test-validator protocol>"
 })
-```
 
-Reflection runs on sonnet — it's prose, not heavy reasoning. Reflection captures the learnings for future dev sessions and MUST happen before merger.
-
-### Merger (NOT optional)
-
-```
 Agent({
   subagent_type: "merger",
+  name: "merger",
   team_name: "ticket-TASK-XXX",
   model: "haiku",
   description: "Merge TASK-XXX",
-  prompt: "TASK_ID=TASK-XXX\nBRANCH_NAME=<ticket.branch_name>\nWORKTREE_PATH=/worktrees/TASK-XXX\nTICKETS_DIR=<session_dir>"
+  prompt: "<see Phase 2 — merger protocol>"
 })
 ```
 
-Merger responsibilities:
-1. Merge the feature branch into the base branch (`master` or `main`)
-2. Remove the worktree
-3. Delete the feature branch
-4. Update the ticket JSON status to `"merged"`
-
-**Mandatory check before TeamDelete**: confirm MERGER was dispatched AND reported success for this ticket. If not, dispatch it now. No "session limit", no "I'll let the user do it" — the merger is fast (usually < 30s on haiku) and it's the whole point of the flow. If you end the ticket without dispatching merger, the branch stays orphaned and the user's change is **invisible in the running app**.
-
-### TeamDelete
+After all spawns return, the lead sends ONE go message to the developer:
 
 ```
-TeamDelete({ team_name: "ticket-TASK-XXX" })
+SendMessage({
+  to: "developer@ticket-TASK-XXX",
+  message: "GO — Implement TASK-XXX (worktree=/worktrees/TASK-XXX, branch=<ticket.branch_name>, mode=<demo|full>). Ticket spec: <ticket file path or inline>. After all reviewers APPROVED, write reflection (Mode 2), then SendMessage merger@ticket-TASK-XXX. Reviewers: [quality-reviewer@ticket-TASK-XXX, test-validator@ticket-TASK-XXX]. Merger: merger@ticket-TASK-XXX."
+})
 ```
 
-Call this only after merger reported success.
+In simple mode, omit the reviewer entries; the message says "no reviewers, no reflection, SendMessage merger directly when commit is ready".
 
----
+After SendMessage(developer, "GO"), the lead enters **passive wait** for the final SendMessage from `merger@ticket-TASK-XXX` reporting "merged X" or "merge failed: <reason>".
 
-## Ticket format in `${TICKETS_DIR}/TASK-XXX.json`
+## Phase 2 — Per-agent protocols
 
-```json
-{
-  "ticket_id": "TASK-001",
-  "title": "Short imperative title",
-  "description": "What needs to be done and why",
-  "type": "feature|fix|migration|config",
-  "risk_level": "low|medium|high",
-  "acceptance_criteria": [
-    "Specific, testable, verifiable statement"
-  ],
-  "non_functional_requirements": {
-    "performance": "...",
-    "security": "...",
-    "scalability": "..."
-  },
-  "files_to_modify": ["src/..."],
-  "dependencies": ["TASK-000"],
-  "parallel_safe": true,
-  "branch_name": "feature/short-name-TASK-001",
-  "status": "pending|in_progress|merged"
-}
+Each agent's prompt (sent at spawn) includes their role-specific protocol below.
+
+### developer@ticket-TASK-XXX
+
+```
+ROLE: developer
+TEAM: ticket-TASK-XXX
+WORKTREE: /worktrees/TASK-XXX
+TICKET_FILE: <session_dir>/TASK-XXX.json (complex) or <inline> (simple)
+TEAMMATES: [reviewers list], merger@ticket-TASK-XXX
+TEAM_LEAD: team-lead@ticket-TASK-XXX
+
+WORKFLOW:
+1. Read the ticket spec.
+2. Implement in the worktree (Edit/Write/Bash). Commit when ready.
+3. (complex mode) SendMessage(quality-reviewer@..., "ready, please review"). SendMessage(test-validator@..., "ready, please validate"). Initialize approvals_needed=2, approvals_received=0.
+4. (simple mode) Skip step 3. Go to step 7 directly.
+5. Wait for replies. For each:
+   - "APPROVED" → approvals_received++
+   - "BLOCKED: ..." → reset approvals_received=0, apply the fixes, commit, then re-notify ALL reviewers (R1: re-notify those that previously APPROVED too, since the diff changed). Loop step 5.
+6. When approvals_received == approvals_needed:
+   - Bascule en Mode 2 (reflection): read /app/docs/reflections/, write /worktrees/TASK-XXX/docs/reflections/TASK-XXX-reflection.md, commit.
+7. SendMessage(merger@ticket-TASK-XXX, "ready: all approved + reflection committed (or "ready: simple mode" in simple)").
+8. After SendMessage(merger), stop. Lead handles cleanup.
+
+TIMEOUTS:
+- If a reviewer doesn't reply within 180s, SendMessage(team-lead@..., "stuck on <reviewer>: no reply for 180s").
+- If the same fix-cycle has run >5 times without convergence, SendMessage(team-lead@..., "stuck: <N> cycles, can't satisfy <reviewer>").
 ```
 
-All agents read tickets from `${TICKETS_DIR}/TASK-XXX.json` (the per-session folder, e.g. `/chat-service/logs/<uuid>/TASK-XXX.json`) — this is the source of truth. The orchestrator passes the absolute path as `TICKETS_DIR` in every dispatch prompt.
+### quality-reviewer@ticket-TASK-XXX
 
----
+```
+ROLE: quality-reviewer
+TEAM: ticket-TASK-XXX
+WORKTREE: /worktrees/TASK-XXX
+TICKET_FILE: <session_dir>/TASK-XXX.json
+TEAMMATES: developer@ticket-TASK-XXX, test-validator@ticket-TASK-XXX, merger@ticket-TASK-XXX
+TEAM_LEAD: team-lead@ticket-TASK-XXX
 
-## Model routing
+WORKFLOW (per incoming SendMessage from developer):
+1. Read the ticket and the worktree diff (`git -C /worktrees/TASK-XXX diff <base>..HEAD`).
+2. Apply the rules from .claude/rules/coding-style.md and .claude/rules/agent-output-format.md. Skim .claude/rules/security-triggers.md for anything that warrants security flagging.
+3. Verdict:
+   - All clear → SendMessage(developer@..., "APPROVED")
+   - Issues to fix → SendMessage(developer@..., "BLOCKED:\n- file: ...\n  line: ...\n  description: ...\n  fix: ...\n- ...\nSummary: N blocking issues.")
+4. After SendMessage, stop. Wait for next incoming message (re-review after dev's fix).
 
-| Agent | Model | Rationale |
+DO NOT:
+- Run validations (typecheck, e2e, etc.) — those are handled by the PreToolUse hook on the dev side.
+- SendMessage anyone other than developer@... You don't talk to other reviewers, you don't talk to merger.
+- Re-spawn agents or call TeamCreate/TeamDelete.
+```
+
+### test-validator@ticket-TASK-XXX
+
+```
+ROLE: test-validator
+TEAM: ticket-TASK-XXX
+WORKTREE: /worktrees/TASK-XXX
+TICKET_FILE: <session_dir>/TASK-XXX.json
+TEAMMATES: developer@ticket-TASK-XXX, quality-reviewer@ticket-TASK-XXX, merger@ticket-TASK-XXX
+TEAM_LEAD: team-lead@ticket-TASK-XXX
+
+WORKFLOW (per incoming SendMessage from developer):
+1. Read the ticket and the worktree.
+2. Verify TEST PRESENCE: every new behavior in the diff has at least one corresponding test (unit or e2e per .claude/rules/testing.md).
+3. Verify TEST PERTINENCE: judge whether the assertions actually cover the failure modes that matter. A test that always passes (e.g. asserting truthy on a literal) is not pertinent.
+4. Read .claude/skills/e2e-conventions to know when an e2e is required.
+5. Verdict (same format as quality-reviewer):
+   - SendMessage(developer@..., "APPROVED") if presence + pertinence both OK
+   - SendMessage(developer@..., "BLOCKED:\n- ...") otherwise
+
+DO NOT:
+- Run the tests (the PreToolUse hook does that on the dev side). Your job is reading + judging coverage and pertinence, not running.
+- SendMessage other reviewers or merger.
+```
+
+### merger@ticket-TASK-XXX
+
+```
+ROLE: merger
+TEAM: ticket-TASK-XXX
+WORKTREE: /worktrees/TASK-XXX
+BRANCH: <ticket.branch_name>
+TEAM_LEAD: team-lead@ticket-TASK-XXX
+
+WORKFLOW (per incoming SendMessage):
+- If sender is developer@... and message is "ready" → proceed.
+- Anything else → SendMessage(team-lead@..., "merger received unexpected message: <quote>") and stop.
+
+MERGE STEPS:
+1. cd /app && git fetch
+2. git checkout <base branch> && git pull --ff-only (or document if no remote)
+3. git reset --hard HEAD ; /entrypoint-helpers/apply-app-variant.sh (re-applies App.tsx variant)
+4. git merge --no-ff <ticket.branch_name> -m "chore(ticket-TASK-XXX): merge"
+5. If merge succeeds: git worktree remove /worktrees/TASK-XXX ; git branch -d <ticket.branch_name>
+6. SendMessage(team-lead@..., "merged TASK-XXX, commit=<short sha>")
+7. If merge fails (conflict, hook block, etc.): SendMessage(team-lead@..., "merge failed: <reason>") and stop.
+
+CRITICAL — what merger NEVER does:
+- `git add` / `git commit` of any file (only git merge + git reset --hard HEAD on /app are allowed; see CLAUDE.md "Merger never fabricates commits")
+- Spawn agents, TeamCreate, TeamDelete
+- Edit any file in /app or worktree (validation already done upstream by hooks)
+```
+
+## Phase 3 — Cleanup (lead only)
+
+When the lead receives `SendMessage(team-lead@..., "merged X")` or `"merge failed: ..."` from the merger, it does:
+
+```
+# Filesystem cleanup of subagent transcripts (TeamDelete does NOT remove these)
+Bash({
+  command: "TEAM=ticket-TASK-XXX; SID=\"$CLAUDE_SESSION_ID\"; \
+    rm -f /home/developer/.claude/projects/-app/$SID/subagents/agent-developer@$TEAM.{jsonl,meta.json}; \
+    rm -f /home/developer/.claude/projects/-app/$SID/subagents/agent-quality-reviewer@$TEAM.{jsonl,meta.json}; \
+    rm -f /home/developer/.claude/projects/-app/$SID/subagents/agent-test-validator@$TEAM.{jsonl,meta.json}; \
+    rm -f /home/developer/.claude/projects/-app/$SID/subagents/agent-merger@$TEAM.{jsonl,meta.json}; \
+    rm -f /tmp/claude-1001/-app/$SID/tasks/*@$TEAM.output; \
+    echo cleanup_done"
+})
+
+# Then TeamDelete cleans up team config and tasks dirs
+TeamDelete({team_name: "ticket-TASK-XXX"})
+```
+
+If `$CLAUDE_SESSION_ID` is not set in the env (verified in Phase 0 Q3), the chat-service must inject it (Phase 4 Task 4.2). The skill assumes it IS set.
+
+In simple mode, only `agent-developer@*` and `agent-merger@*` exist — the rm for reviewers is harmless (no-op if file missing).
+
+After cleanup, the lead replies to the user:
+- On success: "TASK-XXX done, merge commit `<sha>`."
+- On failure: "TASK-XXX failed: `<reason>`. Branch retained at `<branch_name>`. (no auto-cleanup of the worktree on failure — user investigates)."
+
+## Failure paths
+
+| Scenario | Detected by | Reaction |
 |---|---|---|
-| PROJECT-MANAGER | sonnet | bootstrap, light reasoning |
-| PLANNER | sonnet | decomposition, file discovery |
-| ARCHITECT | sonnet | rarely used |
-| DEVELOPER (ticket implementation) | **opus** | complex coding |
-| DEVELOPER (fix after BLOCKED) | **sonnet** | small change |
-| DEVELOPER (Mode 2 reflection) | **sonnet** | prose |
-| QUALITY-REVIEWER | sonnet | semantic review |
-| TEST-VALIDATOR | haiku | structural checks |
-| MERGER | haiku | mechanical git ops |
+| Reviewer silent > 180s | developer (timeout in dev's prompt) | dev SendMessages team-lead, "stuck on <reviewer>". Lead can SendMessage(reviewer, "ping?") or abort with cleanup. |
+| Dev fix-cycle > 5 iterations | developer (counter in dev's prompt) | dev SendMessages team-lead, "stuck: <N> cycles". Lead reformulates expectations to dev or aborts. |
+| Merger merge conflict | merger | merger SendMessages team-lead, "merge failed: <reason>". Lead either resumes dev for fix OR aborts with cleanup. |
+| Hook `stop-hook-error` | system event arrives in lead's stream | Lead reads the event, decides if blocking. Validation hook crashes → treat as "validation skipped", warn user. |
+| User pressed STOP | chat-service `cancelled` state | chat-service does brutal filesystem cleanup of `subagents/*` for the current session, doesn't wait for lead. |
 
----
+### Abort path (lead-initiated)
 
-## Global rules
+If the lead decides to abort (timeout, user cancel, irrecoverable error):
 
-- **Any BLOCKED = no merge**: one blocking verdict from any reviewer stops the merge. Re-dispatch developer to fix, then re-run reviewers.
-- **Reflection before merge**: after all reviews APPROVED, developer Mode 2 writes reflection, THEN merger merges.
-- **Merger is mandatory**: no ticket completes without merger success. No shortcuts.
-- **Ticket source of truth**: `${TICKETS_DIR}/TASK-XXX.json` (per-session folder). All agents read here, never from memory alone.
-- **Worktree isolation**: each ticket works in `/worktrees/TASK-XXX/` — see `.claude/rules/worktree-scope.md`.
-- **e2e tests**: mandatory for any UI/filter/interaction task unless acceptance_criteria explicitly states otherwise.
-- **Parallel tickets**: tickets in the same wave with no deps between them MUST be dispatched in ONE assistant message (see CRITICAL RULE above).
+```
+1. SendMessage(developer@..., "ABORT") — best-effort, dev may or may not act on it
+2. Bash filesystem cleanup of subagent transcripts (same as Phase 3)
+3. TeamDelete (succeeds even with dormant agents in our case — they're task subagents, not active members)
+4. Reply to user with abort reason
+```
+
+The worktree is left intact on abort, so the user can inspect or recover manually.
+
+## Reference: name@team IDs
+
+For team_name `ticket-TASK-XXX`, the predictable agent IDs are:
+
+- `team-lead@ticket-TASK-XXX` — the chat-orchestrator (auto-registered as lead by TeamCreate)
+- `developer@ticket-TASK-XXX`
+- `quality-reviewer@ticket-TASK-XXX` (complex mode only)
+- `test-validator@ticket-TASK-XXX` (complex mode only)
+- `merger@ticket-TASK-XXX`
+
+These IDs are deterministic and known by every team member at spawn time (passed in their initial prompt).
