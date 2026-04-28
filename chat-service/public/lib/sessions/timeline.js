@@ -15,7 +15,10 @@ export function initTimeline({
   function refreshIfOpen() {
     if (timelinePanel.hidden) return;
     clearTimeout(refreshTimer);
-    refreshTimer = setTimeout(open, 250);
+    refreshTimer = setTimeout(() => {
+      if (timelinePanel.hidden) return;
+      open();
+    }, 250);
   }
 
   async function open() {
