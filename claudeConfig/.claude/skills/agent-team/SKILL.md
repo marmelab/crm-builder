@@ -198,25 +198,27 @@ CRITICAL — what merger NEVER does:
 
 ## Phase 3 — Cleanup (lead only)
 
-When the lead receives `SendMessage(to: "team-lead", "merged X")` or `"merge failed: ..."` from the merger, it does **two** things in this exact order. Both are mandatory; one without the other leaks state.
+When the lead receives `SendMessage(to: "team-lead", "merged X")` or `"merge failed: ..."` from the merger, **all team agents have already exited** (the merger only emits this after its own work is done; the developer exits earlier when it SendMessages the merger). Cleanup runs in this exact order. Both steps are mandatory; one without the other leaks state.
 
-### Step 3a — TeamDelete with the explicit team_name
+### Step 3a — TeamDelete
 
 ```
-TeamDelete({"team_name": "ticket-TASK-XXX"})
+TeamDelete({})
 ```
 
-Replace `ticket-TASK-XXX` with the literal team_name from Phase 1. **Do NOT call `TeamDelete({})` (empty input) — it is observed to be a no-op in the current runtime and silently leaves the team config in place.**
+`{}` (no input) is accepted and means "the only team this session has open". This releases the runtime's in-memory team registration. If the lead is orchestrating ≥2 ticket-teams concurrently (multi-ticket flow), pass the explicit form instead: `TeamDelete({"team_name": "ticket-TASK-XXX"})`.
 
-### Step 3b — Belt-and-suspenders rm of the team config dir
+The runtime's TeamDelete reliably removes the team's `config.json` but **leaves the `inboxes/` subdir on disk** — Step 3b is therefore mandatory.
 
-`TeamDelete` is observed (Phase 0 W1b) to leave `/home/developer/.claude/teams/<team>/` on disk in some cases. Always follow up with a brace-expanded rm covering both possible case variants the runtime may use on disk:
+### Step 3b — Bash rm (the source of truth for disk state)
 
 ```
 Bash({command: "rm -rf /home/developer/.claude/teams/ticket-{TASK,task}-XXX"})
 ```
 
-The brace expansion `{TASK,task}` produces two literal paths so the rm hits the team config whether the runtime stored it uppercase or lowercase. Replace `XXX` with the numeric part of the team_name from Phase 1 (e.g. `001`). This is the only filesystem `rm` the lead does — it targets only the team config dir, not the subagent transcripts.
+Run this **after** Step 3a so any post-TeamDelete dir touch by the runtime is also cleaned. The brace expansion `{TASK,task}` produces two literal paths so the rm hits the team config whether the runtime stored it uppercase or lowercase. Replace `XXX` with the numeric part of the team_name from Phase 1 (e.g. `001`).
+
+This is the only filesystem `rm` the lead does — it targets only the team config dir, not the subagent transcripts.
 
 ### What is intentionally NOT cleaned
 
