@@ -12,16 +12,14 @@ fi
 # Read the JSON envelope from stdin and extract tool_input.command. If the
 # payload is malformed, treat as block (safer than passing through with an
 # empty COMMAND that would later match `^ls( |$)` against an empty string).
+# Uses node -e (consistent with the other hooks; node is the image's base runtime).
 ENVELOPE=$(cat)
-COMMAND=$(printf '%s' "$ENVELOPE" | python3 -c '
-import sys, json
-try:
-    payload = json.loads(sys.stdin.read())
-    cmd = payload.get("tool_input", {}).get("command", "")
-except Exception:
-    cmd = ""
-print(cmd, end="")
-' 2>/dev/null) || COMMAND=""
+COMMAND=$(node -e '
+try {
+  const p = JSON.parse(process.argv[1]);
+  process.stdout.write((p.tool_input && p.tool_input.command) || "");
+} catch { process.stdout.write(""); }
+' "$ENVELOPE" 2>/dev/null) || COMMAND=""
 
 if [ -z "$COMMAND" ]; then
   echo "Bash command blocked for documentator: empty or unparseable command." >&2

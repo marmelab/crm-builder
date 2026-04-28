@@ -12,15 +12,12 @@ fi
 ALLOWED="/app/docs/learnings/patterns.md"
 
 ENVELOPE=$(cat)
-FILE_PATH=$(printf '%s' "$ENVELOPE" | python3 -c '
-import sys, json
-try:
-    payload = json.loads(sys.stdin.read())
-    inp = payload.get("tool_input", {})
-    print(inp.get("file_path", ""), end="")
-except Exception:
-    print("", end="")
-' 2>/dev/null) || FILE_PATH=""
+FILE_PATH=$(node -e '
+try {
+  const p = JSON.parse(process.argv[1]);
+  process.stdout.write((p.tool_input && p.tool_input.file_path) || "");
+} catch { process.stdout.write(""); }
+' "$ENVELOPE" 2>/dev/null) || FILE_PATH=""
 
 if [ -z "$FILE_PATH" ]; then
   echo "Write/Edit blocked for documentator: empty or unparseable file_path." >&2

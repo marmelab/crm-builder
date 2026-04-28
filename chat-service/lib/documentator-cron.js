@@ -106,7 +106,12 @@ export async function runDocumentator(opts) {
   args.push('-p', prompt);
 
   const proc = spawn('claude', args, {
-    env: { ...process.env, HOME: claudeHome, DOCUMENTATOR_RUN: '1' },
+    env: {
+      ...process.env,
+      HOME: claudeHome,
+      CLAUDE_PROJECT_DIR: cwd,
+      DOCUMENTATOR_RUN: '1',
+    },
     cwd,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -128,7 +133,9 @@ export async function runDocumentator(opts) {
       audit.write(`\n[timeout] sending SIGTERM after ${TIMEOUT_MS / 1000}s\n`);
       proc.kill('SIGTERM');
       setTimeout(() => {
-        if (!proc.killed) {
+        // proc.killed flips to true as soon as a signal is delivered, even if
+        // the process is still alive — use exitCode (null while running) instead.
+        if (proc.exitCode === null) {
           audit.write(`\n[timeout] sending SIGKILL\n`);
           try { proc.kill('SIGKILL'); } catch {}
         }

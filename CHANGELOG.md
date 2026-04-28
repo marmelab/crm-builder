@@ -819,7 +819,7 @@ Targets: `build`, `up` (demo profile), `up-full` (full profile), `down`, `restar
 
 ## Phase 32 — Documentator agent (phase 1, 2026-04-27, branch `feat/agent-documentator`)
 
-A new agent that observes the team's activity and writes a structured "patterns ledger" for the maintainer to review. Phase 1 is **read-only**: no config mutation, no auto-application of proposed actions. The trajectory is calibration first (the maintainer reviews detection quality + appliquability), acting later (phase 2 — counter-gated auto-apply per action category, designed but not implemented).
+A new agent that observes the team's activity and writes a structured "patterns ledger" for the maintainer to review. Phase 1 is **read-only**: no config mutation, no auto-application of proposed actions. The trajectory is calibration first (the maintainer reviews detection quality + applicability), acting later (phase 2 — counter-gated auto-apply per action category, designed but not implemented).
 
 ### Documentator agent
 - New `claudeConfig/.claude/agents/documentator.md` (sonnet, restricted tool list).
