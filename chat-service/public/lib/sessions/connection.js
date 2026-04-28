@@ -38,5 +38,13 @@ export function initConnection({ handleWsMessage, appendMessage, resetChatUi }) 
     connectWs();
   });
 
-  return { connectWs, switchSession, getWs: () => ws };
+  // Returns true if the payload was actually sent. Callers should treat false
+  // as "user must retry" (e.g. show error, keep input intact).
+  function safeSend(payload) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    ws.send(typeof payload === 'string' ? payload : JSON.stringify(payload));
+    return true;
+  }
+
+  return { connectWs, switchSession, getWs: () => ws, safeSend };
 }
