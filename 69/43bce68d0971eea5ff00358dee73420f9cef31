@@ -1,0 +1,23 @@
+chat-service/public/chat.js
+  cd9c53b573313b19 42-44,46-49,107,117,239,246,285,509,531-534
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "6943bce68d0971eea5ff00358dee73420f9cef31",
+  "prompts": {
+    "cd9c53b573313b19": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "170ba2fe-5a9a-46ee-8023-86e024e8a69e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Jerome",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 55,
+      "overriden_lines": 0
+    }
+  }
+}

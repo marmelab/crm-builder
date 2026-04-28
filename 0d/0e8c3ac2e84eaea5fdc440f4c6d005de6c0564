@@ -1,0 +1,27 @@
+chat-service/public/lib/sessions/history.js
+  cd9c53b573313b19 60-65,68,70
+chat-service/public/chat.js
+  cd9c53b573313b19 53-57,62,67
+chat-service/public/lib/sessions/connection.js
+  cd9c53b573313b19 14-20
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "0d0e8c3ac2e84eaea5fdc440f4c6d005de6c0564",
+  "prompts": {
+    "cd9c53b573313b19": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "170ba2fe-5a9a-46ee-8023-86e024e8a69e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Jerome",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 98,
+      "overriden_lines": 0
+    }
+  }
+}

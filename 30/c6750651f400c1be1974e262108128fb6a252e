@@ -1,0 +1,25 @@
+chat-service/lib/server/http-routes.js
+  cd9c53b573313b19 5,80-86
+chat-service/lib/server/session-store.js
+  cd9c53b573313b19 107-115,120-129,186
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "30c6750651f400c1be1974e262108128fb6a252e",
+  "prompts": {
+    "cd9c53b573313b19": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "170ba2fe-5a9a-46ee-8023-86e024e8a69e",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Jerome",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 61,
+      "overriden_lines": 0
+    }
+  }
+}
