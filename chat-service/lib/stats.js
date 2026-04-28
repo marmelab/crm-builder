@@ -161,6 +161,10 @@ function buildOrchestratorPhase(events, agentPhases, startTs, endTs) {
   const skip = new Set(['Agent', 'Task', 'TeamCreate', 'TeamDelete']);
   for (const rec of events) {
     if (rec.type !== 'debug_raw' || rec.event?.type !== 'assistant') continue;
+    // Only orchestrator-emitted tool_uses — sub-agent tool_uses carry a
+    // parent_tool_use_id and are already counted in their phase's opsCount
+    // via the task_notification.usage.tool_uses field.
+    if (rec.event.parent_tool_use_id != null) continue;
     for (const b of extractToolUsesFromAssistant(rec.event)) {
       if (skip.has(b.name)) continue;
       opsCount++;
