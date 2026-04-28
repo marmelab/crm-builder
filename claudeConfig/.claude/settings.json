@@ -67,6 +67,17 @@
                         "statusMessage": "Validating before review/merge..."
                     }
                 ]
+            },
+            {
+                "matcher": "TeamDelete",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "/home/developer/.claude/hooks/teamdelete-gate.sh",
+                        "timeout": 5,
+                        "statusMessage": "Checking team teardown state..."
+                    }
+                ]
             }
         ],
         "SubagentStop": []

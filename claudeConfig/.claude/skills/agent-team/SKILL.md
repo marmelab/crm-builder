@@ -231,6 +231,8 @@ TeamDelete({})
 
 After 3a→3c, the inbox files are all read (or empty), so TeamDelete will not preserve any "embryo" message file.
 
+> **Hook enforcement.** A `PreToolUse` hook (`teamdelete-gate.sh`) blocks TeamDelete if any non-lead member has not been fully shut down (no `shutdown_approved` from them in the lead's inbox, or one is present but unread). If you see *"TeamDelete blocked: N teammate(s) ... have not been gracefully shut down"*, follow the steps the hook lists and **do not retry TeamDelete in the same turn** — that will fail identically. Yield first, then retry on the next turn.
+
 ### Step 3e — Bash rm (final mop-up)
 
 ```
