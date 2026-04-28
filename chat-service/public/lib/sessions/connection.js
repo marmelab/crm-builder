@@ -11,7 +11,13 @@ export function initConnection({ handleWsMessage, appendMessage, resetChatUi }) 
 
   function connectWs() {
     ws = new WebSocket(buildWsUrl());
-    ws.onmessage = handleWsMessage;
+    // Drop in-flight frames from a superseded socket: after switchSession,
+    // the old WebSocket can still deliver buffered messages briefly. Comparing
+    // event.target to the current `ws` filters them out without needing extra
+    // bookkeeping.
+    ws.onmessage = (event) => {
+      if (event.target === ws) handleWsMessage(event);
+    };
     ws.onclose = () => {
       if (switchingSession) { switchingSession = false; return; }
       appendMessage('assistant', 'Connection lost. Please reload the page.');

@@ -50,16 +50,21 @@ function pushDebugEvent(entry) {
 
 function placeIntoMessages(el, seq) {
   el.dataset.seq = seq;
+  // Don't yank the scroll back to bottom if the user has scrolled up to read.
+  // Only auto-follow when they were already near the bottom before insertion.
+  const NEAR_BOTTOM_PX = 80;
+  const wasNearBottom =
+    messages.scrollHeight - messages.scrollTop - messages.clientHeight < NEAR_BOTTOM_PX;
   for (const child of messages.children) {
     const cs = Number(child.dataset.seq);
     if (!Number.isNaN(cs) && cs > seq) {
       messages.insertBefore(el, child);
-      messages.scrollTop = messages.scrollHeight;
+      if (wasNearBottom) messages.scrollTop = messages.scrollHeight;
       return;
     }
   }
   messages.appendChild(el);
-  messages.scrollTop = messages.scrollHeight;
+  if (wasNearBottom) messages.scrollTop = messages.scrollHeight;
 }
 
 const TOOL_LABELS = {
