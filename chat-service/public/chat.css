@@ -452,3 +452,14 @@ body { height: 100vh; overflow: hidden; font-family: system-ui, sans-serif; back
   overflow-x: auto; max-height: 240px; overflow-y: auto;
   border-top: 1px solid #3a3a3c;
 }
+
+/* Activation bands — one per task_started for the same task_id (SendMessage resume) */
+.phase-activations { display: inline-flex; align-items: center; gap: 1px; margin-left: 6px; }
+.stats-activation-band {
+  display: inline-block;
+  width: 8px;
+  height: 10px;
+  background: var(--accent, #38bdf8);
+  margin: 0 1px;
+  border-radius: 2px;
+}

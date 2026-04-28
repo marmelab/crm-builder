@@ -35,6 +35,14 @@ function renderPhaseRow(phase, relLabel, teamColor) {
 
   const warn  = phase.errorsCount  ? el('span', { className: 'phase-warn' }, `⚠️ ${phase.errorsCount}`)  : null;
   const retry = phase.retriesCount ? el('span', { className: 'phase-warn' }, `🔁 ${phase.retriesCount}`) : null;
+  const activations = Array.isArray(phase.activations) ? phase.activations : [];
+  const bands = activations.length > 1
+    ? el('span', { className: 'phase-activations', title: `${activations.length} activations` },
+        ...activations.map((a) => el('span', {
+          className: 'stats-activation-band',
+          title: `${relLabel(a.startTs)}${a.endTs ? '–' + relLabel(a.endTs) : ''} · ${formatDuration(a.durationMs)}`,
+        })))
+    : null;
 
   det.appendChild(el('summary', null,
     el('span', { className: 'phase-time' }, relLabel(phase.startTs)),
@@ -43,7 +51,7 @@ function renderPhaseRow(phase, relLabel, teamColor) {
     el('span', { className: 'phase-desc' }, phase.description),
     el('span', { className: 'phase-stats' },
       `${formatDuration(phase.durationMs)} · ${phase.opsCount} ops · ${formatTokens(phase.tokensTotal || 0)} tok`),
-    warn, retry, teamBadge,
+    bands, warn, retry, teamBadge,
   ));
 
   if (phase.children.length === 0) {

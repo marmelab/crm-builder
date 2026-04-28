@@ -289,3 +289,17 @@ test('aggregateSession: blocking hooks EXIT=2 are NOT errors', async () => {
     assert.ok(!blocked.includes(e.payload?.hookName));
   }
 });
+
+test('phases group multiple task_started for the same task_id (SendMessage resume)', async () => {
+  const result = await aggregateSession({
+    sessionLogPath: fx('sendmessage-resume.jsonl'),
+    hooksLogPath: '/dev/null',
+    sessionId: 'fixture-resume',
+  });
+  const agentPhases = result.phases.filter((p) => p.kind === 'agent');
+  const devPhases = agentPhases.filter((p) => p.agentType === 'developer');
+  assert.equal(devPhases.length, 1, 'should have a single developer phase');
+  const unknown = agentPhases.filter((p) => p.agentType === 'unknown');
+  assert.equal(unknown.length, 0, 'no unknown phases');
+  assert.ok((devPhases[0].activations || []).length >= 2, 'developer should have >=2 activations');
+});

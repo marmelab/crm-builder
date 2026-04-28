@@ -112,9 +112,15 @@ function extractTeams(events) {
   return { teams, agentToolIdToTeam };
 }
 
+function subagentTypeFromAgentToolUse(toolUseId, agentTypeByToolId) {
+  return agentTypeByToolId.get(toolUseId);
+}
+
 function extractPhases(events, agentToolIdToTeam) {
   const byTaskId = new Map();
   const agentTypeByToolId = new Map();
+  const agentTypeByTaskId = new Map();
+  // First pass: index Agent/Task tool_uses by their tool_use_id.
   for (const rec of events) {
     if (rec.type !== 'debug_raw' || rec.event?.type !== 'assistant') continue;
     for (const b of extractToolUsesFromAssistant(rec.event)) {
@@ -123,28 +129,70 @@ function extractPhases(events, agentToolIdToTeam) {
       }
     }
   }
+  // Second pass: bind task_id → subagent_type via the FIRST task_started's tool_use_id.
+  // Subsequent task_started for the same task_id (SendMessage-resume) get a different
+  // tool_use_id but must inherit the original subagent_type.
   for (const rec of events) {
     if (rec.type !== 'debug_raw' || !rec.event) continue;
     const ev = rec.event;
     if (ev.type === 'system' && ev.subtype === 'task_started' && ev.task_type === 'local_agent') {
-      byTaskId.set(ev.task_id, {
-        phaseId: ev.task_id,
-        kind: 'agent',
-        agentType: agentTypeByToolId.get(ev.tool_use_id) ?? 'unknown',
-        description: ev.description || '',
-        teamName: agentToolIdToTeam.get(ev.tool_use_id) ?? null,
-        startTs: rec.ts,
-        endTs: null, durationMs: 0, opsCount: 0, tokensTotal: 0,
-        errorsCount: 0, retriesCount: 0, children: [],
-        _toolUseId: ev.tool_use_id,
-      });
+      if (!agentTypeByTaskId.has(ev.task_id)) {
+        const t = subagentTypeFromAgentToolUse(ev.tool_use_id, agentTypeByToolId);
+        if (t) agentTypeByTaskId.set(ev.task_id, t);
+      }
+    }
+  }
+  for (const rec of events) {
+    if (rec.type !== 'debug_raw' || !rec.event) continue;
+    const ev = rec.event;
+    if (ev.type === 'system' && ev.subtype === 'task_started' && ev.task_type === 'local_agent') {
+      const existing = byTaskId.get(ev.task_id);
+      if (existing) {
+        // Resume case — append an activation, keep the phase.
+        existing.activations.push({
+          startTs: rec.ts, endTs: null, durationMs: 0,
+          toolUseId: ev.tool_use_id, opsCount: 0, tokensTotal: 0,
+        });
+      } else {
+        byTaskId.set(ev.task_id, {
+          phaseId: ev.task_id,
+          kind: 'agent',
+          agentType:
+            agentTypeByTaskId.get(ev.task_id) ??
+            subagentTypeFromAgentToolUse(ev.tool_use_id, agentTypeByToolId) ??
+            'unknown',
+          description: ev.description || '',
+          teamName: agentToolIdToTeam.get(ev.tool_use_id) ?? null,
+          startTs: rec.ts,
+          endTs: null, durationMs: 0, opsCount: 0, tokensTotal: 0,
+          errorsCount: 0, retriesCount: 0, children: [],
+          activations: [{
+            startTs: rec.ts, endTs: null, durationMs: 0,
+            toolUseId: ev.tool_use_id, opsCount: 0, tokensTotal: 0,
+          }],
+          _toolUseId: ev.tool_use_id,
+        });
+      }
     } else if (ev.type === 'system' && ev.subtype === 'task_notification' && byTaskId.has(ev.task_id)) {
       const p = byTaskId.get(ev.task_id);
-      p.endTs = rec.ts;
       const u = ev.usage || {};
-      p.durationMs = u.duration_ms || msBetween(p.startTs, p.endTs);
-      p.opsCount = u.tool_uses || 0;
-      p.tokensTotal = u.total_tokens || 0;
+      // Match the activation by tool_use_id (most reliable).
+      const act =
+        p.activations.find((a) => a.toolUseId === ev.tool_use_id && a.endTs === null) ??
+        p.activations.find((a) => a.endTs === null) ??
+        p.activations[p.activations.length - 1];
+      if (act) {
+        act.endTs = rec.ts;
+        act.durationMs = u.duration_ms || msBetween(act.startTs, act.endTs);
+        act.opsCount = u.tool_uses || 0;
+        act.tokensTotal = u.total_tokens || 0;
+      }
+      // Phase aggregates: end at the latest notification, sum across activations.
+      p.endTs = rec.ts;
+      p.durationMs = p.activations.reduce((s, a) => s + (a.durationMs || 0), 0)
+        || msBetween(p.startTs, p.endTs);
+      p.opsCount = p.activations.reduce((s, a) => s + (a.opsCount || 0), 0);
+      p.tokensTotal = p.activations.reduce((s, a) => s + (a.tokensTotal || 0), 0);
     }
   }
   return [...byTaskId.values()].sort((a, b) => a.startTs.localeCompare(b.startTs));
