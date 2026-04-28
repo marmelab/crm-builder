@@ -196,11 +196,32 @@ CRITICAL — what merger NEVER does:
 - Edit any file in /app or worktree (validation already done upstream by hooks)
 ```
 
-## Phase 3 — Cleanup (lead only)
+## Phase 3 — Graceful team shutdown (lead only)
 
-When the lead receives `SendMessage(to: "team-lead", "merged X")` or `"merge failed: ..."` from the merger, **all team agents have already exited** (the merger only emits this after its own work is done; the developer exits earlier when it SendMessages the merger). Cleanup runs in this exact order. Both steps are mandatory; one without the other leaks state.
+When the lead receives `SendMessage(to: "team-lead", "merged X")` or `"merge failed: ..."` from the merger, the workflow is done but the agents' OS processes may still be alive (the runtime keeps them around for graceful termination). A clean shutdown drains all messages so no unread "embryos" survive on disk.
 
-### Step 3a — TeamDelete
+### Step 3a — SendMessage shutdown_request to each member
+
+In ONE assistant message, send a shutdown_request to every active member of the team:
+
+```
+SendMessage({to: "developer", message: {type: "shutdown_request"}})
+SendMessage({to: "merger", message: {type: "shutdown_request"}})
+// (complex mode also: quality-reviewer, test-validator)
+```
+
+### Step 3b — Yield the turn so replies are delivered
+
+Emit a brief assistant text (e.g. *"Wrapping up the team…"*) and stop. The runtime delivers each member's `shutdown_approved` reply on the **next** user turn as a `<teammate-message>` block. Receiving them in the lead's turn-stream marks them **read**, so they will not become embryos. **Do not call any other tool in this turn — yielding is what lets the runtime deliver the replies.**
+
+### Step 3c — Verify each member acknowledged
+
+On the next turn, scan the incoming `<teammate-message>` blocks for `shutdown_approved` from every member you requested:
+
+- ✅ All approved → proceed to Step 3d.
+- ❌ One or more missing after ~10s of yielded waiting → log a brief message to the user (e.g. *"member &lt;name&gt; didn't acknowledge shutdown — proceeding anyway"*) and proceed; investigation can happen post-hoc by reading the member's transcript at `/home/developer/.claude/projects/-app/$CLAUDE_SESSION_ID/subagents/agent-<task_id>.jsonl`.
+
+### Step 3d — TeamDelete
 
 ```
 TeamDelete({})
@@ -208,17 +229,15 @@ TeamDelete({})
 
 `{}` (no input) is accepted and means "the only team this session has open". This releases the runtime's in-memory team registration. If the lead is orchestrating ≥2 ticket-teams concurrently (multi-ticket flow), pass the explicit form instead: `TeamDelete({"team_name": "ticket-TASK-XXX"})`.
 
-The runtime's TeamDelete reliably removes the team's `config.json` but **leaves the `inboxes/` subdir on disk** — Step 3b is therefore mandatory.
+After 3a→3c, the inbox files are all read (or empty), so TeamDelete will not preserve any "embryo" message file.
 
-### Step 3b — Bash rm (the source of truth for disk state)
+### Step 3e — Bash rm (final mop-up)
 
 ```
 Bash({command: "rm -rf /home/developer/.claude/teams/ticket-{TASK,task}-XXX"})
 ```
 
-Run this **after** Step 3a so any post-TeamDelete dir touch by the runtime is also cleaned. The brace expansion `{TASK,task}` produces two literal paths so the rm hits the team config whether the runtime stored it uppercase or lowercase. Replace `XXX` with the numeric part of the team_name from Phase 1 (e.g. `001`).
-
-This is the only filesystem `rm` the lead does — it targets only the team config dir, not the subagent transcripts.
+Belt-and-suspenders cleanup. Replace `XXX` with the numeric part of the team_name. The brace expansion `{TASK,task}` covers both possible disk-side casing variants. This targets only the team config dir, not the subagent transcripts.
 
 ### What is intentionally NOT cleaned
 
@@ -246,13 +265,17 @@ Call Steps 3a + 3b once per ticket-team after each merger reports back. Do not b
 
 ### Abort path (lead-initiated)
 
-If the lead decides to abort (timeout, user cancel, irrecoverable error):
+If the lead decides to abort (timeout, user cancel, irrecoverable error), follow the **same graceful shutdown** protocol as Phase 3 (3a→3e), but send an `ABORT` payload alongside the shutdown_request so members know the workflow is being terminated, not completing normally:
 
 ```
-1. SendMessage(to: "developer", "ABORT") — best-effort, dev may or may not act on it
-2. TeamDelete({"team_name": "ticket-TASK-XXX"}) — explicit team_name; empty {} is a no-op
-3. Bash({command: "rm -rf /home/developer/.claude/teams/ticket-TASK-XXX"}) — belt-and-suspenders
-4. Reply to user with abort reason
+1. SendMessage({to: "developer", message: {type: "shutdown_request", reason: "ABORT"}})
+   SendMessage({to: "merger",    message: {type: "shutdown_request", reason: "ABORT"}})
+   (complex mode: also quality-reviewer, test-validator)
+2. Yield the turn ("Aborting and cleaning up…").
+3. Verify shutdown_approved replies on the next turn.
+4. TeamDelete({}).
+5. Bash rm -rf /home/developer/.claude/teams/ticket-{TASK,task}-XXX.
+6. Reply to user with abort reason.
 ```
 
 The worktree is left intact on abort, so the user can inspect or recover manually. Subagent transcripts persist as logs.
