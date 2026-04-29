@@ -19,6 +19,7 @@ const RESULTS_DIR = join(__dirname, 'results');
 const BASELINE_PATH = join(RESULTS_DIR, 'baseline.json');
 const SESSIONS_DIR = process.env.SESSIONS_DIR || join(__dirname, '..', '..', 'sessions');
 const WS_URL = process.env.CHAT_WS_URL || 'ws://localhost:8080';
+const CONTAINER_NAME = process.env.CONTAINER_NAME || 'atomic-crm-demo';
 
 const args = process.argv.slice(2);
 const caseIdx = args.indexOf('--case');
@@ -35,7 +36,7 @@ function resetCrmSource() {
     // git checkout reverts src/ — but App.tsx in git is the Supabase-defaulted version,
     // so we re-apply the mode-specific variant after checkout.
     execSync(
-      'docker exec -u developer atomic-crm-demo sh -c "' +
+      `docker exec -u developer ${CONTAINER_NAME} sh -c "` +
         'cd /app && git checkout -- src/ && ' +
         'if [ \\"${MODE:-demo}\\" = \\"demo\\" ]; then ' +
         '  cp /app-variants/App.fakerest.tsx src/App.tsx; ' +
@@ -154,7 +155,10 @@ async function runCase(caseDef) {
 
   const start = Date.now();
   let waitingForTurn = null;
-  const TURN_TIMEOUT_MS = caseDef.expect?.maxDurationMs || 300000;
+  const TURN_TIMEOUT_OVERRIDE = Number.parseInt(process.env.TURN_TIMEOUT_MS || '', 10);
+  const TURN_TIMEOUT_MS = Number.isFinite(TURN_TIMEOUT_OVERRIDE) && TURN_TIMEOUT_OVERRIDE > 0
+    ? TURN_TIMEOUT_OVERRIDE
+    : (caseDef.expect?.maxDurationMs || 300000);
 
   const waitForTurn = () => new Promise((resolve, reject) => {
     waitingForTurn = resolve;
