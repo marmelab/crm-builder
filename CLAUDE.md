@@ -72,7 +72,7 @@ Writes `tests/results/run-<ISO>.json`, diffs against [baseline.json](chat-servic
 
 ## Agent team
 
-9 agents in [claudeConfig/.claude/agents/](claudeConfig/.claude/agents/). Each one: frontmatter (name, description, model, tools, skills) + prose. Models deliberately scoped:
+11 agents in [claudeConfig/.claude/agents/](claudeConfig/.claude/agents/). Each one: frontmatter (name, description, model, tools, skills) + prose. Models deliberately scoped:
 
 | Agent | Model | Role |
 |---|---|---|
@@ -83,8 +83,10 @@ Writes `tests/results/run-<ISO>.json`, diffs against [baseline.json](chat-servic
 | quality-reviewer | sonnet | Code quality + security (semantic only, hooks own validation). |
 | test-validator | haiku | Integration wiring, e2e presence, reachability. |
 | merger | haiku | `git merge --no-ff` to main, remove worktree. **Never `git add` / `git commit` itself** — only `git merge` and `git reset --hard HEAD` on `/app`. |
+| changelog | haiku | Once per session, after final merger: appends one entry to the cross-session JSON log at `/chat-service/logs/changelog.json` (host: `sessions/changelog.json`). |
 | devops | sonnet | One-time bootstrap (fork, Supabase, env, deploy). |
 | project-manager | sonnet | Domain-by-domain interview → `project-context.json`. |
+| documentator | sonnet | Read-only synthesizer: detects recurring friction patterns across reflections/hooks/sessions. Maintains `/app/docs/learnings/patterns.md`. |
 
 The full lifecycle is encoded in the [agent-team](claudeConfig/.claude/skills/agent-team/) skill (single source of truth for dispatch order).
 
