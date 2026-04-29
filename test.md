@@ -33,3 +33,5 @@
 * enlever silent-mode-check
 
 * Si j'envoie un message sans cliquer sur "Make a quick change/Set up from scratch", les boutons devraient disparaitre
+
+* quand je pars et reviens d'un discussion, les infos sur le tokens/$/agents disparaissent
