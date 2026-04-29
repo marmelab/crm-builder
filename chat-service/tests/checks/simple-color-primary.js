@@ -1,7 +1,10 @@
+import { ensureLoggedIn } from './_helpers/login.js';
+
 const CRM_URL = process.env.CRM_URL || 'http://localhost:5173';
 
 export default async function check(page) {
-  await page.goto(CRM_URL);
+  await ensureLoggedIn(page, CRM_URL);
+  await page.goto(`${CRM_URL}/#/`);
   await page.waitForLoadState('networkidle');
   const isPurple = await page.evaluate(() => {
     const el = document.querySelector('button, [class*="primary"], [class*="MuiButton-contained"]');

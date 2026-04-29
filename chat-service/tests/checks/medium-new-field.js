@@ -1,25 +1,30 @@
+import { ensureLoggedIn } from './_helpers/login.js';
+
 const CRM_URL = process.env.CRM_URL || 'http://localhost:5173';
 
 export default async function check(page) {
-  await page.goto(`${CRM_URL}/deals/1/edit`);
+  await ensureLoggedIn(page, CRM_URL);
+
+  await page.goto(`${CRM_URL}/#/deals/1/show`);
   await page.waitForLoadState('networkidle');
+  await page.locator('[role="dialog"]').first().waitFor({ state: 'visible', timeout: 15000 });
+  await page.locator('[role="dialog"]').first().getByText(/^edit$/i).first().click();
 
-  const dialog = page.locator('[role="dialog"]').first();
-  await dialog.waitFor({ state: 'visible', timeout: 15000 });
+  const editDialog = page.locator('[role="dialog"]').last();
+  await editDialog.waitFor({ state: 'visible', timeout: 15000 });
+  await editDialog.locator('input, select').first().waitFor({ state: 'visible', timeout: 5000 });
 
-  const priorityLabel = await dialog.getByText(/priority/i).count();
-  if (priorityLabel === 0) {
+  if ((await editDialog.getByText(/priority/i).count()) === 0) {
     throw new Error('no "priority" field/label in deal edit form');
   }
-
-  const editHtml = (await dialog.innerHTML()).toLowerCase();
+  const editHtml = (await editDialog.innerHTML()).toLowerCase();
   for (const value of ['low', 'medium', 'high']) {
     if (!editHtml.includes(value)) {
       throw new Error(`priority value "${value}" missing from edit form`);
     }
   }
 
-  await page.goto(`${CRM_URL}/deals`);
+  await page.goto(`${CRM_URL}/#/deals`);
   await page.waitForLoadState('networkidle');
   const boardHtml = (await page.locator('body').innerHTML()).toLowerCase();
   const cardMentionsPriority =
