@@ -329,6 +329,15 @@ async function main() {
   await writeFile(runPath, JSON.stringify(run, null, 2));
   console.log(`\nResults saved: ${runPath}`);
 
+  const patchDir = join(RESULTS_DIR, run.ts.replace(/[:.]/g, '-'));
+  await mkdir(patchDir, { recursive: true });
+  for (const c of results) {
+    if (c.patch) {
+      await writeFile(join(patchDir, `${c.caseId}.patch`), c.patch);
+      delete c.patch;
+    }
+  }
+
   let baseline = null;
   if (existsSync(BASELINE_PATH)) {
     baseline = JSON.parse(await readFile(BASELINE_PATH, 'utf8'));
