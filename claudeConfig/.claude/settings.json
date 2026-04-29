@@ -67,6 +67,19 @@
                     {
                         "type": "command",
                         "command": "/home/developer/.claude/hooks/restrict-documentator-write.sh"
+                    },
+                    {
+                        "type": "command",
+                        "command": "/home/developer/.claude/hooks/restrict-changelog-write.sh"
+                    }
+                ]
+            },
+            {
+                "matcher": "Write",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "/home/developer/.claude/hooks/check-changelog-summary.sh"
                     }
                 ]
             }

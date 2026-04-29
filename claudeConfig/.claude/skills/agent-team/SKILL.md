@@ -63,6 +63,23 @@ See dispatch templates below.
 
 After all teams of wave N complete (all mergers done, all worktrees cleaned up), recompute the next wave from the updated dependency graph and start Phase 2a again. Stop when no pending tickets remain.
 
+### Phase 3 — Session changelog (mandatory, once per session)
+
+After the **final merger of the final wave** has reported success, dispatch CHANGELOG exactly once. This appends one entry to the cross-session changelog at `/chat-service/logs/changelog.json` (host: `sessions/changelog.json`) summarizing every ticket merged during the current session. Run it before sending the user the final "All done!" message.
+
+```
+Agent({
+  subagent_type: "changelog",
+  model: "haiku",
+  description: "Write session changelog",
+  prompt: "TICKETS_DIR=<session_dir>\nSESSION_ID=<session uuid — basename of session_dir>\nMODE=<mode>\n\nWrite the end-of-session changelog. All tickets in this session are now merged."
+})
+```
+
+Do NOT dispatch CHANGELOG inside a `ticket-TASK-XXX` team — it is a session-scoped artifact, not a ticket-scoped one. Dispatch it at the orchestrator level (no `team_name`).
+
+If CHANGELOG fails (file write error, missing tickets dir), do not retry more than once and do not block the user-facing completion message. The conversation log remains the source of truth; the changelog is a convenience artifact.
+
 ---
 
 ## CRITICAL RULE — Batch parallel work in ONE assistant message
@@ -223,6 +240,7 @@ All agents read tickets from `${TICKETS_DIR}/TASK-XXX.json` (the per-session fol
 | QUALITY-REVIEWER | sonnet | semantic review |
 | TEST-VALIDATOR | haiku | structural checks |
 | MERGER | haiku | mechanical git ops |
+| CHANGELOG | haiku | end-of-session prose summary |
 
 ---
 
@@ -231,6 +249,7 @@ All agents read tickets from `${TICKETS_DIR}/TASK-XXX.json` (the per-session fol
 - **Any BLOCKED = no merge**: one blocking verdict from any reviewer stops the merge. Re-dispatch developer to fix, then re-run reviewers.
 - **Reflection before merge**: after all reviews APPROVED, developer Mode 2 writes reflection, THEN merger merges.
 - **Merger is mandatory**: no ticket completes without merger success. No shortcuts.
+- **Changelog is mandatory**: no session completes without CHANGELOG dispatched once after the final merger. See Phase 3.
 - **Ticket source of truth**: `${TICKETS_DIR}/TASK-XXX.json` (per-session folder). All agents read here, never from memory alone.
 - **Worktree isolation**: each ticket works in `/worktrees/TASK-XXX/` — see `.claude/rules/worktree-scope.md`.
 - **e2e tests**: mandatory for any UI/filter/interaction task unless acceptance_criteria explicitly states otherwise.
