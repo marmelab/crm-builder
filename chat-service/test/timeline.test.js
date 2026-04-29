@@ -192,26 +192,25 @@ test('open() renders summary, state label, and pluralized count', async () => {
   assert.ok(state1.classList.contains('state-completed'));
   assert.equal(findOneByClass(li1, 'timeline-count').textContent, '5 messages');
 
-  // Empty summary falls back to "(en cours)"
-  assert.equal(findOneByClass(li2, 'timeline-title').textContent, '(en cours)');
+  // Empty summary falls back to "(no summary yet)"
+  assert.equal(findOneByClass(li2, 'timeline-title').textContent, '(no summary yet)');
   // messageCount === 1 → singular
   assert.equal(findOneByClass(li2, 'timeline-count').textContent, '1 message');
   assert.ok(findOneByClass(li2, 'timeline-state').classList.contains('state-cancelled'));
 });
 
-test('open() ignores title from meta and only uses summary from changelog', async () => {
+test('open() prefers summary over title, and falls back to title when summary is empty', async () => {
   const ctx = setup({
     list: [
-      // Even when an old `title` is present, the timeline must show the
-      // changelog summary (or its fallback) — the meta title is no longer
-      // displayed in the timeline.
+      // No summary → fall back to the meta title.
       { id: 's1', title: 'Auto-generated meta title', summary: '', state: 'in_progress', messageCount: 1 },
+      // Summary present → it wins over the meta title.
       { id: 's2', title: 'Auto-generated meta title', summary: 'Real summary from changelog', state: 'completed', messageCount: 2 },
     ],
   });
   await ctx.api.open();
   const [li1, li2] = ctx.timelineList.children;
-  assert.equal(findOneByClass(li1, 'timeline-title').textContent, '(en cours)');
+  assert.equal(findOneByClass(li1, 'timeline-title').textContent, 'Auto-generated meta title');
   assert.equal(findOneByClass(li2, 'timeline-title').textContent, 'Real summary from changelog');
 });
 
