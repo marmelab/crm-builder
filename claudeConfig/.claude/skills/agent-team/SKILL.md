@@ -233,13 +233,9 @@ After 3a→3c, the inbox files are all read (or empty), so TeamDelete will not p
 
 > **Hook enforcement.** A `PreToolUse` hook (`teamdelete-gate.sh`) blocks TeamDelete if any non-lead member has not been fully shut down (no `shutdown_approved` from them in the lead's inbox, or one is present but unread). If you see *"TeamDelete blocked: N teammate(s) ... have not been gracefully shut down"*, follow the steps the hook lists and **do not retry TeamDelete in the same turn** — that will fail identically. Yield first, then retry on the next turn.
 
-### Step 3e — Bash rm (final mop-up)
+### Step 3e — automated cleanup (no action required)
 
-```
-Bash({command: "rm -rf /home/developer/.claude/teams/ticket-{TASK,task}-XXX"})
-```
-
-Belt-and-suspenders cleanup. Replace `XXX` with the numeric part of the team_name. The brace expansion `{TASK,task}` covers both possible disk-side casing variants. This targets only the team config dir, not the subagent transcripts.
+A `PostToolUse` hook (`teamdelete-cleanup.sh`) runs after every successful `TeamDelete` and removes the residual team directory `~/.claude/teams/<team_name>/` (the runtime leaves behind `inboxes/` and other artifacts). The lead has nothing to do for this step — the hook is silent and runs in the background.
 
 ### What is intentionally NOT cleaned
 
@@ -267,7 +263,7 @@ Call Steps 3a + 3b once per ticket-team after each merger reports back. Do not b
 
 ### Abort path (lead-initiated)
 
-If the lead decides to abort (timeout, user cancel, irrecoverable error), follow the **same graceful shutdown** protocol as Phase 3 (3a→3e), but send an `ABORT` payload alongside the shutdown_request so members know the workflow is being terminated, not completing normally:
+If the lead decides to abort (timeout, user cancel, irrecoverable error), follow the **same graceful shutdown** protocol as Phase 3 (3a→3d), but send an `ABORT` payload alongside the shutdown_request so members know the workflow is being terminated, not completing normally:
 
 ```
 1. SendMessage({to: "developer", message: {type: "shutdown_request", reason: "ABORT"}})
@@ -275,9 +271,8 @@ If the lead decides to abort (timeout, user cancel, irrecoverable error), follow
    (complex mode: also quality-reviewer, test-validator)
 2. Yield the turn ("Aborting and cleaning up…").
 3. Verify shutdown_approved replies on the next turn.
-4. TeamDelete({}).
-5. Bash rm -rf /home/developer/.claude/teams/ticket-{TASK,task}-XXX.
-6. Reply to user with abort reason.
+4. TeamDelete({}). The PostToolUse cleanup hook handles residual disk artifacts.
+5. Reply to user with abort reason.
 ```
 
 The worktree is left intact on abort, so the user can inspect or recover manually. Subagent transcripts persist as logs.

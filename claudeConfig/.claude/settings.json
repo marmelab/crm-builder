@@ -80,6 +80,18 @@
                 ]
             }
         ],
+        "PostToolUse": [
+            {
+                "matcher": "TeamDelete",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "/home/developer/.claude/hooks/teamdelete-cleanup.sh",
+                        "timeout": 5
+                    }
+                ]
+            }
+        ],
         "SubagentStop": []
     }
 }
