@@ -1,0 +1,23 @@
+CLAUDE.md
+  a3ef32ffaf574333 73-80
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "d71dd8ddea24d2fd4755ea1cc0b70da81e14b537",
+  "prompts": {
+    "a3ef32ffaf574333": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f4163846-8101-44c5-8481-f25316cb108d",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Jerome",
+      "messages": [],
+      "total_additions": 8,
+      "total_deletions": 0,
+      "accepted_lines": 8,
+      "overriden_lines": 0
+    }
+  }
+}
