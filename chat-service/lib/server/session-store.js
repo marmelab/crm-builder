@@ -141,26 +141,9 @@ export function endsWithQuestion(text) {
   return trimmed.endsWith('?');
 }
 
-async function readChangelogSummaries() {
-  try {
-    const raw = await readFile(`${LOG_DIR}/changelog.json`, 'utf8');
-    const data = JSON.parse(raw);
-    const map = new Map();
-    for (const s of data.sessions || []) {
-      if (s.session_id) map.set(s.session_id, s.summary || '');
-    }
-    return map;
-  } catch {
-    return new Map();
-  }
-}
-
 export async function listSessions() {
   await mkdir(LOG_DIR, { recursive: true }).catch(() => {});
-  const [entries, summaries] = await Promise.all([
-    readdir(LOG_DIR, { withFileTypes: true }).catch(() => []),
-    readChangelogSummaries(),
-  ]);
+  const entries = await readdir(LOG_DIR, { withFileTypes: true }).catch(() => []);
   const out = [];
   for (const entry of entries) {
     if (!entry.isDirectory() || !UUID_RE.test(entry.name)) continue;
@@ -171,7 +154,6 @@ export async function listSessions() {
       out.push({
         id: meta.id,
         title: meta.title || '',
-        summary: summaries.get(meta.id) || '',
         state: meta.state || 'in_progress',
         createdAt: meta.createdAt,
         lastMessageAt: meta.lastMessageAt,

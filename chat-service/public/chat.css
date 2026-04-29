@@ -163,7 +163,7 @@ body { height: 100vh; overflow: hidden; font-family: system-ui, sans-serif; back
    rendered as a vertical timeline (dot + connector on the left). */
 #chat-timeline-panel {
   position: absolute; bottom: 0; right: calc(100% + 8px); z-index: 10;
-  width: 520px; max-height: 80vh;
+  width: 360px; max-height: 70vh;
   background: #1c1c1e; border: 1px solid #3a3a3c; border-radius: 12px;
   box-shadow: 0 8px 30px rgba(0,0,0,.6);
   display: flex; flex-direction: column;
@@ -223,9 +223,10 @@ body { height: 100vh; overflow: hidden; font-family: system-ui, sans-serif; back
   content: '·'; margin-right: 6px; color: #48484a;
 }
 .timeline-title {
-  color: #f2f2f7; font-size: 14px; font-weight: 500;
-  margin-top: 4px; line-height: 1.45;
-  white-space: normal; overflow-wrap: anywhere;
+  color: #f2f2f7; font-size: 14px; font-weight: 600;
+  margin-top: 4px; line-height: 1.35;
+  overflow: hidden; text-overflow: ellipsis;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
 }
 .timeline-meta {
   color: #8e8e93; font-size: 11px; margin-top: 6px;
@@ -251,14 +252,8 @@ body { height: 100vh; overflow: hidden; font-family: system-ui, sans-serif; back
   transition: background .15s, color .15s, border-color .15s;
 }
 #chat-actions .timeline-action:hover { background: #2c2c2e; color: #fff; border-color: #48484a; }
-#chat-actions .timeline-action:disabled,
-#chat-actions .timeline-action[disabled] {
-  opacity: .4; cursor: not-allowed; background: transparent; color: inherit; border-color: #3a3a3c;
-}
 #chat-actions .timeline-continue { color: #60a5fa; border-color: rgba(96,165,250,.35); }
 #chat-actions .timeline-continue:hover { background: rgba(96,165,250,.12); border-color: rgba(96,165,250,.6); color: #93c5fd; }
-#chat-actions .timeline-rollback { color: #f59e0b; border-color: rgba(245,158,11,.35); }
-#chat-actions .timeline-rollback:hover { background: rgba(245,158,11,.12); border-color: rgba(245,158,11,.6); color: #fbbf24; }
 #timeline-empty {
   padding: 24px 18px; color: #636366; font-size: 12px; text-align: center;
 }

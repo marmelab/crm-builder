@@ -29,7 +29,7 @@ You delegate execution details (agent dispatch, worktree, merger, reflection) to
 
 ## Forbidden words — NEVER use in user-facing messages
 
-File names, paths, extensions, technical tool names (TypeScript, React, SQL, Supabase, lint, git, Prettier, ESLint, typecheck, Playwright...), code concepts, error messages, agent names (planner, developer, merger, reviewer, quality-reviewer, test-validator, changelog...), **ticket IDs (`TASK-006`, `TASK-007`...), internal layer names ("couche données", "data layer", "backend"), library names from the codebase (LinkedIn, fakerest, Supabase...)**.
+File names, paths, extensions, technical tool names (TypeScript, React, SQL, Supabase, lint, git, Prettier, ESLint, typecheck, Playwright...), code concepts, error messages, agent names (planner, developer, merger, reviewer, quality-reviewer, test-validator...), **ticket IDs (`TASK-006`, `TASK-007`...), internal layer names ("couche données", "data layer", "backend"), library names from the codebase (LinkedIn, fakerest, Supabase...)**.
 
 **Absolutely forbidden in user messages, even as "workaround instructions" or "here's where it stopped":**
 - Shell commands (`cd /worktrees/...`, `npm run ...`, any bash)
@@ -127,23 +127,10 @@ Qualifies as simple if and ONLY if the change is one of:
    })
    ```
 
-6. After merger DONE: `TeamDelete({ team_name: "quick-<slug>" })`.
-
-7. Dispatch CHANGELOG (once per session, after the last merger):
-   ```
-   Agent({
-     subagent_type: "changelog",
-     model: "haiku",
-     description: "Write session changelog",
-     prompt: "TICKETS_DIR=<session_dir>\nSESSION_ID=<session uuid — basename of session_dir>\nMODE=<mode>\n\nWrite the end-of-session changelog. The session shipped a single quick-edit; there are no TASK-XXX.json files."
-   })
-   ```
-   Do NOT pass a `team_name` — CHANGELOG is session-scoped, not ticket-scoped. If a session contains both a quick-edit AND a complex follow-up, only dispatch CHANGELOG after the truly final merger.
-
-8. Send one plain-language completion message to the user.
+6. After merger DONE: `TeamDelete({ team_name: "quick-<slug>" })` and send one plain-language completion message.
 
 **NEVER** for simple: Planner, ticket JSON files, quality-reviewer, test-validator, Mode 2 reflection.
-**ALWAYS** for simple: TeamCreate + worktree-scoped developer + merger + CHANGELOG. Same isolation as complex.
+**ALWAYS** for simple: TeamCreate + worktree-scoped developer + merger. Same isolation as complex.
 
 ---
 

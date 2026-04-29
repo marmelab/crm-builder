@@ -63,7 +63,7 @@ export function initTimeline({
     );
     body.appendChild(date);
 
-    const title = el('div', { className: 'timeline-title' }, d.summary || '(en cours)');
+    const title = el('div', { className: 'timeline-title' }, d.title || '(untitled)');
     body.appendChild(title);
 
     const meta = el('div', { className: 'timeline-meta' });
@@ -111,21 +111,8 @@ export function initTimeline({
       },
     }, '↻ Continue');
 
-    const isCompleted = d.state === 'completed';
-    const rollbackBtn = el('button', {
-      className: 'timeline-action timeline-rollback',
-      title: isCompleted
-        ? 'Rollback this session (not implemented yet)'
-        : 'Rollback is only available on completed sessions',
-      disabled: !isCompleted,
-      onclick: (e) => {
-        e.stopPropagation();
-      },
-    }, '⏪ Rollback');
-
     actions.appendChild(viewBtn);
     actions.appendChild(continueBtn);
-    actions.appendChild(rollbackBtn);
     body.appendChild(actions);
 
     li.appendChild(body);
