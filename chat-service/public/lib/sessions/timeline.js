@@ -63,7 +63,7 @@ export function initTimeline({
     );
     body.appendChild(date);
 
-    const title = el('div', { className: 'timeline-title' }, d.summary || '(en cours)');
+    const title = el('div', { className: 'timeline-title' }, d.summary || d.title || '(no summary yet)');
     body.appendChild(title);
 
     const meta = el('div', { className: 'timeline-meta' });

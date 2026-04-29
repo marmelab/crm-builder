@@ -36,6 +36,7 @@ class FakeElement {
     this.className = '';
     this.title = '';
     this.hidden = false;
+    this.disabled = false;
     this.style = {};
     this.dataset = {};
     this.onclick = null;
@@ -175,27 +176,60 @@ test('open() renders one li per session and hides empty state', async () => {
   }
 });
 
-test('open() renders title, state label, and pluralized count', async () => {
+test('open() renders summary, state label, and pluralized count', async () => {
   const ctx = setup({
     list: [
-      { id: 's1', title: 'Hello', state: 'completed', messageCount: 5, lastMessageAt: '2026-04-28T10:00:00.000Z' },
-      { id: 's2', title: '', state: 'cancelled', messageCount: 1, lastMessageAt: '2026-04-28T11:00:00.000Z' },
+      { id: 's1', summary: 'Renamed Dernière activité label to plural form', state: 'completed', messageCount: 5, lastMessageAt: '2026-04-28T10:00:00.000Z' },
+      { id: 's2', summary: '', state: 'cancelled', messageCount: 1, lastMessageAt: '2026-04-28T11:00:00.000Z' },
     ],
   });
   await ctx.api.open();
   const [li1, li2] = ctx.timelineList.children;
 
-  assert.equal(findOneByClass(li1, 'timeline-title').textContent, 'Hello');
+  assert.equal(findOneByClass(li1, 'timeline-title').textContent, 'Renamed Dernière activité label to plural form');
   const state1 = findOneByClass(li1, 'timeline-state');
   assert.equal(state1.textContent, 'Completed');
   assert.ok(state1.classList.contains('state-completed'));
   assert.equal(findOneByClass(li1, 'timeline-count').textContent, '5 messages');
 
-  // Empty title falls back to "(untitled)"
-  assert.equal(findOneByClass(li2, 'timeline-title').textContent, '(untitled)');
+  // Empty summary falls back to "(en cours)"
+  assert.equal(findOneByClass(li2, 'timeline-title').textContent, '(en cours)');
   // messageCount === 1 → singular
   assert.equal(findOneByClass(li2, 'timeline-count').textContent, '1 message');
   assert.ok(findOneByClass(li2, 'timeline-state').classList.contains('state-cancelled'));
+});
+
+test('open() ignores title from meta and only uses summary from changelog', async () => {
+  const ctx = setup({
+    list: [
+      // Even when an old `title` is present, the timeline must show the
+      // changelog summary (or its fallback) — the meta title is no longer
+      // displayed in the timeline.
+      { id: 's1', title: 'Auto-generated meta title', summary: '', state: 'in_progress', messageCount: 1 },
+      { id: 's2', title: 'Auto-generated meta title', summary: 'Real summary from changelog', state: 'completed', messageCount: 2 },
+    ],
+  });
+  await ctx.api.open();
+  const [li1, li2] = ctx.timelineList.children;
+  assert.equal(findOneByClass(li1, 'timeline-title').textContent, '(en cours)');
+  assert.equal(findOneByClass(li2, 'timeline-title').textContent, 'Real summary from changelog');
+});
+
+test('Rollback button is disabled when state is not completed', async () => {
+  const ctx = setup({
+    list: [
+      { id: 's1', summary: 'done', state: 'completed', messageCount: 1 },
+      { id: 's2', summary: '', state: 'in_progress', messageCount: 1 },
+      { id: 's3', summary: '', state: 'cancelled', messageCount: 1 },
+      { id: 's4', summary: '', state: 'waiting', messageCount: 1 },
+    ],
+  });
+  await ctx.api.open();
+  const [li1, li2, li3, li4] = ctx.timelineList.children;
+  assert.equal(findOneByClass(li1, 'timeline-rollback').disabled, false, 'completed → enabled');
+  assert.equal(findOneByClass(li2, 'timeline-rollback').disabled, true, 'in_progress → disabled');
+  assert.equal(findOneByClass(li3, 'timeline-rollback').disabled, true, 'cancelled → disabled');
+  assert.equal(findOneByClass(li4, 'timeline-rollback').disabled, true, 'waiting → disabled');
 });
 
 test('open() falls back to raw state when STATE_LABELS has no entry', async () => {

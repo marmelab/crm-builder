@@ -7,24 +7,34 @@ set -euo pipefail
 
 ALLOWED="/chat-service/logs/changelog.json"
 
-INPUT=$(cat)
+ENVELOPE=$(cat)
 
-node -e '
-const ALLOWED = process.argv[1];
-let env;
+AGENT_TYPE=$(node -e '
 try {
-  env = JSON.parse(process.argv[2]);
-} catch {
-  process.exit(0);
-}
+  const p = JSON.parse(process.argv[1]);
+  process.stdout.write(p.agent_type || "");
+} catch { process.stdout.write(""); }
+' "$ENVELOPE" 2>/dev/null) || AGENT_TYPE=""
 
-const agentType = env?.agent_type || "";
-if (agentType !== "changelog") process.exit(0);
+if [ "$AGENT_TYPE" != "changelog" ]; then
+  exit 0
+fi
 
-const filePath = env?.tool_input?.file_path || "";
-if (filePath === ALLOWED) process.exit(0);
+FILE_PATH=$(node -e '
+try {
+  const p = JSON.parse(process.argv[1]);
+  process.stdout.write((p.tool_input && p.tool_input.file_path) || "");
+} catch { process.stdout.write(""); }
+' "$ENVELOPE" 2>/dev/null) || FILE_PATH=""
 
-const reason = `Write/Edit blocked for changelog agent: only ${ALLOWED} may be modified. Attempted: ${filePath || "(empty path)"}`;
-console.log(JSON.stringify({ decision: "block", reason }));
-process.exit(0);
-' "$ALLOWED" "$INPUT"
+if [ -z "$FILE_PATH" ]; then
+  echo "Write/Edit blocked for changelog: empty or unparseable file_path." >&2
+  exit 2
+fi
+
+if [ "$FILE_PATH" != "$ALLOWED" ]; then
+  echo "Write/Edit blocked for changelog: only $ALLOWED may be modified. Attempted: $FILE_PATH" >&2
+  exit 2
+fi
+
+exit 0
