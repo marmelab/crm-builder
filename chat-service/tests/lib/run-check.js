@@ -2,7 +2,9 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-export async function runPlaywrightCheck(caseId, { checksDir, browser } = {}) {
+const DEFAULT_TIMEOUT_MS = 60_000;
+
+export async function runPlaywrightCheck(caseId, { checksDir, browser, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
   if (!checksDir) throw new Error('checksDir is required');
   if (!browser) {
     const pw = await import('playwright');
@@ -21,7 +23,15 @@ export async function runPlaywrightCheck(caseId, { checksDir, browser } = {}) {
   try {
     const ctx = await launched.newContext();
     const page = await ctx.newPage();
-    await check(page);
+    let timer;
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`check timed out after ${timeoutMs}ms`)), timeoutMs);
+    });
+    try {
+      await Promise.race([check(page), timeout]);
+    } finally {
+      clearTimeout(timer);
+    }
     return { ran: true, success: true };
   } catch (err) {
     return { ran: true, success: false, error: err.message };
