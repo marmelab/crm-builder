@@ -867,6 +867,68 @@ A new agent that observes the team's activity and writes a structured "patterns 
 
 ---
 
+## Phase 33 — Cleanup pass: bug fixes, perf, conventions (2026-04-28, PR #12)
+
+A pass through the chat-service after the multi-session + documentator work landed. No new feature — only fixes against latent bugs and a perf nit.
+
+### Crash-resistance on malformed assistant frames
+- `lib/server/turn.js` — `extractText` / `extractToolUses` now guard `msg.message?.content`. A partial line in `claude --output-format stream-json` (or any frame missing the `message` wrapper) used to throw mid-`for-await`, killing the spawn and leaving a zombie child. The guards make the helpers tolerant of any shape.
+
+### Frontend correctness
+- **Cap `debugEventBuffer`** at 1000 entries and clear it on `resetChatUi`. Previously it was appended to on every `debug`/`debug_raw` frame regardless of debug-mode, growing unboundedly across long sessions and leaking across session switches.
+- **`safeSend` helper** wrapping the WebSocket. Submitting the form / clicking a choice button between `onclose` and the next `connectWs` threw `InvalidStateError`; the user's bubble appeared but the message was never sent. `safeSend` returns `false` when the socket isn't `OPEN`, callers show "Connection lost" and abort. The stop button is routed through it too.
+- **Stale-frame isolation in `connectWs`** — drop messages whose `event.target` is no longer the current `ws`. After `switchSession`, the previous socket can still deliver buffered frames; without this guard they painted into the new session.
+- **`placeIntoMessages` preserves scroll** — only auto-scroll to bottom when the user was already near it. Yanking the scroll on every frame made it impossible to read past exchanges while an agent was responding.
+- **Clear `historyRefreshTimer`** on history panel close. An in-flight 250ms refresh otherwise re-opened the panel right after the user dismissed it.
+- **`wss://` when served over HTTPS** — `connectWs` derives the scheme from `location.protocol`. Hardcoded `ws://` broke the chat behind any TLS reverse proxy (browsers block mixed-content WS upgrades from `https://`).
+
+### Server-side data-integrity
+- **`session.applyPatch` for active runtimes** — `patchSession` only mutated `meta.json` on disk; an active runtime's in-memory `meta` stayed stale, so the next `saveMeta` from the running turn (e.g. `recordMessage` updating `lastMessageAt`) silently wrote the stale meta back, undoing the rename or state change. The PATCH handler now routes through `applyPatch` when a runtime is open for the session and falls back to disk-only `patchSession` for inactive ones.
+
+### Stats accuracy
+- **`buildOrchestratorPhase`** skips events with `parent_tool_use_id`. Sub-agent `tool_use`s were both counted at the orchestrator level *and* attributed to the sub-agent's phase via `task_notification.usage.tool_uses` — a systematic double-count. Filtering on `parent_tool_use_id` keeps the orchestrator's `opsCount` to its own dispatches.
+- **`assignHookExecsToPhases` perf**: build a `worktree → phaseId` reverse map once instead of `[...worktreeByPhaseId.entries()]` inside the inner loop (was O(N×M), now O(N)).
+
+### Convention
+- **`node:` prefix on every `lib/server/*.js` builtin import** ([CLAUDE.md](CLAUDE.md#conventions-for-code-changes) rule). The `server.js` split that produced `lib/server/*` dropped the prefix on each new file; realigned with `stats.js` which already followed the rule.
+
+### Init log perf
+- **`init` payload sent via `sendToWs` (no log) instead of `safeSend`**. `init` carries the visible-message snapshot so a (re)joining tab paints state immediately. It was being routed through `safeSend`, which records every payload in `log.jsonl`. On long sessions with many tab reconnects, the canonical log grew with redundant message arrays. Init is fully reconstructable from the log on demand, so it has no business being *in* the log.
+
+**Why one PR**: each fix is small and the surface is the same (chat-service). Bundling avoids 10 micro-PRs that all touch overlapping files. None introduce new behaviour — every change is a stricter version of an existing path.
+
+---
+
+## Phase 34 — Timeline panel (2026-04-28, branch `feat/timeline`)
+
+A second sessions view, alongside the existing history panel: chronological by last activity, with a vertical-dot rail and per-item actions (`View log`, `↻ Continue`). The history panel keeps its role (compact list, primary picker); the timeline targets *"where was I last"* — visual chronology with explicit "resume this thread" affordance.
+
+### UI
+- New button `🕒` in `#chat-actions`, anchored next to the existing `📂` history button. Toggles `#chat-timeline-panel`; clicking either button auto-hides the other so they don't stack.
+- Panel layout: same anchor model as the history panel (absolute, bottom-right, 360×70vh). Items rendered as a vertical timeline — `.timeline-dot` (10px circle, blue when active) over a `::before` connector line. Title (2-line clamp), state badge (reusing `STATE_LABELS` + `state-*` classes from the in-bubble pill), message count, and absolute + relative date side-by-side.
+- Two action buttons per item:
+  - **View log** — switches to the session if not already active, just closes the panel if it is.
+  - **↻ Continue** — `POST /api/sessions/:id/touch` to bump `lastMessageAt`, *then* `switchSession`. The "touch" semantics let the user re-surface an old thread to the top of the chronological view without sending a real message.
+
+### Backend
+- New `touchSession(id)` in `lib/server/session-store.js` — UUID-validated, reads `meta.json`, sets `lastMessageAt = new Date().toISOString()`, writes back. Returns the meta for the response (frontend doesn't currently use the body but the endpoint is symmetric with `getSession`).
+- New route `POST /api/sessions/:id/touch` in `lib/server/http-routes.js` — UUID-shaped path captured by the existing regex pattern, 404 on missing session.
+
+### Frontend wiring
+- `chat.js` introduces `refreshSessionPanels()` which fans out to `historyApi.refreshHistoryIfOpen()` *and* `timelineApi.refreshIfOpen()`. Every site that previously called `refreshHistoryIfOpen` (init, state, title, assistant-message, choice button, form-submit) now goes through the fan-out. Same debounce semantics — each panel keeps its own 250ms timer.
+- `display.initDisplay` parameter renamed `refreshHistoryIfOpen` → `refreshSessionPanels` to match the broadened responsibility (commit b7cdc2f, post-rename to align with a parallel rename Jérôme did on `main`).
+
+### Tests
+- 18 unit tests in `chat-service/test/timeline.test.js` covering: empty/non-empty rendering, state-label fallback, default state to `in_progress`, active-class application, ISO `title` attribute, fetch-error swallowing, View / Continue button branching (active vs. other session), URL-encoding, touch-error swallowing, button toggle, close button, and `refreshIfOpen` no-op-when-hidden + debounce-coalescing.
+- A jsdom dependency was deliberately avoided — the test file inlines a minimal `FakeElement` / `FakeTextNode` stub covering only what `dom.js#el()` and `timeline.js` touch (project keeps dev-deps near zero).
+
+### Bug fix during test authoring (commit 80cd6f3)
+- `refreshIfOpen` originally passed `open` directly to `setTimeout`. If the user closed the panel during the 250ms debounce window, the refresh still fired and silently re-opened it. Wrapped the callback to re-check `timelinePanel.hidden` at fire-time.
+
+**Why a second panel and not a tab inside history**: the two views answer different questions. History is "give me the list of all sessions" (compact, dense, search-friendly later). Timeline is "show me my recent threads in time order, with a one-click resume". Stacking them as tabs hides one behind the other; side-by-side toggling keeps both one click away.
+
+---
+
 ## Open items / known limits
 
 - **`medium-new-field` test** times out at 15 min (bumped to 35 min). Real agent-team flow on a multi-file feature naturally takes 20-30 min.
@@ -880,4 +942,4 @@ A new agent that observes the team's activity and writes a structured "patterns 
 
 ---
 
-_Last updated: 2026-04-27 (Phase 32)_
+_Last updated: 2026-04-28 (Phase 34)_
