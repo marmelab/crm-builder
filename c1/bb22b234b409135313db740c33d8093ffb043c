@@ -1,0 +1,25 @@
+chat-service/test/bench-evaluate-files.test.js
+  a3ef32ffaf574333 1-55
+chat-service/tests/lib/evaluate-files.js
+  a3ef32ffaf574333 1-55
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "c1bb22b234b409135313db740c33d8093ffb043c",
+  "prompts": {
+    "a3ef32ffaf574333": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f4163846-8101-44c5-8481-f25316cb108d",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Jerome",
+      "messages": [],
+      "total_additions": 220,
+      "total_deletions": 110,
+      "accepted_lines": 110,
+      "overriden_lines": 0
+    }
+  }
+}
