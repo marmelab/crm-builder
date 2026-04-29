@@ -88,7 +88,7 @@ Writes `tests/results/run-<ISO>.json`, diffs against [baseline.json](chat-servic
 
 The full lifecycle is encoded in the [agent-team](claudeConfig/.claude/skills/agent-team/) skill (single source of truth for dispatch order).
 
-The skill uses a **single-team Option C** layout: per wave, the lead does ONE `TeamCreate({team_name: "tickets"})` and dispatches all 4×N members of all tickets in one message with deterministic suffixed names (`developer-TASK-001`, `quality-reviewer-TASK-001`, …). This is forced by a documented runtime constraint — *one team per lead at a time, no nested teams*. Each Agent's spawn prompt carries `TASK_ID` and `COUNTERPARTS`, isolating per-ticket conversations inside the shared team.
+The skill uses a **single-team Option C** layout: per wave, the lead does ONE `TeamCreate({team_name: "tickets"})` and dispatches `3×N + 1` members in one message — three per-ticket members (developer + 2 reviewers) per ticket plus **one shared `merger`** (bare name, singleton across the wave). The per-ticket members use deterministic suffixed names (`developer-TASK-001`, `quality-reviewer-TASK-001`, …). This layout is forced by a documented runtime constraint — *one team per lead at a time, no nested teams*. The single-merger choice eliminates `.git/index.lock` contention that would otherwise serialise N parallel mergers anyway. Each Agent's spawn prompt carries `TASK_ID` and `COUNTERPARTS`, isolating per-ticket conversations inside the shared team.
 
 ### Hooks gate the handoff
 

@@ -7,9 +7,11 @@
 # Behavior:
 # - Reads the tool input JSON from stdin.
 # - If tool_input.to does not match a reviewer/merger recipient, exit 0 (skip).
-#   Recognised forms (post agent-team v3 single-team layout):
-#     - bare-suffixed:  quality-reviewer-TASK-XXX, test-validator-TASK-XXX, merger-TASK-XXX
-#     - legacy @-form:  quality-reviewer@*, test-validator@*, merger@*  (kept for safety)
+#   Recognised forms (post agent-team v3 single-team layout, single-merger):
+#     - per-ticket suffixed:  quality-reviewer-TASK-XXX, test-validator-TASK-XXX
+#     - shared singleton:     merger  (bare, no suffix — one merger per wave)
+#     - merger-* form is also accepted for back-compat (per-ticket merger v3.0)
+#     - legacy @-form:        quality-reviewer@*, test-validator@*, merger@*  (kept for safety)
 # - Otherwise runs (in order): typecheck, prettier, unit-app, unit-functions, e2e.
 # - First failure → exit 2 with the failing script's stderr passed through.
 #
@@ -35,7 +37,7 @@ else
 fi
 
 case "$TO" in
-  quality-reviewer-*|test-validator-*|merger-*|quality-reviewer@*|test-validator@*|merger@*)
+  quality-reviewer-*|test-validator-*|merger-*|merger|quality-reviewer@*|test-validator@*|merger@*)
     : # gate enabled
     ;;
   *)

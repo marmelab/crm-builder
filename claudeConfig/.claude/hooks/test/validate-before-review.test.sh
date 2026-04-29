@@ -42,10 +42,15 @@ INPUT='{"tool_name":"SendMessage","tool_input":{"to":"test-validator-TASK-001","
 VALIDATE_DRY_RUN=1 echo "$INPUT" | VALIDATE_DRY_RUN=1 "$SCRIPT_UNDER_TEST" >/dev/null 2>&1
 assert_exit "validate when to=test-validator-TASK-001 (v3 suffixed)" 0 $?
 
-# Test 5: validate when target is merger (v3 suffixed)
+# Test 5: validate when target is merger (v3 suffixed — back-compat for v3.0 per-ticket merger)
 INPUT='{"tool_name":"SendMessage","tool_input":{"to":"merger-TASK-001","message":"ready"}}'
 VALIDATE_DRY_RUN=1 echo "$INPUT" | VALIDATE_DRY_RUN=1 "$SCRIPT_UNDER_TEST" >/dev/null 2>&1
-assert_exit "validate when to=merger-TASK-001 (v3 suffixed)" 0 $?
+assert_exit "validate when to=merger-TASK-001 (v3.0 back-compat)" 0 $?
+
+# Test 5b: validate when target is the shared singleton merger (v3.1 single-merger)
+INPUT='{"tool_name":"SendMessage","tool_input":{"to":"merger","message":"ready: TASK-001, branch=feature/x"}}'
+VALIDATE_DRY_RUN=1 echo "$INPUT" | VALIDATE_DRY_RUN=1 "$SCRIPT_UNDER_TEST" >/dev/null 2>&1
+assert_exit "validate when to=merger (v3.1 shared singleton)" 0 $?
 
 # Test 6: failure case — VALIDATE_DRY_RUN=fail simulates a failing sub-script
 INPUT='{"tool_name":"SendMessage","tool_input":{"to":"quality-reviewer-TASK-001","message":"ready"}}'

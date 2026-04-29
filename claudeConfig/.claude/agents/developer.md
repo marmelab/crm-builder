@@ -33,18 +33,19 @@ a single line of code is written.
 
 You are a team member of the shared `tickets` team. Your spawn prompt gives you:
 - `TASK_ID` (e.g. `TASK-006`) — your assigned ticket
-- `COUNTERPARTS` — the deterministic suffixed names of your reviewers and merger for **this** ticket only (e.g. `quality-reviewer-TASK-006`, `merger-TASK-006`)
+- `COUNTERPARTS` — your reviewers (suffixed, per-ticket — e.g. `quality-reviewer-TASK-006`) and the shared `merger` (bare name, no suffix; the merger serves all developers of the wave)
 
 On startup, invoke `Skill({skill: "agent-team"})` and follow the **developer protocol** in Section "Phase 2".
 
 Key responsibilities:
 - Read the ticket, implement in the worktree, commit
 - (complex mode) Notify your reviewers via SendMessage to the suffixed names from `COUNTERPARTS.reviewers` (e.g. `quality-reviewer-TASK-XXX`, `test-validator-TASK-XXX`)
-- (simple mode) Notify your merger directly via SendMessage to `COUNTERPARTS.merger` (e.g. `merger-TASK-XXX`)
+- (simple mode) Notify the shared `merger` directly via SendMessage to `COUNTERPARTS.merger` (which is the bare name `merger`)
+- When you SendMessage the merger, the message MUST start with `ready: TASK-XXX, branch=<branch_name>` so the shared merger can identify your ticket
 - Apply R1 on any BLOCKED: re-notify ALL reviewers after a fix (including those that previously APPROVED — the diff changed)
-- Run Mode 2 reflection (complex mode only) before SendMessaging merger
+- Run Mode 2 reflection (complex mode only) before SendMessaging the merger
 
-**Critical**: only ever SendMessage the suffixed names listed in your `COUNTERPARTS` and `team-lead`. Never address other tickets' agents (e.g. a `developer-TASK-006` must not SendMessage `quality-reviewer-TASK-007`). All team members live in the single `tickets` team but each ticket's conversation is isolated by name.
+**Critical**: only ever SendMessage the suffixed names listed in your `COUNTERPARTS` (your own ticket's reviewers), the bare `merger`, and `team-lead`. Never address other tickets' suffixed agents (e.g. a `developer-TASK-006` must not SendMessage `quality-reviewer-TASK-007`). All team members live in the single `tickets` team; per-ticket conversations are isolated by name; the merger is the only intentional shared peer.
 
 ## Two invocation modes
 

@@ -175,6 +175,49 @@ probe_P6() {
 #  - SendMessage between counterparts (developer-A ↔ reviewer-A) works without
 #    cross-talk to the other pair
 #  - Phase 3 teardown of all 4 in one batch works
+probe_P8() {
+  clean_teams
+  # Fake 2-ticket wave under v3.1 single-team + single-merger layout. 7 haiku agents.
+  # Each agent's prompt makes them go through the textual handshake of their
+  # role (no real file edits, no real git). Validates:
+  #  - 7-agent dispatch in ONE message (3 per-ticket + 1 shared merger)
+  #  - cross-pair isolation between TASK-001 and TASK-002
+  #  - the shared `merger` correctly handles 2 successive "ready" messages
+  #    from different developers and reports back per-ticket
+  #  - validate-before-review matcher fires on quality-reviewer-* and bare `merger`
+  #    (we set VALIDATE_DRY_RUN=1 so the hook returns 0 instead of running npm)
+  #  - 7-member Phase 3 teardown
+  VALIDATE_DRY_RUN=1 run_probe "P8" "claude-sonnet-4-6" \
+'You are simulating a 2-ticket wave under the agent-team v3.1 single-team + single-merger layout. Do NOT edit any files — every step is a textual handshake to validate the routing and teardown.
+
+Steps:
+
+1. TeamCreate({team_name: "tickets", description: "fake wave: TASK-001 + TASK-002"})
+
+2. In ONE assistant message, dispatch all 7 members via the Agent tool (subagent_type=general-purpose, model=haiku, run_in_background=true, team_name="tickets"). Use these EXACT names and prompts:
+
+   Per-ticket members for TASK-001:
+   - name="developer-TASK-001", prompt="ROLE: developer for TASK-001. COUNTERPARTS: reviewers=[quality-reviewer-TASK-001, test-validator-TASK-001], merger=merger (bare, shared singleton). WORKFLOW: when you receive a SendMessage from team-lead containing GO, do exactly this in ONE assistant message: SendMessage(to: quality-reviewer-TASK-001, content: ready please review TASK-001) and SendMessage(to: test-validator-TASK-001, content: ready please review TASK-001). Then idle. When BOTH reviewers have replied APPROVED back to you, SendMessage(to: merger, content: ready: TASK-001, branch=feature/fake-001). Then idle. Be concise, do not over-think, just execute the SendMessages exactly as instructed. Use bare names (no @-suffix)."
+   - name="quality-reviewer-TASK-001", prompt="ROLE: quality-reviewer for TASK-001. COUNTERPART: developer-TASK-001. WORKFLOW: when you receive ANY SendMessage from developer-TASK-001, immediately reply with SendMessage(to: developer-TASK-001, content: APPROVED). Then idle. This is a routing test — do NOT perform any real review."
+   - name="test-validator-TASK-001", prompt="ROLE: test-validator for TASK-001. COUNTERPART: developer-TASK-001. WORKFLOW: when you receive ANY SendMessage from developer-TASK-001, immediately reply with SendMessage(to: developer-TASK-001, content: APPROVED). Then idle. This is a routing test — do NOT perform any real validation."
+
+   Same 3 per-ticket dispatches for TASK-002 (replace 001 with 002 in all names, prompts, branches).
+
+   Shared singleton merger (one for the whole wave, bare name, no suffix):
+   - name="merger", prompt="ROLE: shared merger for the wave (singleton, bare name). WAVE_TICKETS=[TASK-001, TASK-002]. WORKFLOW: you receive SendMessage from various developer-TASK-XXX. Each message starts with ready: TASK-XXX. When you receive one: parse TASK-XXX from the sender name, immediately SendMessage(to: team-lead, content: merged TASK-XXX commit=fake-sha-XXX-shared). Then idle and wait for the NEXT incoming message — do NOT stop after one merge, you serve the whole wave. Loop. Only stop when you receive a shutdown_request. This is a routing test — do NOT perform any real git operation."
+
+3. In ONE assistant message after the dispatches return, send GO:
+   SendMessage(to: developer-TASK-001, content: GO TASK-001)
+   SendMessage(to: developer-TASK-002, content: GO TASK-002)
+
+4. Yield. The chains run autonomously. Wait until you have received BOTH "merged TASK-XXX" reports from the shared merger (one for TASK-001, one for TASK-002).
+
+5. Phase 3 teardown: in ONE assistant message, SendMessage shutdown_request to ALL 7 members (3 per ticket × 2 tickets + the shared merger). Then yield. On the next turn, verify all 7 shutdown_approved arrived, then call TeamDelete({}).
+
+6. Final report: per-ticket status (TASK-001: success/fail, TASK-002: success/fail), confirm the shared merger reported BOTH tickets (not just one), and confirm zero cross-talk between TASK-001 and TASK-002 reviewer chains.' \
+    0
+}
+
 probe_P7() {
   clean_teams
   run_probe "P7" "claude-sonnet-4-6" \
@@ -206,7 +249,7 @@ What to verify in your final report:
 # Main
 # ----------------------------------------------------------------------------
 PROBES=("$@")
-[ ${#PROBES[@]} -eq 0 ] && PROBES=(P1 P2 P3 P4 P5 P6 P7)
+[ ${#PROBES[@]} -eq 0 ] && PROBES=(P1 P2 P3 P4 P5 P6 P7 P8)
 
 for p in "${PROBES[@]}"; do
   case "$p" in
@@ -217,6 +260,7 @@ for p in "${PROBES[@]}"; do
     P5) probe_P5 ;;
     P6) probe_P6 ;;
     P7) probe_P7 ;;
+    P8) probe_P8 ;;
     *)  echo "unknown probe: $p" >&2 ;;
   esac
 done
