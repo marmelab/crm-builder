@@ -259,7 +259,7 @@ function compareWithBaseline(run, baseline) {
   }
 
   console.log(`\nComparison vs baseline (${baseline.ts}):\n`);
-  const header = 'Case'.padEnd(28) + 'Duration'.padEnd(18) + 'Cost'.padEnd(18) + 'Tokens in'.padEnd(18);
+  const header = 'Case'.padEnd(28) + 'Duration'.padEnd(18) + 'Cost'.padEnd(18) + 'Tokens in'.padEnd(18) + 'Result'.padEnd(10);
   console.log(header);
   console.log('-'.repeat(header.length));
 
@@ -278,7 +278,10 @@ function compareWithBaseline(run, baseline) {
     const dur = `${(prev.durationMs / 1000).toFixed(1)}s → ${(current.durationMs / 1000).toFixed(1)}s ${fmtDelta(prev.durationMs, current.durationMs)}`;
     const cost = `$${prev.costUsd.toFixed(3)} → $${current.costUsd.toFixed(3)} ${fmtDelta(prev.costUsd, current.costUsd)}`;
     const tks = `${formatTokens(prev.tokensIn)} → ${formatTokens(current.tokensIn)} ${fmtDelta(prev.tokensIn, current.tokensIn)}`;
-    console.log(`${name}  ${dur.padEnd(26)}${cost.padEnd(26)}${tks}`);
+    const resultCol = current.result?.ran
+      ? (current.result.success ? 'OK' : 'FAIL')
+      : '–';
+    console.log(`${name}  ${dur.padEnd(26)}${cost.padEnd(26)}${tks.padEnd(26)}${resultCol}`);
   }
   console.log();
 }
