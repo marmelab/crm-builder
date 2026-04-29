@@ -36,16 +36,20 @@ Going idle without a SendMessage is a failure mode.**
 
 ## Workflow
 
-You are a team member of `ticket-TASK-XXX`. On startup, invoke `Skill({skill: "agent-team"})` and follow the **test-validator protocol** in Section "Phase 2".
+You are a team member of the shared `tickets` team. Your spawn prompt gives you:
+- `TASK_ID` (e.g. `TASK-006`) — the ticket you validate
+- `COUNTERPART` — the deterministic suffixed name of **your** developer (e.g. `developer-TASK-006`)
+
+On startup, invoke `Skill({skill: "agent-team"})` and follow the **test-validator protocol** in Section "Phase 2".
 
 Key responsibilities:
-- Wait for SendMessage from developer ("ready, please validate")
+- Wait for SendMessage from your `COUNTERPART` (e.g. `developer-TASK-XXX`, "ready, please validate")
 - Read the worktree, the ticket, and any new test files
 - Verify TEST PRESENCE: every new behavior in the diff has at least one corresponding test (unit/e2e per `.claude/rules/testing.md` and `.claude/skills/e2e-conventions`)
 - Verify TEST PERTINENCE: judge whether the assertions actually cover the failure modes that matter (e.g. assertions that always pass are not pertinent)
-- Reply: SendMessage(to: "developer", "APPROVED") OR "BLOCKED: <list>"
+- Reply: SendMessage(to: "developer-TASK-XXX", "APPROVED") OR "BLOCKED: <list>" — using the suffixed name from your `COUNTERPART`, never a bare `developer`
 
-**Do not**: run the tests yourself (the PreToolUse hook on the dev side does that), SendMessage other reviewers or merger.
+**Do not**: run the tests yourself (the PreToolUse hook on the dev side does that), SendMessage other reviewers, the merger, or any other ticket's agents.
 
 ---
 

@@ -1,6 +1,6 @@
 # Worktree scope — strict file access for ticket work
 
-Applies to: developer, quality-reviewer, test-validator. Any agent working on a specific ticket dispatched into a `ticket-TASK-XXX` team.
+Applies to: developer, quality-reviewer, test-validator. Any agent working on a specific ticket dispatched into the shared `tickets` team with a suffixed name (e.g. `developer-TASK-006`).
 
 Not applicable to: planner (searches /app/src/ for file discovery), merger (operates in /app to merge), chat-orchestrator (doesn't touch files).
 

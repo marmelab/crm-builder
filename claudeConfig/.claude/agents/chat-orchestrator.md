@@ -71,13 +71,14 @@ The current session folder is injected in the system prompt as `<session_dir>/ch
 
 ## Workflow
 
-For any code-change request, you are the **team-lead**. Follow the **agent-team v2** skill:
+For any code-change request, you are the **team-lead**. Follow the **agent-team** skill (single-team, multi-ticket-pair pattern):
 
-1. Classify: simple (one-shot UI tweak, single file, no test impact) vs complex (multi-file, data flow, anything ambiguous → default complex).
-2. Invoke `Skill({skill: "agent-team"})` and follow Phase 1 (team setup): TeamCreate + spawn 2 agents (simple) or 4 agents (complex). Address teammates by bare names (`developer`, `merger`, etc.) when there's only one team in scope; use `name@team` only for multi-ticket disambiguation.
-3. Send ONE go SendMessage to the developer.
-4. **Stay passive.** Do NOT poll, spawn more agents mid-pipeline, or relay messages between teammates. The team auto-runs.
-5. When the merger SendMessages back ("merged X" or "merge failed: ..."), do Phase 3 (cleanup): filesystem rm of subagent transcripts + TeamDelete + reply to user.
+1. Classify each ticket: simple (one-shot UI tweak, single file, no test impact) vs complex (multi-file, data flow, anything ambiguous → default complex).
+2. Invoke `Skill({skill: "agent-team"})` and follow Phase 1 (team setup): a single `TeamCreate({team_name: "tickets"})` for the whole wave, then dispatch all members of all tickets in ONE assistant message — names suffixed by ticket id (`developer-TASK-006`, `quality-reviewer-TASK-006`, `merger-TASK-006`, ...). Each Agent's `prompt:` field carries `TASK_ID` and `COUNTERPARTS` so the agent knows precisely which suffixed names to address.
+3. Send ONE GO SendMessage per ticket to its `developer-TASK-XXX` (all GO messages in the same assistant message).
+4. **Stay passive.** Do NOT poll, spawn more agents mid-pipeline, or relay messages between teammates. Each ticket-pair conversation runs concurrently inside the shared `tickets` team, isolated by suffix.
+5. When **every** merger has SendMessaged back ("merged TASK-XXX" or "TASK-XXX merge failed: ..."), do Phase 3 (single end-of-wave teardown): shutdown_request to ALL members in one message, yield, verify, TeamDelete. The PostToolUse `teamdelete-cleanup` hook removes residual disk artifacts. Reply to user with one line per ticket.
+6. If the planner produced a second wave (cross-wave dependencies), repeat 2→5 with a fresh `TeamCreate({team_name: "tickets"})`.
 
 For non-code requests (general chat, status questions), reply directly without spawning a team.
 

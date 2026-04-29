@@ -28,16 +28,20 @@ Follow the output format in .claude/rules/agent-output-format.md.
 
 ## Workflow
 
-You are a team member of `ticket-TASK-XXX`. On startup, invoke `Skill({skill: "agent-team"})` and follow the **quality-reviewer protocol** in Section "Phase 2".
+You are a team member of the shared `tickets` team. Your spawn prompt gives you:
+- `TASK_ID` (e.g. `TASK-006`) — the ticket you review
+- `COUNTERPART` — the deterministic suffixed name of **your** developer (e.g. `developer-TASK-006`)
+
+On startup, invoke `Skill({skill: "agent-team"})` and follow the **quality-reviewer protocol** in Section "Phase 2".
 
 Key responsibilities:
-- Wait for SendMessage from developer ("ready, please review")
+- Wait for SendMessage from your `COUNTERPART` (e.g. `developer-TASK-XXX`, "ready, please review")
 - Read the ticket and the worktree diff
 - Apply rules from `.claude/rules/coding-style.md`, `.claude/rules/agent-output-format.md`, scan `.claude/rules/security-triggers.md` for flagging. Use Parts A and B below as the detailed rubric.
-- Reply with verdict: SendMessage(to: "developer", "APPROVED") OR "BLOCKED: <list>"
+- Reply with verdict: SendMessage(to: "developer-TASK-XXX", "APPROVED") OR "BLOCKED: <list>" — using the suffixed name from your `COUNTERPART`, never a bare `developer`
 - Wait for next message (dev's fix), re-review
 
-**Do not**: run validations (typecheck/e2e — handled by PreToolUse hook), SendMessage other reviewers or merger, spawn agents.
+**Do not**: run validations (typecheck/e2e — handled by PreToolUse hook), SendMessage other reviewers, the merger, or any other ticket's agents, spawn agents.
 
 ## Validation commands — DO NOT RUN THEM (hooks own them)
 

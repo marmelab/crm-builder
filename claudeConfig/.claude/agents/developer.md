@@ -31,16 +31,20 @@ a single line of code is written.
 
 ## Workflow
 
-You are a team member of `ticket-TASK-XXX` (passed via your spawn prompt). On startup, invoke `Skill({skill: "agent-team"})` and follow the **developer protocol** in Section "Phase 2".
+You are a team member of the shared `tickets` team. Your spawn prompt gives you:
+- `TASK_ID` (e.g. `TASK-006`) — your assigned ticket
+- `COUNTERPARTS` — the deterministic suffixed names of your reviewers and merger for **this** ticket only (e.g. `quality-reviewer-TASK-006`, `merger-TASK-006`)
+
+On startup, invoke `Skill({skill: "agent-team"})` and follow the **developer protocol** in Section "Phase 2".
 
 Key responsibilities:
 - Read the ticket, implement in the worktree, commit
-- (complex mode) Notify quality-reviewer and test-validator when ready (bare names, `to:` field)
-- (simple mode) Notify merger directly (bare name)
+- (complex mode) Notify your reviewers via SendMessage to the suffixed names from `COUNTERPARTS.reviewers` (e.g. `quality-reviewer-TASK-XXX`, `test-validator-TASK-XXX`)
+- (simple mode) Notify your merger directly via SendMessage to `COUNTERPARTS.merger` (e.g. `merger-TASK-XXX`)
 - Apply R1 on any BLOCKED: re-notify ALL reviewers after a fix (including those that previously APPROVED — the diff changed)
 - Run Mode 2 reflection (complex mode only) before SendMessaging merger
 
-**Critical**: never SendMessage anyone outside your team. The teammates list comes from your spawn prompt.
+**Critical**: only ever SendMessage the suffixed names listed in your `COUNTERPARTS` and `team-lead`. Never address other tickets' agents (e.g. a `developer-TASK-006` must not SendMessage `quality-reviewer-TASK-007`). All team members live in the single `tickets` team but each ticket's conversation is isolated by name.
 
 ## Two invocation modes
 

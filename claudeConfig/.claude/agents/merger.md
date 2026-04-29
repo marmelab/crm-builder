@@ -28,16 +28,21 @@ Follow the output format in `.claude/rules/agent-output-format.md`.
 
 ## Workflow
 
-You are a team member of `ticket-TASK-XXX`. On startup, invoke `Skill({skill: "agent-team"})` and follow the **merger protocol** in Section "Phase 2".
+You are a team member of the shared `tickets` team. Your spawn prompt gives you:
+- `TASK_ID` (e.g. `TASK-006`) — the ticket you merge
+- `BRANCH_NAME`, `WORKTREE_PATH`, `TICKETS_DIR` — as before
+- `COUNTERPART` — the deterministic suffixed name of **your** developer (e.g. `developer-TASK-006`); the only sender from whom a "ready" message is legitimate
+
+On startup, invoke `Skill({skill: "agent-team"})` and follow the **merger protocol** in Section "Phase 2".
 
 Key responsibilities:
-- Wait for SendMessage from developer ("ready: ..."). Anything else → SendMessage(to: "team-lead", "unexpected message: <quote>") and stop.
+- Wait for SendMessage from your `COUNTERPART` (e.g. `developer-TASK-XXX`, "ready: ..."). Anything else → SendMessage(to: "team-lead", "merger-TASK-XXX received unexpected message: <quote>") and stop.
 - Execute the merge sequence below: `cd /app`, fetch, checkout/pull base, `git reset --hard HEAD`, `apply-app-variant.sh`, `git merge --no-ff <branch>`, `git worktree remove`, `git branch -d`.
-- Reply: SendMessage(to: "team-lead", "merged TASK-XXX, commit=<sha>") OR "merge failed: <reason>".
+- Reply: SendMessage(to: "team-lead", "merged TASK-XXX, commit=<sha>") OR "TASK-XXX merge failed: <reason>".
 
 **CRITICAL — never `git add` / `git commit`** in the merger. Only `git merge` and `git reset --hard HEAD` on /app are permitted. See CLAUDE.md "Merger never fabricates commits".
 
-**Do not**: spawn agents, TeamCreate, TeamDelete, edit files anywhere outside the ticket JSON status update (Step 5).
+**Do not**: spawn agents, TeamCreate, TeamDelete, edit files anywhere outside the ticket JSON status update (Step 5). Never SendMessage another ticket's agents — only your `COUNTERPART` (rare) or `team-lead`.
 
 ---
 
@@ -161,4 +166,4 @@ If `TASK_ID` starts with `quick-` (slug from a quick-edit, no ticket JSON exists
 
 ## Parallel merge safety
 
-Multiple MERGER instances may run concurrently (one per ticket, in the same wave of parallel execution). `git merge` acquires a repo-level lock on `.git/index.lock` — concurrent merges on the base branch will serialize naturally. This is expected behavior; if you see "Another git process seems to be running", wait and retry once with a 2-second delay.
+Multiple MERGER instances may run concurrently inside the shared `tickets` team — one per ticket of the wave (e.g. `merger-TASK-006`, `merger-TASK-007`). `git merge` acquires a repo-level lock on `.git/index.lock` — concurrent merges on the base branch will serialize naturally. This is expected behavior; if you see "Another git process seems to be running", wait and retry once with a 2-second delay.
