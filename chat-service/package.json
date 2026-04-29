@@ -12,5 +12,8 @@
   "dependencies": {
     "node-cron": "^3.0.3",
     "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "playwright": "^1.49.0"
   }
 }
