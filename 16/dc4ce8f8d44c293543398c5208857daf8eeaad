@@ -1,0 +1,23 @@
+chat-service/tests/run.js
+  a3ef32ffaf574333 262,281-284
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "16dc4ce8f8d44c293543398c5208857daf8eeaad",
+  "prompts": {
+    "a3ef32ffaf574333": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f4163846-8101-44c5-8481-f25316cb108d",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Jerome",
+      "messages": [],
+      "total_additions": 5,
+      "total_deletions": 2,
+      "accepted_lines": 5,
+      "overriden_lines": 0
+    }
+  }
+}
