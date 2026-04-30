@@ -29,3 +29,9 @@
 
 * lors ce qu'on quitte une session vides (vide = sans message utilisateur ou uniquement le message "quick modif"/"full setup") on doit la supprimer
 * on unMount on supprime la NouvelleDiscussion ? Est ce que ça fonctionne au refresh aussi ?
+
+* enlever silent-mode-check
+
+* Si j'envoie un message sans cliquer sur "Make a quick change/Set up from scratch", les boutons devraient disparaitre
+
+* quand je pars et reviens d'un discussion, les infos sur le tokens/$/agents disparaissent

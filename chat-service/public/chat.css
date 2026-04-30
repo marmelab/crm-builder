@@ -5,7 +5,7 @@
    of which panel is collapsed or closed. */
 body {
   --sidebar-width: 300px;
-  --widget-width: 50vw;
+  --widget-width: 35vw;
   height: 100vh; overflow: hidden;
   font-family: system-ui, sans-serif; background: #0f0f0f;
 }
