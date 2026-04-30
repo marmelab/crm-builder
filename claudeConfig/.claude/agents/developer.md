@@ -77,9 +77,10 @@ Spawn prompt always contains `WORKTREE_PATH=...` and `BRANCH_NAME=...`. Your fir
    if [ ! -d "<WORKTREE_PATH>" ]; then \
      git worktree add "<WORKTREE_PATH>" -b "<BRANCH_NAME>" "$BASE"; \
    fi && \
-   [ -e "<WORKTREE_PATH>/node_modules" ] || ln -s /app/node_modules "<WORKTREE_PATH>/node_modules" && \
+   [ -e "<WORKTREE_PATH>/node_modules" ] || cp -al /app/node_modules "<WORKTREE_PATH>/node_modules" && \
    cd "<WORKTREE_PATH>" && pwd
    ```
+   `cp -al` (hard links) is required — do NOT use `ln -s /app/node_modules`. A symlinked `node_modules` makes vite's optimizer treat the worktree as a different project root and re-bundle every dependency on each `vitest` run (30s → 3+ min). Hard links keep zero disk overhead while letting vitest cache stay valid.
    Every subsequent Read/Edit/Write/Bash runs in the worktree, not `/app`. See `.claude/rules/worktree-scope.md`.
 
 2. **Skill** — load domain context:

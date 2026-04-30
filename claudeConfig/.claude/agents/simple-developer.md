@@ -67,9 +67,11 @@ BASE=$(git symbolic-ref --short HEAD) && \
 if [ ! -d "<WORKTREE_PATH>" ]; then \
   git worktree add "<WORKTREE_PATH>" -b "<BRANCH_NAME>" "$BASE"; \
 fi && \
-[ -e "<WORKTREE_PATH>/node_modules" ] || ln -s /app/node_modules "<WORKTREE_PATH>/node_modules" && \
+[ -e "<WORKTREE_PATH>/node_modules" ] || cp -al /app/node_modules "<WORKTREE_PATH>/node_modules" && \
 cd "<WORKTREE_PATH>" && pwd
 ```
+
+`cp -al` (hard links — same inodes, ~0 disk overhead) is mandatory here. **Do NOT** replace it with `ln -s /app/node_modules`: with a symlinked `node_modules`, vite's optimizer detects the worktree as a different project root and re-bundles all dependencies on every test run, slowing `vitest` from 30s to 3+ minutes. Hard links keep node_modules functionally identical to a real local copy without the disk cost.
 
 Every subsequent Read/Edit/Write/Bash runs in the worktree, not `/app`. See `.claude/rules/worktree-scope.md`.
 
