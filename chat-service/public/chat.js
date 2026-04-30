@@ -88,7 +88,10 @@ function switchSessionAndOpen(id) {
 function closeDiscussion() {
   widget.classList.add('chat-closed');
   connection.closeSession();
-  historyApi.refreshHistory();
+  // No refresh: closing the panel doesn't change the sessions list contents.
+  // The .active marker on the previously-open session is cleared locally so
+  // the sidebar reflects "no session open" without hitting /api/sessions.
+  historyList.querySelector('.history-item.active')?.classList.remove('active');
 }
 
 const display = initDisplay({
@@ -294,7 +297,12 @@ function openConfirmModal() {
     const onCancel  = () => close(false);
     const onKey = (e) => {
       if (e.key === 'Escape') onCancel();
-      if (e.key === 'Enter') onConfirm();
+      // Enter confirms only when focus is outside the modal buttons; if a
+      // button is focused, the browser's native click activation handles it
+      // (so Enter while tabbed to Cancel cancels, not confirms).
+      if (e.key === 'Enter' && document.activeElement !== modalCancel && document.activeElement !== modalConfirm) {
+        onConfirm();
+      }
     };
     modalConfirm.addEventListener('click', onConfirm);
     modalCancel.addEventListener('click', onCancel);
@@ -594,10 +602,21 @@ form.addEventListener('submit', (e) => {
 // session (or ✚ New) re-opens the widget via switchSessionAndOpen.
 toggle.addEventListener('click', closeDiscussion);
 
-historyCollapseBtn.addEventListener('click', () => {
-  const collapsed = historyPanel.classList.toggle('collapsed');
+const SIDEBAR_COLLAPSED_KEY = 'chat-sidebar-collapsed';
+
+function applySidebarCollapsed(collapsed) {
+  historyPanel.classList.toggle('collapsed', collapsed);
   historyCollapseBtn.title = collapsed ? 'Expand panel' : 'Collapse panel';
   historyCollapseBtn.setAttribute('aria-label', historyCollapseBtn.title);
+}
+
+// Restore the user's previous choice across reloads.
+applySidebarCollapsed(localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1');
+
+historyCollapseBtn.addEventListener('click', () => {
+  const collapsed = !historyPanel.classList.contains('collapsed');
+  applySidebarCollapsed(collapsed);
+  try { localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? '1' : '0'); } catch {}
   // Refreshes are skipped while collapsed; pull the latest list on expand.
   if (!collapsed) {
     historyApi.refreshHistory();

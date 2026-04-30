@@ -9,7 +9,7 @@ import { LOG_DIR, UUID_RE, ALLOWED_STATES } from './config.js';
 // claudeSessionId) so the listing page doesn't have to parse every log.
 // Visible messages (user + assistant) are derived from log.jsonl on demand.
 
-function digestLog(logText) {
+export function digestLog(logText) {
   const messages = [];
   let tokensUsed = 0;
   let costUsd = 0;
