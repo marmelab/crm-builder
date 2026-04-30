@@ -28,9 +28,14 @@ if [ -z "$STDIN" ]; then
   exit 0
 fi
 
-# Parse the recipient from JSON. We use jq if available, fall back to grep.
-if command -v jq >/dev/null 2>&1; then
-  TO=$(echo "$STDIN" | jq -r '.tool_input.to // ""' 2>/dev/null || echo "")
+# Parse the recipient from JSON via node (always available — project runs on it).
+if command -v node >/dev/null 2>&1; then
+  TO=$(node -e '
+try {
+  const i = JSON.parse(process.argv[1] || "{}");
+  process.stdout.write((i.tool_input && i.tool_input.to) || "");
+} catch { process.stdout.write(""); }
+' "$STDIN" 2>/dev/null || echo "")
 else
   # Crude fallback: extract "to":"..." value
   TO=$(echo "$STDIN" | grep -oE '"to"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed -E 's/.*"to"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/')

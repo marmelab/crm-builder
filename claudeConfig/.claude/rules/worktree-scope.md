@@ -27,7 +27,7 @@ Everything else under `/app/` — `/app/src/`, `/app/e2e/`, `/app/supabase/`, `/
 
 Bash tool invocations are **stateless shells**. `cd /worktrees/TASK-XXX` in one call does NOT persist to the next — the next call starts again in `/app` by default.
 
-**Mandatory prefix for every Bash in ticket mode:**
+**Mandatory prefix for every Bash when working inside a worktree:**
 
 ```bash
 cd /worktrees/TASK-XXX && <your command>

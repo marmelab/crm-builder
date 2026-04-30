@@ -1,128 +1,95 @@
 ---
 name: agent-team
-description: Multi-agent team workflow for implementing tickets with peer-to-peer communication inside a single shared team. Use when dispatching agents or following the full lifecycle (bootstrap → planning → wave-of-tickets in one team → teardown). This skill is the single source of truth for how the team communicates.
+description: Multi-agent team workflow for implementing tickets with peer-to-peer communication inside a single shared team. Used by chat-orchestrator for COMPLEX requests only (planner → wave → teardown). Single source of truth for cross-agent messaging.
 ---
 
 # Agent Team — Single-team peer-to-peer workflow
 
-This skill is invoked by `chat-orchestrator` (team-lead role) and by every team member at startup. It describes the full lifecycle and every cross-agent message.
+Invoked by `chat-orchestrator` (team-lead) for COMPLEX requests, and read by every member at startup.
 
-**Architectural constraint** (runtime, documented at https://code.claude.com/docs/en/agent-teams under "Limitations"): *one team per lead at a time, no nested teams.* The skill therefore puts **all** ticket-pair members of a wave into one shared team named `tickets`, with deterministic per-ticket naming so each pair (developer + reviewers + merger for one ticket) communicates only with itself.
+**Runtime constraint:** one team per lead, no nested teams. So all members of a wave live in one shared team `tickets`, with deterministic suffixed names.
 
-## TL;DR
+**Out of scope:** SIMPLE requests (1-file cosmetic). Those bypass this skill — orchestrator dispatches one developer agent without `team_name`.
 
-For a wave of N tickets:
+---
 
-1. PLANNER produces tickets.
-2. Lead `TeamCreate({team_name: "tickets"})` (single team, once per wave).
-3. Lead dispatches **all 4×N members in ONE assistant message**, with names suffixed by ticket id (`developer-TASK-001`, `quality-reviewer-TASK-001`, …).
-4. Lead `SendMessage` GO to each `developer-TASK-XXX` (in ONE message).
-5. Lead enters passive wait. Each ticket's developer ↔ reviewers ↔ merger conversation runs concurrently inside `tickets`, isolated by name.
-6. When every merger has reported back, lead does Phase 3 graceful teardown of the whole team in one shot. Hooks handle the residual cleanup.
+## TL;DR — for a wave of N tickets
 
-If the planner produces multiple waves, repeat 2→6 per wave (TeamDelete then TeamCreate again with the same `tickets` name).
+1. PLANNER produces N tickets.
+2. Lead `TeamCreate({team_name: "tickets"})` (once per wave).
+3. Lead dispatches all members in ONE message: **N developers + 2N reviewers + 1 shared `merger` = 3N + 1**.
+4. Lead `SendMessage(GO)` to each `developer-TASK-XXX` (one message per dev, in one assistant turn).
+5. Lead enters passive wait. Each ticket's dev↔reviewers↔merger flow runs concurrently inside `tickets`.
+6. When merger has reported N times, lead does Phase 3 teardown.
 
-## When to use
+Multi-wave: repeat 2→6 (TeamDelete then TeamCreate again).
 
-- Lead (chat-orchestrator): after classifying the user request as a code change.
-- Each team member: at the start of their first activation, to know the protocol.
+---
 
-## Modes (per ticket, not per wave)
+## Ticket composition (per ticket)
 
-A wave can mix simple-mode tickets and complex-mode tickets — each ticket carries its own mode flag.
+Every ticket in a wave gets the same trio:
 
-- **Simple mode (per ticket):** `developer-TASK-XXX` + `merger-TASK-XXX` (2 agents). No reviewers, no Mode 2 reflection. Used for one-shot UI tweaks ("rename label X to Y", "hide button Z"), single-file edits, no test impact.
-- **Complex mode (per ticket):** `developer-TASK-XXX` + `quality-reviewer-TASK-XXX` + `test-validator-TASK-XXX` + `merger-TASK-XXX` (4 agents). Mode 2 reflection between all-APPROVED and SendMessage merger. Used for multi-file features, anything touching data flow, anything affecting tests, anything ambiguous.
+- `developer-TASK-XXX`
+- `quality-reviewer-TASK-XXX`
+- `test-validator-TASK-XXX`
 
-The lead classifies each ticket in its planning turn. Default for ambiguous tickets is **complex** (false positives are cheap, missed reviews are not).
+Plus one shared `merger` for the whole wave.
 
-## SendMessage addressing — deterministic suffixed names + shared merger
+---
 
-All members live in the single `tickets` team. The runtime's `SendMessage` accepts a bare name (no `@team` suffix needed, since there is exactly one team in scope). The "name" is the deterministic identity assigned via the `Agent` tool's `name:` parameter.
+## Addressing (single team `tickets`, bare names)
 
-| Recipient | `to:` value | Per ticket or shared? |
+| Recipient | `to:` value | Scope |
 |---|---|---|
-| The lead (orchestrator) | `team-lead` | shared (singleton) |
+| Lead (orchestrator) | `team-lead` | singleton |
 | Developer of ticket X | `developer-TASK-X` | per ticket |
 | Quality reviewer of ticket X | `quality-reviewer-TASK-X` | per ticket |
 | Test validator of ticket X | `test-validator-TASK-X` | per ticket |
-| Merger | `merger` | **shared (singleton across the wave)** |
+| Merger | `merger` | **shared singleton across the wave** |
 
-The `merger` is **one shared agent** for the whole wave. Why: `git merge` against `/app` takes a repo-level lock on `.git/index.lock`; running multiple mergers in parallel buys nothing (they serialise on the lock anyway) and adds spawn cost + retry-on-lock complexity. A single merger that processes tickets in the order it receives them eliminates all of this.
+Rules:
+- Suffixed peers only talk to their own `TASK-X` counterparts + shared `merger` + `team-lead`.
+- Cross-ticket SendMessage between suffixed peers is forbidden.
+- Shared `merger` only initiates to `team-lead` (merge reports).
 
-A ticket-X **reviewer** or **developer** only ever talks to its own counterparts (suffix `-TASK-X`), the shared `merger`, and `team-lead`. Cross-ticket SendMessage between *suffixed* peers (e.g. `developer-TASK-001` → `quality-reviewer-TASK-002`) is forbidden — it indicates the prompt template was misapplied.
+Why one shared merger: `git merge` against `/app` holds `.git/index.lock`. Parallel mergers serialise on the lock anyway — single merger eliminates retry-on-lock complexity.
 
-## Phase 1 — Team setup (lead only, once per wave)
+---
 
-Pre-condition: PLANNER has produced N tickets for this wave (TASK-001, TASK-002, ...). Each ticket has a `mode` field (`simple` or `complex`).
+## Phase 1 — Dispatch (lead, ONE message)
 
-The lead does this in ONE assistant message — one tool_use block per agent, plus the TeamCreate, plus the **single shared merger**, all in parallel. The total dispatch count is `3×N + 1` for an all-complex wave (or fewer if some tickets are simple-mode and skip the two reviewers):
+Pre-condition: PLANNER produced N tickets.
 
-```
-TeamCreate({team_name: "tickets", description: "Wave of N tickets: TASK-001, TASK-002, ..."})
-
-// Per-ticket dispatches (TASK-001 example, complex mode):
-Agent({
-  subagent_type: "developer",
-  name: "developer-TASK-001",
-  team_name: "tickets",
-  model: "opus",
-  description: "Implement TASK-001",
-  prompt: "<see Phase 2 — developer protocol>"  // includes COUNTERPARTS list
-})
-
-Agent({
-  subagent_type: "quality-reviewer",
-  name: "quality-reviewer-TASK-001",
-  team_name: "tickets",
-  model: "sonnet",
-  description: "Quality review TASK-001",
-  prompt: "<see Phase 2 — quality-reviewer protocol>"
-})
-
-Agent({
-  subagent_type: "test-validator",
-  name: "test-validator-TASK-001",
-  team_name: "tickets",
-  model: "sonnet",
-  description: "Test validation TASK-001",
-  prompt: "<see Phase 2 — test-validator protocol>"
-})
-
-// (... repeat the 3 per-ticket dispatches for TASK-002, TASK-003, ... in the SAME message)
-
-// ONE shared merger for the whole wave (last):
-Agent({
-  subagent_type: "merger",
-  name: "merger",
-  team_name: "tickets",
-  model: "haiku",
-  description: "Merge all tickets of the wave",
-  prompt: "<see Phase 2 — merger protocol>"  // expects messages from any developer-TASK-XXX
-})
-```
-
-For simple-mode tickets, dispatch only `developer-TASK-XXX` (skip the two reviewers). The shared `merger` covers the merge regardless of mode.
-
-After all spawns return successfully, the lead emits **one second assistant message** containing one SendMessage GO per developer:
+In one assistant message:
 
 ```
-SendMessage({
-  to: "developer-TASK-001",
-  message: "GO — Implement TASK-001 (worktree=/worktrees/TASK-001, branch=<ticket.branch_name>, mode=complex). Ticket spec at <ticket file path>. COUNTERPARTS: reviewers=[quality-reviewer-TASK-001, test-validator-TASK-001], merger=merger."
-})
-SendMessage({
-  to: "developer-TASK-002",
-  message: "GO — Implement TASK-002 (...). COUNTERPARTS: ..."
-})
-// (one per ticket, all in the same assistant message)
+TeamCreate({team_name: "tickets", description: "Wave of N tickets"})
+
+// Per ticket (one trio per ticket, all in this same message):
+Agent({subagent_type: "developer", name: "developer-TASK-001", team_name: "tickets", model: "opus", description: "Implement TASK-001", prompt: "<see Phase 2 — developer>"})
+Agent({subagent_type: "quality-reviewer", name: "quality-reviewer-TASK-001", team_name: "tickets", model: "sonnet", description: "Quality review TASK-001", prompt: "<see Phase 2 — quality-reviewer>"})
+Agent({subagent_type: "test-validator", name: "test-validator-TASK-001", team_name: "tickets", model: "sonnet", description: "Test validation TASK-001", prompt: "<see Phase 2 — test-validator>"})
+
+// (... repeat trio for TASK-002, TASK-003, ...)
+
+// ONE shared merger (last):
+Agent({subagent_type: "merger", name: "merger", team_name: "tickets", model: "haiku", description: "Merge all tickets", prompt: "<see Phase 2 — merger>"})
 ```
 
-After SendMessage(GO, …), the lead enters **passive wait**. It receives **N final SendMessages from the shared `merger`** — one per ticket — each reporting either "merged TASK-XXX, commit=<sha>" or "TASK-XXX merge failed: <reason>". The lead counts and matches by `TASK_ID` mentioned in the message; when the count equals N (the wave size), Phase 2 is done and Phase 3 starts.
+Then in a second message: one `SendMessage(GO, …)` per developer:
+
+```
+SendMessage({to: "developer-TASK-001", message: "GO — Implement TASK-001 (worktree=/worktrees/TASK-001, branch=<branch>). Ticket spec at <path>. COUNTERPARTS: reviewers=[quality-reviewer-TASK-001, test-validator-TASK-001], merger=merger."})
+```
+
+After GO: lead enters **passive wait**. It receives N final SendMessages from `merger` (one per ticket: `merged TASK-XXX, commit=<sha>` or `TASK-XXX merge failed: <reason>`). When count == N → Phase 3.
+
+---
 
 ## Phase 2 — Per-agent protocols
 
-Each agent's prompt (sent at spawn) includes their role-specific protocol, parametrised by `TASK_ID` and `COUNTERPARTS`. Substitute `TASK_ID` with the actual ticket id (e.g. `TASK-001`) and fill in the counterpart names accordingly.
+Each protocol is the spawn prompt, parametrised by `TASK_ID` and `COUNTERPARTS`.
 
 ### developer
 
@@ -131,30 +98,29 @@ ROLE: developer
 TASK_ID: TASK-XXX
 TEAM: tickets
 WORKTREE: /worktrees/TASK-XXX
-TICKET_FILE: <session_dir>/TASK-XXX.json (complex) or <inline> (simple)
+TICKET_FILE: <session_dir>/TASK-XXX.json
 COUNTERPARTS:
-  - reviewers: [quality-reviewer-TASK-XXX, test-validator-TASK-XXX]   (complex mode only)
-  - merger: merger   (shared singleton — bare name, no suffix)
+  - reviewers: [quality-reviewer-TASK-XXX, test-validator-TASK-XXX]
+  - merger: merger   (shared singleton — bare name)
 TEAM_LEAD: team-lead
 
 WORKFLOW:
-1. Read the ticket spec.
-2. Implement in the worktree (Edit/Write/Bash). Commit when ready.
-3. (complex mode) SendMessage(to: "quality-reviewer-TASK-XXX", "ready, please review").
-   SendMessage(to: "test-validator-TASK-XXX", "ready, please validate").
-   Initialize approvals_needed=2, approvals_received=0.
-4. (simple mode) Skip step 3. Go to step 7 directly.
-5. Wait for replies from your reviewers (counterpart-suffixed names only). For each:
+1. Read ticket spec.
+2. Implement in worktree (Edit/Write/Bash). Commit when ready.
+3. SendMessage("quality-reviewer-TASK-XXX", "ready, please review").
+   SendMessage("test-validator-TASK-XXX", "ready, please validate").
+   approvals_needed=2, approvals_received=0.
+4. Wait for replies (suffixed counterparts only):
    - "APPROVED" → approvals_received++
-   - "BLOCKED: ..." → reset approvals_received=0, apply the fixes, commit, then re-notify ALL reviewers (including those that previously APPROVED — the diff changed). Loop step 5.
-6. When approvals_received == approvals_needed:
-   - Switch to Mode 2 (reflection): read /app/docs/reflections/, write /worktrees/TASK-XXX/docs/reflections/TASK-XXX-reflection.md, commit.
-7. SendMessage(to: "merger", "ready: TASK-XXX, branch=<ticket.branch_name>, all approved + reflection committed" (or "ready: TASK-XXX, branch=<ticket.branch_name>, simple mode" in simple)). The message MUST start with "ready: TASK-XXX" so the shared merger can identify your ticket.
-8. After SendMessage(merger), stop. Lead handles cleanup.
+   - "BLOCKED: ..." → approvals_received=0, fix, commit, re-notify ALL reviewers (diff changed). Loop.
+5. When approvals_received == 2:
+   - Mode 2 reflection: read /app/docs/reflections/, write /worktrees/TASK-XXX/docs/reflections/TASK-XXX-reflection.md, commit.
+6. SendMessage("merger", "ready: TASK-XXX, branch=<branch>, all approved + reflection committed"). Message MUST start with "ready: TASK-XXX".
+7. Stop. Lead handles cleanup.
 
 TIMEOUTS:
-- If a reviewer doesn't reply within 180s, SendMessage(to: "team-lead", "TASK-XXX stuck on <reviewer>: no reply for 180s").
-- If the same fix-cycle has run >5 times without convergence, SendMessage(to: "team-lead", "TASK-XXX stuck: <N> cycles, can't satisfy <reviewer>").
+- Reviewer silent > 180s → SendMessage(team-lead, "TASK-XXX stuck on <reviewer>: no reply for 180s").
+- Same fix-cycle > 5 iterations → SendMessage(team-lead, "TASK-XXX stuck: <N> cycles").
 ```
 
 ### quality-reviewer
@@ -168,17 +134,17 @@ TICKET_FILE: <session_dir>/TASK-XXX.json
 COUNTERPART: developer-TASK-XXX
 TEAM_LEAD: team-lead
 
-WORKFLOW (per incoming SendMessage from developer-TASK-XXX):
-1. Read the ticket and the worktree diff (`git -C /worktrees/TASK-XXX diff <base>..HEAD`).
-2. Apply the rules from .claude/rules/coding-style.md and .claude/rules/agent-output-format.md. Skim .claude/rules/security-triggers.md for anything that warrants security flagging.
+WORKFLOW (per incoming message from developer-TASK-XXX):
+1. Read ticket and worktree diff (`git -C /worktrees/TASK-XXX diff <base>..HEAD`).
+2. Apply rules: coding-style.md, agent-output-format.md. Skim security-triggers.md.
 3. Verdict:
-   - All clear → SendMessage(to: "developer-TASK-XXX", "APPROVED")
-   - Issues to fix → SendMessage(to: "developer-TASK-XXX", "BLOCKED:\n- file: ...\n  line: ...\n  description: ...\n  fix: ...\n- ...\nSummary: N blocking issues.")
-4. After SendMessage, stop. Wait for next incoming message (re-review after dev's fix).
+   - All clear → SendMessage(developer-TASK-XXX, "APPROVED")
+   - Issues → SendMessage(developer-TASK-XXX, "BLOCKED:\n- file: ...\n  line: ...\n  description: ...\n  fix: ...\n- ...\nSummary: N blocking issues.")
+4. Stop. Wait for next message (re-review after fix).
 
 DO NOT:
-- Run validations (typecheck, e2e, etc.) — those are handled by the PreToolUse hook on the dev side.
-- SendMessage anyone other than developer-TASK-XXX (your own counterpart). You don't talk to other reviewers, you don't talk to merger, you don't talk to other tickets' agents.
+- Run validations (typecheck, e2e — handled by PreToolUse hook on dev side).
+- SendMessage anyone other than developer-TASK-XXX.
 - Re-spawn agents or call TeamCreate/TeamDelete.
 ```
 
@@ -193,188 +159,176 @@ TICKET_FILE: <session_dir>/TASK-XXX.json
 COUNTERPART: developer-TASK-XXX
 TEAM_LEAD: team-lead
 
-WORKFLOW (per incoming SendMessage from developer-TASK-XXX):
-1. Read the ticket and the worktree.
-2. Verify TEST PRESENCE: every new behavior in the diff has at least one corresponding test (unit or e2e per .claude/rules/testing.md).
-3. Verify TEST PERTINENCE: judge whether the assertions actually cover the failure modes that matter. A test that always passes (e.g. asserting truthy on a literal) is not pertinent.
-4. Read .claude/skills/e2e-conventions to know when an e2e is required.
+WORKFLOW (per incoming message from developer-TASK-XXX):
+1. Read ticket and worktree.
+2. PRESENCE: every new behavior in the diff has at least one test (unit or e2e per testing.md).
+3. PERTINENCE: assertions actually cover the failure modes that matter. A test that always passes is not pertinent.
+4. Read e2e-conventions skill to know when e2e is required.
 5. Verdict (same format as quality-reviewer):
-   - SendMessage(to: "developer-TASK-XXX", "APPROVED") if presence + pertinence both OK
-   - SendMessage(to: "developer-TASK-XXX", "BLOCKED:\n- ...") otherwise
+   - SendMessage(developer-TASK-XXX, "APPROVED") if presence + pertinence both OK.
+   - SendMessage(developer-TASK-XXX, "BLOCKED:\n- ...") otherwise.
 
 DO NOT:
-- Run the tests (the PreToolUse hook does that on the dev side). Your job is reading + judging coverage and pertinence, not running.
-- SendMessage other reviewers, the merger, or any other ticket's agents.
+- Run tests (PreToolUse hook does that).
+- SendMessage other reviewers, merger, or other tickets' agents.
 ```
 
-### merger (shared singleton across the wave)
+### merger (shared singleton)
 
 ```
 ROLE: merger
-NAME: merger   (no suffix — you are the single shared merger for the whole wave)
+NAME: merger   (no suffix — single shared merger for the whole wave)
 TEAM: tickets
-TICKETS_DIR: <session_dir>   (passed at spawn — used to read each ticket's JSON for branch_name/worktree)
+TICKETS_DIR: <session_dir>   (passed at spawn)
 TEAM_LEAD: team-lead
 
 WORKFLOW (loop until shutdown_request):
-You receive SendMessage from any developer-TASK-XXX. Each message MUST start with "ready: TASK-XXX, branch=<branch_name>". Process them in the order they arrive — git merge against /app holds a repo-level lock anyway, so serial is the natural order.
+You receive SendMessages from any developer-TASK-XXX. Each MUST start with "ready: TASK-XXX, branch=<branch>". Process serially (git lock makes it serial anyway).
 
 For each incoming message:
-1. Parse from: → derive TASK_ID (e.g. from="developer-TASK-006" → TASK_ID="TASK-006").
-2. Parse the message content for "branch=<branch_name>" (fallback: read ${TICKETS_DIR}/TASK-XXX.json and pick branch_name).
-3. Compute WORKTREE_PATH = /worktrees/TASK-XXX from TASK_ID.
-4. Run the MERGE STEPS below for this ticket.
-5. After step 4 reports back to team-lead, **idle and wait for the next message**. Do NOT stop after one merge — you are the shared merger for the whole wave.
-6. When you receive a SendMessage with payload {type: "shutdown_request"}, reply shutdown_approved and stop. (Skill Phase 3 handles this.)
+1. Parse from: → derive TASK_ID (e.g. from="developer-TASK-006" → "TASK-006").
+2. Parse "branch=<branch>" (fallback: read ${TICKETS_DIR}/TASK-XXX.json, pick branch_name).
+3. WORKTREE_PATH = /worktrees/TASK-XXX.
+4. Run MERGE STEPS below.
+5. Idle and wait for next message — do NOT stop after one merge.
+6. On SendMessage(shutdown_request): reply shutdown_approved and stop.
 
-If a non-developer-TASK-XXX sender or a malformed message arrives: SendMessage(to: "team-lead", "merger received unexpected message from <from>: <quote>") and idle (do NOT stop — keep processing legitimate messages).
+If unexpected sender or malformed message: SendMessage(team-lead, "merger received unexpected from <from>: <quote>") and idle.
 
-MERGE STEPS (for one ticket):
-1. cd /app && git fetch
-2. git checkout <base branch> && git pull --ff-only (or document if no remote)
-3. git reset --hard HEAD ; /entrypoint-helpers/apply-app-variant.sh (re-applies App.tsx variant)
-4. git merge --no-ff <branch_name> -m "chore(TASK-XXX): merge"
-5. If merge succeeds: git worktree remove /worktrees/TASK-XXX ; git branch -d <branch_name>
-6. SendMessage(to: "team-lead", "merged TASK-XXX, commit=<short sha>")
-7. If merge fails (conflict, hook block, etc.): SendMessage(to: "team-lead", "TASK-XXX merge failed: <reason>"). Then idle for the next ticket — do NOT abort the whole merger; another ticket may still be mergeable.
+MERGE STEPS (authoritative — applies to both COMPLEX and SIMPLE-mode mergers):
 
-CRITICAL — what merger NEVER does:
-- `git add` / `git commit` of any file (only git merge + git reset --hard HEAD on /app are allowed; see CLAUDE.md "Merger never fabricates commits")
-- Spawn agents, TeamCreate, TeamDelete
-- Edit any file in /app or any worktree (validation already done upstream by hooks)
-- Stop after one merge — you must process every developer's "ready" message of the wave
+1. Verify worktree clean:
+   cd <WORKTREE_PATH> && git status --porcelain
+   Non-empty → developer left uncommitted changes. Report failed, do not merge.
+
+2. Return to base + reset stale debris in /app (mandatory, idempotent):
+   cd /app && BASE=$(git symbolic-ref --short HEAD)
+   git pull --ff-only 2>/dev/null || true
+   git reset --hard HEAD && /entrypoint-helpers/apply-app-variant.sh
+   - reset discards stale tracked-file changes (debris from previous runs).
+   - apply-app-variant re-copies App.fakerest.tsx (demo) or App.supabase.tsx (full) over src/App.tsx — without it the reset reverts App.tsx to the upstream stub and the dev server breaks.
+   - Untracked files (docs/project-context.json, ticket JSONs in ${TICKETS_DIR}) survive — they belong to other tickets.
+
+3. Merge:
+   git merge --no-ff <branch_name> -m "<type>(<TASK_ID>): <ticket title>"
+   <type> matches the ticket's type field (feat/fix/chore).
+   On conflict (CONFLICT in output): git merge --abort, report failed with conflicting files. Do NOT resolve — that's developer's job.
+
+4. Cleanup:
+   git worktree remove <WORKTREE_PATH> && git branch -d <branch_name>
+   On worktree-remove failure (leftover files): git worktree remove --force <WORKTREE_PATH>.
+
+5. Update ticket status (COMPLEX mode only — TASK_ID starts with "TASK-"):
+   Use the Edit tool, NOT shell (cat | jq > tmp && mv is blocked by block-bash-file-write):
+     Edit(
+       file_path: "${TICKETS_DIR}/<TASK_ID>.json",
+       old_string: '"status": "pending"',
+       new_string: '"status": "merged"'
+     )
+   If status was "in_progress", substitute. Verify with Read. Skip this step if TASK_ID does not start with "TASK-" (e.g. SIMPLE-mode slug).
+
+6. Report:
+   SendMessage(team-lead, "merged TASK-XXX, commit=<short sha>")   (COMPLEX)
+   OR return "DONE: commit=<short sha>. files=[...]"               (SIMPLE — no team_lead)
+
+7. On any failure of steps 1-4: report "TASK-XXX merge failed: <reason>" (COMPLEX) or "FAILED: <reason>" (SIMPLE), idle for next message (COMPLEX) or return (SIMPLE).
+
+NEVER:
+- `git add` / `git commit` / `git stash` / `git clean -fd` / `git checkout -- <file>`.
+- `git push`, `gh` commands.
+- `--no-verify`, `--force`, `-f` on git.
+- Force-merge on conflict — abort and report failed.
+- Spawn agents, TeamCreate, TeamDelete.
+- Edit any file in /app or any worktree (only the Step 5 ticket JSON edit is allowed).
+- Stop after one merge in COMPLEX (loop until shutdown_request).
 ```
 
-## Phase 3 — Graceful team shutdown (lead only, once per wave)
+---
 
-When the lead has received `SendMessage(to: "team-lead", "merged X")` (or `"merge failed: ..."`) from **every** merger of the wave, the workflow for that wave is done but the agents' OS processes may still be alive (the runtime keeps them around for graceful termination). A clean shutdown drains all messages so no unread "embryos" survive on disk.
+## Phase 3 — Graceful teardown (lead, when merger reported N times)
 
-### Step 3a — SendMessage shutdown_request to every active member
-
-In ONE assistant message, send a shutdown_request to **every** non-lead member of the team: every developer, every reviewer, plus the **single shared merger**. For a wave of N complex tickets, that is `3×N + 1` SendMessages in one message (3 per-ticket members per ticket + 1 shared merger):
+### 3a — SendMessage shutdown_request to every active member (ONE message)
 
 ```
-// Per-ticket members
 SendMessage({to: "developer-TASK-001", message: {type: "shutdown_request"}})
 SendMessage({to: "quality-reviewer-TASK-001", message: {type: "shutdown_request"}})
 SendMessage({to: "test-validator-TASK-001", message: {type: "shutdown_request"}})
-SendMessage({to: "developer-TASK-002", message: {type: "shutdown_request"}})
-// ...
-
-// Shared merger (last)
-SendMessage({to: "merger", message: {type: "shutdown_request"}})
+// ... (repeat trio per ticket)
+SendMessage({to: "merger", message: {type: "shutdown_request"}})   // last
 ```
 
-For simple-mode tickets, only 1 per-ticket member (developer). The shared `merger` is shutdown once for the whole wave.
+Total: `3N + 1` SendMessages.
 
-### Step 3b — Yield the turn so replies are delivered
+### 3b — Yield the turn
 
-Emit a brief assistant text (e.g. *"Wrapping up the wave…"*) and stop. The runtime delivers each member's `shutdown_approved` reply on the **next** user turn as a `<teammate-message>` block. Receiving them in the lead's turn-stream marks them **read**, so they will not become embryos. **Do not call any other tool in this turn — yielding is what lets the runtime deliver the replies.**
+Emit a brief assistant text (e.g. *"Wrapping up..."*) and stop. **No other tool calls.** The runtime delivers `shutdown_approved` on the next user turn — being read in the lead's stream marks them read, preventing embryos.
 
-### Step 3c — Verify each member acknowledged
+### 3c — Verify on next turn
 
-On the next turn, scan the incoming `<teammate-message>` blocks for `shutdown_approved` from every member you requested:
+Scan incoming `<teammate-message>` blocks for `shutdown_approved`:
+- ✅ All approved → 3d.
+- ❌ One missing after ~10s → log "member <name> didn't acknowledge — proceeding". Investigate post-hoc via `/home/developer/.claude/projects/-app/$CLAUDE_SESSION_ID/subagents/agent-<task_id>.jsonl`.
 
-- ✅ All approved → proceed to Step 3d.
-- ❌ One or more missing after ~10s of yielded waiting → log a brief message to the user (e.g. *"member &lt;name&gt; didn't acknowledge shutdown — proceeding anyway"*) and proceed; investigation can happen post-hoc by reading the member's transcript at `/home/developer/.claude/projects/-app/$CLAUDE_SESSION_ID/subagents/agent-<task_id>.jsonl`.
-
-### Step 3d — TeamDelete
+### 3d — TeamDelete
 
 ```
 TeamDelete({})
 ```
 
-`{}` (no input) is accepted and means "the only team this session has open". Since the lead is in the single `tickets` team, this is correct. The call releases the runtime's in-memory team registration.
+`{}` = "the only team this session has open". `teamdelete-gate.sh` blocks if any non-lead member hasn't acknowledged. If blocked: yield first, retry next turn — do not retry in same turn.
 
-> **Hook enforcement.** A `PreToolUse` hook (`teamdelete-gate.sh`) blocks TeamDelete if any non-lead member has not been fully shut down (no `shutdown_approved` from them in the lead's inbox, or one is present but unread). If you see *"TeamDelete blocked: N teammate(s) ... have not been gracefully shut down"*, follow the steps the hook lists and **do not retry TeamDelete in the same turn** — that will fail identically. Yield first, then retry on the next turn.
+### 3e — Cleanup (automatic)
 
-### Step 3e — automated cleanup (no action required)
+`teamdelete-cleanup.sh` (PostToolUse) silently removes residual `~/.claude/teams/tickets/`. Lead does nothing.
 
-A `PostToolUse` hook (`teamdelete-cleanup.sh`) runs after every successful `TeamDelete` and removes the residual team directory `~/.claude/teams/tickets/` (the runtime leaves behind `inboxes/` and other artifacts). The lead has nothing to do for this step — the hook is silent and runs in the background.
-
-### What is intentionally NOT cleaned
-
-Subagent transcripts (`/home/developer/.claude/projects/-app/<CLAUDE_SESSION_ID>/subagents/agent-<task_id>.{jsonl,meta.json}`) are kept. They are session-scoped logs useful for debugging and the stats panel; they are removed when the chat-service session ends.
+Subagent transcripts (`subagents/agent-<task_id>.{jsonl,meta.json}`) are kept for stats/debugging — removed at chat-service session end.
 
 ### After cleanup
 
-The lead replies to the user with one line per ticket:
-- On success: "TASK-XXX done, merge commit `<sha>`."
-- On failure: "TASK-XXX failed: `<reason>`. Branch retained at `<branch_name>`. (no auto-cleanup of the worktree on failure — user investigates)."
+Reply to user, one line per ticket:
+- Success: "TASK-XXX done, merge commit `<sha>`."
+- Failure: "TASK-XXX failed: `<reason>`. Branch retained at `<branch>`."
 
-If there is a next wave (Phase 4), proceed; otherwise the workflow ends.
+If next wave: go to Phase 4. Else end.
 
-## Phase 4 — Multi-wave (cross-wave dependencies)
+---
 
-Some tickets depend on others. The PLANNER groups them into waves: wave 1 has all tickets with no dependencies, wave 2 has tickets whose dependencies are all merged after wave 1, etc.
+## Phase 4 — Multi-wave
 
-When the wave 1 teardown (Phase 3) is complete, recompute the dependency graph and start a **new** Phase 1 for wave 2 — same `tickets` team_name (the previous one was deleted), new dispatches:
+Some tickets depend on others. PLANNER groups them into waves.
 
-```
-TeamCreate({team_name: "tickets", description: "Wave 2: TASK-006, TASK-007"})
-// ... 3×N per-ticket Agent dispatches + 1 shared merger Agent for wave 2
-// ... GO messages
-// passive wait, etc.
-```
+After Phase 3 completes for wave 1: recompute deps, start a new Phase 1 for wave 2 — same `tickets` team_name (previous was deleted), new dispatches.
 
-Do not skip Phase 3 between waves — TeamDelete is mandatory before re-creating `tickets`. The teamdelete-cleanup hook makes the cycle reliable.
+TeamDelete is mandatory between waves.
 
 Stop when no pending tickets remain.
+
+---
 
 ## Failure paths
 
 | Scenario | Detected by | Reaction |
 |---|---|---|
-| Reviewer silent > 180s | developer (timeout in dev's prompt) | dev SendMessages team-lead, "TASK-XXX stuck on <reviewer>". Lead can SendMessage(reviewer-TASK-XXX, "ping?") or abort that ticket (see "Per-ticket abort" below). |
-| Dev fix-cycle > 5 iterations | developer (counter in dev's prompt) | dev SendMessages team-lead, "TASK-XXX stuck: <N> cycles". Lead reformulates expectations to dev or aborts that ticket. |
-| Merger merge conflict | merger | merger SendMessages team-lead, "TASK-XXX merge failed: <reason>". Lead either resumes dev for fix OR marks the ticket failed and moves on. |
-| Hook `stop-hook-error` | system event arrives in lead's stream | Lead reads the event, decides if blocking. Validation hook crashes → treat as "validation skipped", warn user. |
-| User pressed STOP | chat-service `cancelled` state | chat-service does brutal filesystem cleanup of `subagents/*` for the current session, doesn't wait for lead. |
+| Reviewer silent > 180s | dev (timeout) | dev → team-lead "TASK-XXX stuck on <reviewer>". Lead pings or aborts ticket. |
+| Dev fix-cycle > 5 | dev (counter) | dev → team-lead "TASK-XXX stuck: <N> cycles". Lead reformulates or aborts. |
+| Merger merge conflict | merger | merger → team-lead "TASK-XXX merge failed: <reason>". Lead resumes dev or marks failed. |
+| Hook `stop-hook-error` | system event in lead's stream | Lead reads, decides. Validation crash → "validation skipped", warn user. |
+| User STOP | chat-service `cancelled` | chat-service does brutal cleanup of `subagents/*`, doesn't wait for lead. |
 
-### Per-ticket abort (within a live wave)
+### Per-ticket abort
 
-If one ticket goes wrong but the rest of the wave is healthy, the lead aborts only that ticket's per-ticket members (the developer + reviewers) and lets the others run. The shared `merger` is **never** shut down at per-ticket abort — it is still needed by the other tickets:
+If one ticket fails but others are healthy — abort only its trio. **Never** shut down the shared `merger` (others still need it).
 
 ```
-// Abort only TASK-001 — keep TASK-002, TASK-003 alive
 SendMessage({to: "developer-TASK-001", message: {type: "shutdown_request", reason: "ABORT"}})
 SendMessage({to: "quality-reviewer-TASK-001", message: {type: "shutdown_request", reason: "ABORT"}})
 SendMessage({to: "test-validator-TASK-001", message: {type: "shutdown_request", reason: "ABORT"}})
-// yield, verify shutdown_approved from these 3 only
-// Do NOT TeamDelete and do NOT shutdown `merger` — other tickets are still working.
+// yield, verify shutdown_approved from these 3 only.
+// Do NOT TeamDelete. Do NOT shutdown merger.
 ```
 
-Mark TASK-001 as failed in `${TICKETS_DIR}/TASK-001.json`. The other tickets continue; their developers will still SendMessage the shared `merger`. When the wave's remaining tickets have all merged (one report from `merger` per still-live ticket), do the standard Phase 3 teardown (which excludes the already-stopped TASK-001 members — they're in `stopped` state — and shuts down the shared merger as the last item).
+Mark TASK-001 failed in `${TICKETS_DIR}/TASK-001.json`. Other tickets keep going. When the wave's remaining tickets all merged, do standard Phase 3 (already-stopped members are skipped, shared merger goes last).
 
 ### Wave abort (full)
 
-If the entire wave must be aborted (user STOP, irrecoverable error), follow the **same protocol as Phase 3 (3a→3d)**, but tag every shutdown_request with `reason: "ABORT"` so members know the workflow is being terminated, not completing normally:
-
-```
-1. SendMessage shutdown_request (reason: "ABORT") to ALL members in ONE message.
-2. Yield the turn ("Aborting the wave and cleaning up…").
-3. Verify shutdown_approved replies on the next turn.
-4. TeamDelete({}). The PostToolUse cleanup hook handles residual disk artifacts.
-5. Reply to user with abort reason.
-```
-
-The worktrees are left intact on abort, so the user can inspect or recover manually. Subagent transcripts persist as logs.
-
-## Reference: addressing recipients
-
-Single team `tickets`, all bare names (no `@team` suffix needed):
-
-| Role | Name template | Per ticket or shared? |
-|---|---|---|
-| Lead (chat-orchestrator) | `team-lead` | shared (singleton) |
-| Developer of ticket X | `developer-TASK-X` | per ticket |
-| Quality reviewer of ticket X | `quality-reviewer-TASK-X` (complex mode only) | per ticket |
-| Test validator of ticket X | `test-validator-TASK-X` (complex mode only) | per ticket |
-| Merger | `merger` | **shared (singleton across the wave)** |
-
-Members talk only to:
-- their own ticket's counterparts — suffix matches their own `TASK_ID` (developers, reviewers)
-- the shared `merger` (developers only, when ready to ship; merger does not initiate to anyone except `team-lead`)
-- `team-lead` (status, escalation, merger reports)
-
-Cross-ticket SendMessage between *suffixed* peers (e.g. `developer-TASK-001` → `quality-reviewer-TASK-002`) is forbidden by the per-agent protocol. The shared `merger` is the only "broadcast" point — it intentionally serves all developers of the wave.
+Same protocol as Phase 3 (3a→3d), but tag every shutdown_request with `reason: "ABORT"`. Worktrees are left intact for manual recovery.

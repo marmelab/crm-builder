@@ -29,20 +29,30 @@ hook_log() {
 STDIN=$(cat)
 [ -z "$STDIN" ] && exit 0
 
-if ! command -v jq >/dev/null 2>&1; then
+if ! command -v node >/dev/null 2>&1; then
   exit 0
 fi
 
-# Only act on successful TeamDelete
-SUCCESS=$(echo "$STDIN" | jq -r '.tool_response.success // false' 2>/dev/null)
+# Parse the JSON input via node (extracts success flag + team_name in one call)
+PARSED=$(node -e '
+try {
+  const i = JSON.parse(process.argv[1] || "{}");
+  const tr = i.tool_response || {};
+  const ti = i.tool_input || {};
+  process.stdout.write(JSON.stringify({
+    success: tr.success === true ? "true" : "false",
+    teamName: tr.team_name || ti.team_name || ""
+  }));
+} catch { process.stdout.write("{}"); }
+' "$STDIN" 2>/dev/null || echo "{}")
+
+SUCCESS=$(echo "$PARSED" | node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(0)).success || "false")' 2>/dev/null)
 if [ "$SUCCESS" != "true" ]; then
   hook_log "teamdelete-cleanup SKIP non-success"
   exit 0
 fi
 
-# team_name comes from tool_response (always present on success), with
-# a fallback to tool_input for robustness.
-TEAM_NAME=$(echo "$STDIN" | jq -r '.tool_response.team_name // .tool_input.team_name // ""' 2>/dev/null)
+TEAM_NAME=$(echo "$PARSED" | node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(0)).teamName || "")' 2>/dev/null)
 if [ -z "$TEAM_NAME" ]; then
   hook_log "teamdelete-cleanup SKIP no team_name"
   exit 0

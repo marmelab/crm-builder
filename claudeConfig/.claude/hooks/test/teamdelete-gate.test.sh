@@ -69,10 +69,14 @@ EOF
 push_shutdown_approved() {
   local home="$1" team="$2" member="$3" read_flag="$4"
   local inbox="$home/.claude/teams/$team/inboxes/team-lead.json"
-  local payload="{\"type\":\"shutdown_approved\",\"requestId\":\"sd-1@$member\",\"from\":\"$member\"}"
-  jq --arg from "$member" --arg text "$payload" --argjson read "$read_flag" \
-    '. + [{"from": $from, "text": $text, "timestamp": "2026-04-28T14:00:00Z", "color": "blue", "read": $read}]' \
-    "$inbox" > "$inbox.new" && mv "$inbox.new" "$inbox"
+  node -e '
+const fs = require("fs");
+const [path, member, readFlag] = process.argv.slice(1);
+const arr = JSON.parse(fs.readFileSync(path, "utf8") || "[]");
+const payload = JSON.stringify({type: "shutdown_approved", requestId: "sd-1@" + member, from: member});
+arr.push({from: member, text: payload, timestamp: "2026-04-28T14:00:00Z", color: "blue", read: readFlag === "true"});
+fs.writeFileSync(path, JSON.stringify(arr));
+' "$inbox" "$member" "$read_flag"
 }
 
 # Run the hook under a given HOME with a tool_input team_name.

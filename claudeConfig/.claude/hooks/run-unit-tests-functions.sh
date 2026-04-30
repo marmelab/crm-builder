@@ -36,7 +36,11 @@ for WT in $WORKTREES; do
     continue
   fi
 
-  OUTPUT=$(CI=true npm run test:unit:functions 2>&1)
+  # Call vitest directly with `run` subcommand (not `npm run test:unit:functions`)
+  # because the package.json script invokes `vitest --config ...` without `run`,
+  # which puts vitest into watch mode. In a non-TTY agent context, watch mode
+  # hangs at startup instead of running tests once and exiting.
+  OUTPUT=$(CI=true npx vitest run --config vitest.functions.config.ts 2>&1)
   EXIT_CODE=$?
   if [ $EXIT_CODE -ne 0 ]; then
     FAILED=1
