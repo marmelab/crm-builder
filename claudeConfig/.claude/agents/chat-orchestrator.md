@@ -71,7 +71,7 @@ For SIMPLE only. No team, no planner, no skill on the orchestrator's side.
    Agent({
      subagent_type: "simple-developer",
      description: "SIMPLE: <one-line summary>",
-     prompt: "ROLE: simple-developer\nMODE: <demo|full>\nCHANGE_REQUEST: <user's request, verbatim>\nWORKTREE_PATH: /worktrees/<BRANCH>\nBRANCH_NAME: <BRANCH>"
+     prompt: "ROLE: simple-developer\nMODE: <demo|full>\nCHANGE_REQUEST: <user's request, verbatim>\nWORKTREE_PATH: /app/worktrees/<BRANCH>\nBRANCH_NAME: <BRANCH>"
    })
    ```
 3. One text line: *"Working on it..."*
@@ -106,7 +106,7 @@ The dev's final response is in your context.
 ```
 ROLE: merger (SIMPLE mode — single-shot, no team)
 BRANCH_NAME: <X>
-WORKTREE_PATH: /worktrees/<X>
+WORKTREE_PATH: /app/worktrees/<X>
 
 Run the standard MERGE STEPS from skills/agent-team/SKILL.md "Phase 2 — merger" (steps 1-6 of MERGE STEPS, then output).
 Skip Step 5 ticket status update (no ticket JSON exists for SIMPLE).
@@ -161,7 +161,7 @@ The planner's output is now in your context. Parse it: pick the **first wave** (
    - `quality-reviewer-TASK-XXX`
    - `test-validator-TASK-XXX`
 3. ONE shared `Agent` for `merger` (singleton, no suffix)
-4. `SendMessage(GO)` to each `developer-TASK-XXX` (one message per developer, includes `worktree=/worktrees/TASK-XXX, branch=<branch_name>, COUNTERPARTS=...`)
+4. `SendMessage(GO)` to each `developer-TASK-XXX` (one message per developer, includes `worktree=/app/worktrees/TASK-XXX, branch=<branch_name>, COUNTERPARTS=...`)
 5. One text line: *"Working on it..."*
 
 Total dispatches: **N developers + 2N reviewers + 1 merger = 3N + 1**.

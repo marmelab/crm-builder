@@ -51,7 +51,7 @@ If unsure, refuse — let the orchestrator re-classify.
 ROLE: simple-developer
 MODE: <demo|full>
 CHANGE_REQUEST: <user's natural-language request, verbatim>
-WORKTREE_PATH: /worktrees/<branch_slug>
+WORKTREE_PATH: /app/worktrees/<branch_slug>
 BRANCH_NAME: <branch_slug>
 ```
 

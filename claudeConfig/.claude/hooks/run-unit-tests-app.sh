@@ -10,7 +10,7 @@ echo "[$(date -Iseconds)] unit-app START pwd=$(pwd) CLAUDE_PROJECT_DIR=$CLAUDE_P
 REPO="${CLAUDE_PROJECT_DIR:-/app}"
 cd "$REPO" || { echo "[$(date -Iseconds)] unit-app EXIT=0 cd_failed" >> "$LOG"; exit 0; }
 
-WORKTREES=$(git worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2}' | grep "^/worktrees/" || true)
+WORKTREES=$(git worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2}' | grep "^/app/worktrees/" || true)
 
 if [ -z "$WORKTREES" ]; then
   echo "[$(date -Iseconds)] unit-app EXIT=0 no_active_worktree" >> "$LOG"

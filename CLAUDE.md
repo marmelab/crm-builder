@@ -27,11 +27,11 @@ supervisord (pid 1)
 The chat-service is the non-technical entry point. `ttyd` is the raw terminal for power users (the original `claude --dangerously-skip-permissions` flow).
 
 Volumes (see [docker-compose.yml](docker-compose.yml)):
-- `crm-source` → `/app/src` (persists user's code changes)
-- `crm-worktrees` → `/worktrees` (one directory per ticket)
-- `crm-docs` → `/app/docs` (project-context + reflections knowledge base; ticket JSONs live alongside session logs, not here)
+- `crm-app` → `/app` (the entire atomic-crm checkout: `src/`, `.git/`, `supabase/`, `e2e/`, `public/`, configs at root, `node_modules/`, `worktrees/`, `docs/`)
 - `claude-auth` → `/home/developer/.claude` (OAuth tokens across restarts)
 - `supabase-cache` → `/root/.docker` (full mode only)
+
+Single-volume strategy: keeps `/app/node_modules` and `/app/worktrees` on the **same device** so `cp -al /app/node_modules /app/worktrees/TASK-XXX/node_modules` produces hard links (zero disk overhead, vitest cache stays per-worktree). Worktrees are gitignored via `.gitignore`. Entrypoint compares `package-lock.json` hash against `/app/.npm-ci-hash` and runs `npm ci` if an agent modified deps. To wipe everything (atomic-crm checkout, commits, deps): `docker compose down -v`.
 
 ## Chat-service
 
@@ -108,9 +108,9 @@ Skills ([claudeConfig/.claude/skills/](claudeConfig/.claude/skills/)): agent-tea
 
 ### Worktree scope — the load-bearing rule
 
-Every ticket-scoped agent works inside `/worktrees/TASK-XXX/`. Reading `/app/src/...` while you have `/worktrees/TASK-XXX/src/...` is wrong: `/app` is on base, missing the ticket's changes, and editing there pollutes `main`. See [worktree-scope.md](claudeConfig/.claude/rules/worktree-scope.md) — it's the rule that has caused the most past incidents.
+Every ticket-scoped agent works inside `/app/worktrees/TASK-XXX/`. Reading `/app/src/...` while you have `/app/worktrees/TASK-XXX/src/...` is wrong: `/app` is on base, missing the ticket's changes, and editing there pollutes `main`. See [worktree-scope.md](claudeConfig/.claude/rules/worktree-scope.md) — it's the rule that has caused the most past incidents.
 
-`Bash` calls are **stateless** — every command must start with `cd /worktrees/TASK-XXX && …`.
+`Bash` calls are **stateless** — every command must start with `cd /app/worktrees/TASK-XXX && …`.
 
 ## Working on this repo (from the host)
 

@@ -23,7 +23,7 @@ Verify the implementation is correct, spec-compliant, follows project convention
 
 - Read ticket: `${TICKETS_DIR}/TASK-XXX.json` (absolute path passed in spawn prompt).
 - Output format: `.claude/rules/agent-output-format.md`.
-- Worktree scope: code lives in `/worktrees/TASK-XXX/`, NOT `/app/src/`. Read `.claude/rules/worktree-scope.md` first. Reading `/app/src/...` shows pre-ticket state → false negatives.
+- Worktree scope: code lives in `/app/worktrees/TASK-XXX/`, NOT `/app/src/`. Read `.claude/rules/worktree-scope.md` first. Reading `/app/src/...` shows pre-ticket state → false negatives.
 
 ## Workflow
 
@@ -33,7 +33,7 @@ On startup: invoke `Skill({skill: "agent-team"})` and follow the **quality-revie
 
 Per cycle:
 1. Wait for SendMessage from `COUNTERPART` ("ready, please review").
-2. Read ticket + worktree diff (`git -C /worktrees/TASK-XXX diff <base>..HEAD`).
+2. Read ticket + worktree diff (`git -C /app/worktrees/TASK-XXX diff <base>..HEAD`).
 3. Apply rubric below (Parts A and B). Skim `.claude/rules/security-triggers.md`.
 4. Reply: SendMessage(`COUNTERPART`, "APPROVED") OR "BLOCKED: <list>". Always use the suffixed name, never bare `developer`.
 5. Wait for next message (re-review after fix).

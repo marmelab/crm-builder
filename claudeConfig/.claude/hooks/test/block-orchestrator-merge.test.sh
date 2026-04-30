@@ -46,7 +46,7 @@ run_case "orch git pull → blocked" \
   2
 
 run_case "orch git worktree remove → blocked" \
-  '{"tool_name":"Bash","agent_type":"","tool_input":{"command":"git worktree remove /worktrees/TASK-001"}}' \
+  '{"tool_name":"Bash","agent_type":"","tool_input":{"command":"git worktree remove /app/worktrees/TASK-001"}}' \
   2
 
 run_case "orch apply-app-variant.sh → blocked" \
@@ -58,7 +58,7 @@ run_case "orch git status → allowed" \
   0
 
 run_case "orch ls → allowed" \
-  '{"tool_name":"Bash","agent_type":"","tool_input":{"command":"ls /worktrees/"}}' \
+  '{"tool_name":"Bash","agent_type":"","tool_input":{"command":"ls /app/worktrees/"}}' \
   0
 
 # --- Subagent (agent_type non-empty) cases ---

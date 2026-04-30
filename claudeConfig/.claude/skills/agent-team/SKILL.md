@@ -80,7 +80,7 @@ Agent({subagent_type: "merger", name: "merger", team_name: "tickets", model: "ha
 Then in a second message: one `SendMessage(GO, …)` per developer:
 
 ```
-SendMessage({to: "developer-TASK-001", message: "GO — Implement TASK-001 (worktree=/worktrees/TASK-001, branch=<branch>). Ticket spec at <path>. COUNTERPARTS: reviewers=[quality-reviewer-TASK-001, test-validator-TASK-001], merger=merger."})
+SendMessage({to: "developer-TASK-001", message: "GO — Implement TASK-001 (worktree=/app/worktrees/TASK-001, branch=<branch>). Ticket spec at <path>. COUNTERPARTS: reviewers=[quality-reviewer-TASK-001, test-validator-TASK-001], merger=merger."})
 ```
 
 After GO: lead enters **passive wait**. It receives N final SendMessages from `merger` (one per ticket: `merged TASK-XXX, commit=<sha>` or `TASK-XXX merge failed: <reason>`). When count == N → Phase 3.
@@ -97,7 +97,7 @@ Each protocol is the spawn prompt, parametrised by `TASK_ID` and `COUNTERPARTS`.
 ROLE: developer
 TASK_ID: TASK-XXX
 TEAM: tickets
-WORKTREE: /worktrees/TASK-XXX
+WORKTREE: /app/worktrees/TASK-XXX
 TICKET_FILE: <session_dir>/TASK-XXX.json
 COUNTERPARTS:
   - reviewers: [quality-reviewer-TASK-XXX, test-validator-TASK-XXX]
@@ -114,7 +114,7 @@ WORKFLOW:
    - "APPROVED" → approvals_received++
    - "BLOCKED: ..." → approvals_received=0, fix, commit, re-notify ALL reviewers (diff changed). Loop.
 5. When approvals_received == 2:
-   - Mode 2 reflection: read /app/docs/reflections/, write /worktrees/TASK-XXX/docs/reflections/TASK-XXX-reflection.md, commit.
+   - Mode 2 reflection: read /app/docs/reflections/, write /app/worktrees/TASK-XXX/docs/reflections/TASK-XXX-reflection.md, commit.
 6. SendMessage("merger", "ready: TASK-XXX, branch=<branch>, all approved + reflection committed"). Message MUST start with "ready: TASK-XXX".
 7. Stop. Lead handles cleanup.
 
@@ -129,13 +129,13 @@ TIMEOUTS:
 ROLE: quality-reviewer
 TASK_ID: TASK-XXX
 TEAM: tickets
-WORKTREE: /worktrees/TASK-XXX
+WORKTREE: /app/worktrees/TASK-XXX
 TICKET_FILE: <session_dir>/TASK-XXX.json
 COUNTERPART: developer-TASK-XXX
 TEAM_LEAD: team-lead
 
 WORKFLOW (per incoming message from developer-TASK-XXX):
-1. Read ticket and worktree diff (`git -C /worktrees/TASK-XXX diff <base>..HEAD`).
+1. Read ticket and worktree diff (`git -C /app/worktrees/TASK-XXX diff <base>..HEAD`).
 2. Apply rules: coding-style.md, agent-output-format.md. Skim security-triggers.md.
 3. Verdict:
    - All clear → SendMessage(developer-TASK-XXX, "APPROVED")
@@ -154,7 +154,7 @@ DO NOT:
 ROLE: test-validator
 TASK_ID: TASK-XXX
 TEAM: tickets
-WORKTREE: /worktrees/TASK-XXX
+WORKTREE: /app/worktrees/TASK-XXX
 TICKET_FILE: <session_dir>/TASK-XXX.json
 COUNTERPART: developer-TASK-XXX
 TEAM_LEAD: team-lead
@@ -188,7 +188,7 @@ You receive SendMessages from any developer-TASK-XXX. Each MUST start with "read
 For each incoming message:
 1. Parse from: → derive TASK_ID (e.g. from="developer-TASK-006" → "TASK-006").
 2. Parse "branch=<branch>" (fallback: read ${TICKETS_DIR}/TASK-XXX.json, pick branch_name).
-3. WORKTREE_PATH = /worktrees/TASK-XXX.
+3. WORKTREE_PATH = /app/worktrees/TASK-XXX.
 4. Run MERGE STEPS below.
 5. Idle and wait for next message — do NOT stop after one merge.
 6. On SendMessage(shutdown_request): reply shutdown_approved and stop.

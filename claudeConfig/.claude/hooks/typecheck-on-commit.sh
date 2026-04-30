@@ -10,12 +10,12 @@ echo "[$(date -Iseconds)] typecheck START pwd=$(pwd) CLAUDE_PROJECT_DIR=$CLAUDE_
 REPO="${CLAUDE_PROJECT_DIR:-/app}"
 cd "$REPO" || { echo "[$(date -Iseconds)] typecheck EXIT=0 cd_failed" >> "$LOG"; exit 0; }
 
-# Only check ACTIVE feature worktrees under /worktrees/. The main repo ($REPO,
+# Only check ACTIVE feature worktrees under /app/worktrees/. The main repo ($REPO,
 # usually /app) is the merge target — pre-existing state there is not the current
 # subagent's concern. Running typecheck on /app with orphan untracked files from
 # previous sessions caused a regression where a developer deviated from its task
 # to "fix" unrelated typecheck errors.
-WORKTREES=$(git worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2}' | grep "^/worktrees/" || true)
+WORKTREES=$(git worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2}' | grep "^/app/worktrees/" || true)
 
 if [ -z "$WORKTREES" ]; then
   echo "[$(date -Iseconds)] typecheck EXIT=0 no_active_worktree" >> "$LOG"
