@@ -184,19 +184,27 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
 }
 #chat-empty-state {
   margin: auto; padding: 0 24px;
-  text-align: center;
-  color: #8e8e93; font-size: 14px;
+  display: flex; flex-direction: row; align-items: center; gap: 8px;
+  color: #8e8e93; font-size: 13px;
+  white-space: nowrap;
 }
+.empty-hint { color: #8e8e93; }
 #chat-messages:has(.msg, .msg-working, .msg-choices) #chat-empty-state {
   display: none;
 }
 .empty-link {
   background: none; border: none; padding: 0;
-  font: inherit; color: inherit;
+  font: inherit; font-weight: 500;
+  color: #d1d1d6;
   text-decoration: underline; text-underline-offset: 3px;
+  text-decoration-color: rgba(209, 209, 214, .4);
   cursor: pointer;
+  transition: color .15s ease, text-decoration-color .15s ease;
 }
-.empty-link:hover { color: #d1d1d6; }
+.empty-link:hover {
+  color: #fff;
+  text-decoration-color: #fff;
+}
 #chat-messages::-webkit-scrollbar { width: 4px; }
 #chat-messages::-webkit-scrollbar-thumb { background: #3a3a3c; border-radius: 2px; }
 
