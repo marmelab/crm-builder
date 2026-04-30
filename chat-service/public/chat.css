@@ -397,12 +397,12 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
 .stats-section { margin-bottom: 20px; }
 .stats-kpi-line {
   display: flex; flex-wrap: wrap; gap: 12px;
-  justify-content: space-between; align-items: center;
+  align-items: center;
   font-size: 12px; color: #d1d5db;
   padding: 10px 12px; background: #2c2c2e; border-radius: 10px;
   font-variant-numeric: tabular-nums;
 }
-.stats-kpi-line .kpi-group { display: flex; flex-wrap: wrap; gap: 12px; }
+.stats-kpi-line .kpi-spacer { margin-left: auto; }
 .stats-kpi-line .kpi-warn { color: #f59e0b; }
 
 .stats-team-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }

@@ -38,9 +38,8 @@ export function initConnection({ handleWsMessage, appendMessage, resetChatUi }) 
     connectWs();
   }
 
-  // Drop the active session without spinning up a fresh one. WS is closed,
-  // session param is stripped from the URL, and the UI is reset. The next
-  // switchSession() call re-connects.
+  // Like switchSession(null) but skips reconnecting — used when closing the
+  // chat panel; the next switchSession() call brings the socket back.
   function closeSession() {
     switchingSession = true;
     try { ws?.close(); } catch {}

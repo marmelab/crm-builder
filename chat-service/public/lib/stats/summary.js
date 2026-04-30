@@ -2,16 +2,12 @@ import { el, formatDuration, formatTokens } from '../dom.js';
 
 export function renderSummarySection(data) {
   const kpi = el('div', { className: 'stats-kpi-line' },
-    el('div', { className: 'kpi-group kpi-group-left' },
-      el('span', null, `⏱️ ${formatDuration(data.summary.totalMs)} total`),
-      el('span', null, `🤖 ${data.summary.agentsCount} agents`),
-      el('span', null, `🪙 ${formatTokens(data.summary.tokensTotal)} tokens`),
-      el('span', null, `💵 $${data.summary.costUsd.toFixed(3)}`),
-    ),
-    el('div', { className: 'kpi-group kpi-group-right' },
-      el('span', data.summary.errorsCount ? { className: 'kpi-warn' } : null, `⚠️ ${data.summary.errorsCount} errors`),
-      el('span', data.summary.retriesCount ? { className: 'kpi-warn' } : null, `🔁 ${data.summary.retriesCount} retries`),
-    ),
+    el('span', null, `⏱️ ${formatDuration(data.summary.totalMs)} total`),
+    el('span', null, `🤖 ${data.summary.agentsCount} agents`),
+    el('span', null, `🪙 ${formatTokens(data.summary.tokensTotal)} tokens`),
+    el('span', null, `💵 $${data.summary.costUsd.toFixed(3)}`),
+    el('span', { className: `kpi-spacer${data.summary.errorsCount ? ' kpi-warn' : ''}` }, `⚠️ ${data.summary.errorsCount} errors`),
+    el('span', data.summary.retriesCount ? { className: 'kpi-warn' } : null, `🔁 ${data.summary.retriesCount} retries`),
   );
 
   const teamRow = data.teams.length

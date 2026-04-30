@@ -11,12 +11,6 @@ const historyPanel = document.getElementById('chat-history-panel');
 const historyCollapseBtn = document.getElementById('history-collapse');
 const historyList = document.getElementById('history-list');
 const historyEmpty = document.getElementById('history-empty');
-
-historyCollapseBtn.addEventListener('click', () => {
-  const collapsed = historyPanel.classList.toggle('collapsed');
-  historyCollapseBtn.title = collapsed ? 'Expand panel' : 'Collapse panel';
-  historyCollapseBtn.setAttribute('aria-label', historyCollapseBtn.title);
-});
 const chatTitle = document.getElementById('chat-title');
 const form     = document.getElementById('chat-form');
 const input    = document.getElementById('chat-input');
@@ -33,7 +27,6 @@ let working  = false;
 let progressTotal = 0;
 let progressDone  = 0;
 let debugMode = false;
-let hasUserMessage = false;
 let statsMode = false;
 
 let seqCounter = 0;
@@ -91,7 +84,7 @@ function switchSessionAndOpen(id) {
 function closeDiscussion() {
   widget.classList.add('chat-closed');
   connection.closeSession();
-  historyApi.refreshHistoryIfOpen();
+  historyApi.refreshHistory();
 }
 
 const display = initDisplay({
@@ -99,10 +92,11 @@ const display = initDisplay({
   stateBtn,
   newBtn,
   switchSession: switchSessionAndOpen,
-  refreshHistoryIfOpen: () => historyApi.refreshHistoryIfOpen(),
+  refreshHistory: () => historyApi.refreshHistory(),
 });
 
 const historyApi = initHistory({
+  historyPanel,
   historyList,
   historyEmpty,
   getSessionId: () => display.getSessionId(),
@@ -201,20 +195,19 @@ function handleWsMessage(event) {
       working = true;
       renderWorkingUi();
     }
-    hasUserMessage = list.some((m) => m.role === 'user');
-    historyApi.refreshHistoryIfOpen();
+    historyApi.refreshHistory();
     return;
   }
 
   if (msg.type === 'state') {
     display.setDisplayedState(msg.state);
-    historyApi.refreshHistoryIfOpen();
+    historyApi.refreshHistory();
     return;
   }
 
   if (msg.type === 'title') {
     display.setDisplayedTitle(msg.title);
-    historyApi.refreshHistoryIfOpen();
+    historyApi.refreshHistory();
     return;
   }
 
@@ -272,7 +265,7 @@ function handleWsMessage(event) {
     // `status: working=false` frame arrives. The bubble's sentinel seq
     // ensures the new message lands above it.
     appendMessage('assistant', msg.content);
-    historyApi.refreshHistoryIfOpen();
+    historyApi.refreshHistory();
   }
 }
 
@@ -313,8 +306,7 @@ document.getElementById('chat-empty-link').addEventListener('click', async () =>
   const label = '🗺️  Set up my CRM from scratch';
   if (!connection.safeSend({ content: 'FULL_SETUP', display: label })) return;
   appendMessage('user', label);
-  hasUserMessage = true;
-  historyApi.refreshHistoryIfOpen();
+  historyApi.refreshHistory();
 });
 
 function appendChoices(content, options, seq = ++seqCounter) {
@@ -343,8 +335,7 @@ function appendChoices(content, options, seq = ++seqCounter) {
       if (!connection.safeSend({ content: id, display: label })) return;
       wrap.remove();
       appendMessage('user', label);
-      hasUserMessage = true;
-      historyApi.refreshHistoryIfOpen();
+      historyApi.refreshHistory();
     });
     wrap.appendChild(btn);
   });
@@ -590,15 +581,22 @@ form.addEventListener('submit', (e) => {
     return;
   }
   appendMessage('user', content, { queued: working });
-  historyApi.refreshHistoryIfOpen();
+  historyApi.refreshHistory();
   input.value = '';
   input.style.height = 'auto';
-  hasUserMessage = true;
 });
 
 // Close the chat widget. The sessions sidebar stays visible — clicking a
 // session (or ✚ New) re-opens the widget via switchSessionAndOpen.
 toggle.addEventListener('click', closeDiscussion);
+
+historyCollapseBtn.addEventListener('click', () => {
+  const collapsed = historyPanel.classList.toggle('collapsed');
+  historyCollapseBtn.title = collapsed ? 'Expand panel' : 'Collapse panel';
+  historyCollapseBtn.setAttribute('aria-label', historyCollapseBtn.title);
+  // Refreshes are skipped while collapsed; pull the latest list on expand.
+  if (!collapsed) historyApi.refreshHistory();
+});
 
 // Debug toggle
 debugBtn.addEventListener('click', () => {

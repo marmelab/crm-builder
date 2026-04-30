@@ -1,10 +1,11 @@
 import { STATE_LABELS } from './state-labels.js';
 import { formatRelative } from '../dom.js';
 
-export function initHistory({ historyList, historyEmpty, getSessionId, switchSession, closeDiscussion }) {
+export function initHistory({ historyPanel, historyList, historyEmpty, getSessionId, switchSession, closeDiscussion }) {
   let refreshTimer = null;
 
-  function refreshHistoryIfOpen() {
+  function refreshHistory() {
+    if (historyPanel.classList.contains('collapsed')) return;
     clearTimeout(refreshTimer);
     refreshTimer = setTimeout(loadHistory, 250);
   }
@@ -57,5 +58,5 @@ export function initHistory({ historyList, historyEmpty, getSessionId, switchSes
 
   loadHistory();
 
-  return { refreshHistoryIfOpen, openHistory: loadHistory };
+  return { refreshHistory };
 }
