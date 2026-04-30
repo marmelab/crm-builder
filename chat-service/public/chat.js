@@ -83,6 +83,7 @@ const TOOL_LABELS = {
 function switchSessionAndOpen(id) {
   widget.classList.remove('chat-closed');
   connection.switchSession(id);
+  if (id === null) input.focus();
 }
 
 function closeDiscussion() {
@@ -668,6 +669,13 @@ document.addEventListener('click', (e) => {
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !historyRecentPopup.hidden) closeRecentPopup();
+});
+
+// `top` is computed from the trigger button's bounding rect at open time, so a
+// viewport resize would leave the popup floating — close it instead of trying
+// to re-anchor live.
+window.addEventListener('resize', () => {
+  if (!historyRecentPopup.hidden) closeRecentPopup();
 });
 
 // Debug toggle
