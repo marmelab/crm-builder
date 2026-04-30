@@ -69,7 +69,7 @@ fi
 if [ -n "$BLOCKED" ]; then
   REASON="File editing via Bash is forbidden: $BLOCKED See developer.md's HARD RULE."
   # Log the attempt
-  LOG=/chat-service/logs/hooks.log
+  LOG="$CHAT_SESSION_DIR/hooks.log"
   mkdir -p "$(dirname "$LOG")" 2>/dev/null
   echo "[$(date -Iseconds)] block-bash-write BLOCKED cmd=${CMD:0:120}" >> "$LOG" 2>/dev/null || true
   echo "{\"decision\":\"block\",\"reason\":\"$REASON\"}"

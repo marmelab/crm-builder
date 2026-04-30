@@ -36,4 +36,7 @@
 
 * le debug mode fonctionne mal avec le mode multi-session
 
-* stats sur les hooks -> pas dépendant des sessions. Même fichier pour toutes les session au lieu de 1 par session
+"No saved sessions." n'est pas centré dans "history-list"
+
+* dans le "chat-history-panel" en mode "collapsed", je veux un nouveau bouton. L'icone sera une icone de message.
+* Ce bouton ouvrira une petite pop-up avec les 5 derniere conversations. ça me choisir rapidement l'une de ces conversations

@@ -3,7 +3,6 @@ export const CWD = '/app';
 export const CLAUDE_HOME = '/home/developer';
 export const ORCHESTRATOR_MD = `${CLAUDE_HOME}/.claude/agents/chat-orchestrator.md`;
 export const LOG_DIR = process.env.CHAT_LOG_DIR || '/chat-service/logs';
-export const HOOKS_LOG_PATH = `${LOG_DIR}/hooks.log`;
 
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

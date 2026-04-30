@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { extname, join } from 'node:path';
-import { LOG_DIR, HOOKS_LOG_PATH, ALLOWED_STATES, MIME_TYPES, UUID_RE, DOCUMENTATOR_OPTS } from './config.js';
+import { LOG_DIR, ALLOWED_STATES, MIME_TYPES, UUID_RE, DOCUMENTATOR_OPTS } from './config.js';
 import { listSessions, getSession, patchSession } from './session-store.js';
 import { runtimes } from './runtime.js';
 import { runDocumentator } from '../documentator-cron.js';
@@ -28,9 +28,10 @@ async function handleStatsRequest(req, res) {
     return;
   }
   const logPath = `${LOG_DIR}/${sessionId}/log.jsonl`;
+  const hooksLogPath = `${LOG_DIR}/${sessionId}/hooks.log`;
   try {
     const { aggregateSession } = await import('../stats.js');
-    const out = await aggregateSession({ sessionLogPath: logPath, hooksLogPath: HOOKS_LOG_PATH, sessionId });
+    const out = await aggregateSession({ sessionLogPath: logPath, hooksLogPath, sessionId });
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(out));
   } catch (err) {
