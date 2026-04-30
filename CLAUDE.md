@@ -70,6 +70,14 @@ cd /app && git checkout -- src/ && cp /app-variants/App.{fakerest|supabase}.tsx 
 
 Writes `tests/results/run-<ISO>.json`, diffs against [baseline.json](chat-service/tests/results/baseline.json). `--update-baseline` rewrites the reference.
 
+The harness records 4 dimensions per case:
+- **cost / time / tokens** (always-on, blocking on `maxCostUsd` / `maxDurationMs`)
+- **agent shape** (`mustInvoke` / `mustNotInvoke`, blocking)
+- **A — file set + diff size** (`mustModify` / `mustNotModify` / `expectedDiffStats`, soft warnings)
+- **C — Playwright check** (`tests/checks/<id>.js`, blocking)
+
+Per-case full diffs are archived to `chat-service/tests/results/<runTs>/<caseId>.patch` for inspection when something fails. Override the target container with `BENCH_CONTAINER=...` and the CRM URL used by C-checks with `CRM_URL=http://localhost:6174`.
+
 ## Agent team
 
 9 agents in [claudeConfig/.claude/agents/](claudeConfig/.claude/agents/). Each one: frontmatter (name, description, model, tools, skills) + prose. Models deliberately scoped:

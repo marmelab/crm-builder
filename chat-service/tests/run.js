@@ -12,6 +12,9 @@ import { execSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import WebSocket from 'ws';
+import { captureDiff } from './lib/diff-capture.js';
+import { evaluateFileSet } from './lib/evaluate-files.js';
+import { runPlaywrightCheck } from './lib/run-check.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CASES_PATH = join(__dirname, 'cases.json');
@@ -19,6 +22,8 @@ const RESULTS_DIR = join(__dirname, 'results');
 const BASELINE_PATH = join(RESULTS_DIR, 'baseline.json');
 const SESSIONS_DIR = process.env.SESSIONS_DIR || join(__dirname, '..', '..', 'sessions');
 const WS_URL = process.env.CHAT_WS_URL || 'ws://localhost:8080';
+const CHECKS_DIR = join(__dirname, 'checks');
+const CONTAINER = process.env.BENCH_CONTAINER || 'atomic-crm-demo';
 
 const args = process.argv.slice(2);
 const caseIdx = args.indexOf('--case');
@@ -115,6 +120,8 @@ async function runCaseFromSession(caseDef, sessionId) {
     tools: [],
     success: true,
     errors: [],
+    warnings: [],
+    result: { ran: false },
     sessionId,
   };
 
@@ -195,6 +202,36 @@ async function runCase(caseDef) {
   metrics.durationMs = Date.now() - start;
   ws.close();
 
+  metrics.warnings = [];
+  metrics.result = { ran: false };
+
+  let diff = null;
+  try {
+    diff = captureDiff(CONTAINER);
+    metrics.diffStats = diff.numstat;
+    metrics.modifiedFiles = diff.files;
+  } catch (err) {
+    metrics.warnings.push(`A: capture failed — ${err.message}`);
+  }
+
+  if (diff) {
+    const { warnings } = evaluateFileSet(diff, caseDef.expect || {});
+    metrics.warnings.push(...warnings);
+  }
+
+  try {
+    metrics.result = await runPlaywrightCheck(caseDef.id, { checksDir: CHECKS_DIR });
+    if (metrics.result.ran && !metrics.result.success) {
+      metrics.success = false;
+      metrics.errors.push(`C (Playwright): ${metrics.result.error}`);
+    }
+  } catch (err) {
+    metrics.success = false;
+    metrics.errors.push(`C (Playwright runner): ${err.message}`);
+  }
+
+  if (diff) metrics.patch = diff.patch;
+
   validateExpectations(metrics, caseDef.expect || {});
   return metrics;
 }
@@ -222,7 +259,7 @@ function compareWithBaseline(run, baseline) {
   }
 
   console.log(`\nComparison vs baseline (${baseline.ts}):\n`);
-  const header = 'Case'.padEnd(28) + 'Duration'.padEnd(18) + 'Cost'.padEnd(18) + 'Tokens in'.padEnd(18);
+  const header = 'Case'.padEnd(28) + 'Duration'.padEnd(18) + 'Cost'.padEnd(18) + 'Tokens in'.padEnd(18) + 'Result'.padEnd(10);
   console.log(header);
   console.log('-'.repeat(header.length));
 
@@ -241,7 +278,10 @@ function compareWithBaseline(run, baseline) {
     const dur = `${(prev.durationMs / 1000).toFixed(1)}s → ${(current.durationMs / 1000).toFixed(1)}s ${fmtDelta(prev.durationMs, current.durationMs)}`;
     const cost = `$${prev.costUsd.toFixed(3)} → $${current.costUsd.toFixed(3)} ${fmtDelta(prev.costUsd, current.costUsd)}`;
     const tks = `${formatTokens(prev.tokensIn)} → ${formatTokens(current.tokensIn)} ${fmtDelta(prev.tokensIn, current.tokensIn)}`;
-    console.log(`${name}  ${dur.padEnd(26)}${cost.padEnd(26)}${tks}`);
+    const resultCol = current.result?.ran
+      ? (current.result.success ? 'OK' : 'FAIL')
+      : '–';
+    console.log(`${name}  ${dur.padEnd(26)}${cost.padEnd(26)}${tks.padEnd(26)}${resultCol}`);
   }
   console.log();
 }
@@ -273,7 +313,12 @@ async function main() {
       results.push(m);
       const status = m.success ? '\x1b[32mOK\x1b[0m' : '\x1b[31mFAIL\x1b[0m';
       console.log(`${status} (${(m.durationMs / 1000).toFixed(1)}s, $${m.costUsd.toFixed(3)}, ${formatTokens(m.tokensIn)} in, agents: ${m.agents.join(',') || '-'})`);
+      const resultLabel = m.result?.ran
+        ? (m.result.success ? '\x1b[32mOK\x1b[0m (Playwright)' : `\x1b[31mFAIL\x1b[0m — ${m.result.error}`)
+        : '–';
+      console.log(`      result: ${resultLabel}`);
       if (!m.success) m.errors.forEach((e) => console.log(`      - ${e}`));
+      if (m.warnings?.length) m.warnings.forEach((w) => console.log(`      \x1b[33mWARN\x1b[0m ${w}`));
     } catch (err) {
       console.log(`\x1b[31mERROR\x1b[0m: ${err.message}`);
       results.push({ caseId: c.id, success: false, errors: [err.message] });
@@ -286,6 +331,15 @@ async function main() {
   const runPath = join(RESULTS_DIR, `run-${run.ts.replace(/[:.]/g, '-')}.json`);
   await writeFile(runPath, JSON.stringify(run, null, 2));
   console.log(`\nResults saved: ${runPath}`);
+
+  const patchDir = join(RESULTS_DIR, run.ts.replace(/[:.]/g, '-'));
+  await mkdir(patchDir, { recursive: true });
+  for (const c of results) {
+    if (c.patch) {
+      await writeFile(join(patchDir, `${c.caseId}.patch`), c.patch);
+      delete c.patch;
+    }
+  }
 
   let baseline = null;
   if (existsSync(BASELINE_PATH)) {
