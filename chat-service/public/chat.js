@@ -3,17 +3,20 @@ import { renderStatsPanel } from './lib/stats/index.js';
 import { initConnection, initDisplay, initHistory } from './lib/sessions/index.js';
 
 const widget   = document.getElementById('chat-widget');
-const fab      = document.getElementById('chat-fab');
 const toggle   = document.getElementById('chat-toggle');
-const expandBtn = document.getElementById('chat-expand');
 const debugBtn = document.getElementById('chat-debug');
 const stateBtn = document.getElementById('chat-state');
-const historyBtn = document.getElementById('chat-history');
 const newBtn = document.getElementById('chat-new');
 const historyPanel = document.getElementById('chat-history-panel');
+const historyCollapseBtn = document.getElementById('history-collapse');
 const historyList = document.getElementById('history-list');
 const historyEmpty = document.getElementById('history-empty');
-const historyClose = document.getElementById('history-close');
+
+historyCollapseBtn.addEventListener('click', () => {
+  const collapsed = historyPanel.classList.toggle('collapsed');
+  historyCollapseBtn.title = collapsed ? 'Expand panel' : 'Collapse panel';
+  historyCollapseBtn.setAttribute('aria-label', historyCollapseBtn.title);
+});
 const chatTitle = document.getElementById('chat-title');
 const form     = document.getElementById('chat-form');
 const input    = document.getElementById('chat-input');
@@ -23,6 +26,8 @@ const messages = document.getElementById('chat-messages');
 const stats = document.getElementById('chat-stats');
 const statsBtn = document.getElementById('chat-stats-btn');
 const statsPanel = document.getElementById('chat-stats-panel');
+const statsPanelBody = document.getElementById('chat-stats-panel-body');
+const statsCloseBtn = document.getElementById('chat-stats-close');
 
 let working  = false;
 let progressTotal = 0;
@@ -84,22 +89,31 @@ const TOOL_LABELS = {
   result:       '✅ Turn complete',
 };
 
+function switchSessionAndOpen(id) {
+  widget.classList.remove('chat-closed');
+  connection.switchSession(id);
+}
+
+function closeDiscussion() {
+  widget.classList.add('chat-closed');
+  connection.closeSession();
+  historyApi.refreshHistoryIfOpen();
+}
+
 const display = initDisplay({
   chatTitle,
   stateBtn,
   newBtn,
-  switchSession: (id) => connection.switchSession(id),
+  switchSession: switchSessionAndOpen,
   refreshHistoryIfOpen: () => historyApi.refreshHistoryIfOpen(),
 });
 
 const historyApi = initHistory({
-  historyPanel,
   historyList,
   historyEmpty,
-  historyBtn,
-  historyClose,
   getSessionId: () => display.getSessionId(),
-  switchSession: (id) => connection.switchSession(id),
+  switchSession: switchSessionAndOpen,
+  closeDiscussion,
 });
 
 const connection = initConnection({
@@ -111,11 +125,12 @@ const connection = initConnection({
 function resetChatUi() {
   messages.replaceChildren();
   display.setSessionId(null);
+  if (statsMode) exitStatsMode();
   working = false;
+  send.hidden = false;
   send.disabled = false;
   stopBtn.hidden = true;
   stopBtn.disabled = false;
-  historyPanel.hidden = true;
   stats.textContent = '';
   progressTotal = 0;
   progressDone = 0;
@@ -148,6 +163,7 @@ function updateWorkingProgress() {
 function renderWorkingUi() {
   stopBtn.hidden = !working;
   stopBtn.disabled = false;
+  send.hidden = working;
   const existing = messages.querySelector('.msg-working');
   if (working && !existing) {
     const el = document.createElement('div');
@@ -545,22 +561,9 @@ form.addEventListener('submit', (e) => {
   updateStatsBtnVisibility();
 });
 
-// Toggle open/close
-toggle.addEventListener('click', () => {
-  widget.classList.add('chat-closed');
-  fab.style.display = 'flex';
-});
-fab.addEventListener('click', () => {
-  widget.classList.remove('chat-closed');
-  fab.style.display = 'none';
-});
-
-// Expand toggle
-expandBtn.addEventListener('click', () => {
-  const expanded = widget.classList.toggle('chat-expanded');
-  expandBtn.textContent = expanded ? '⤡' : '⤢';
-  expandBtn.title = expanded ? 'Reduce' : 'Expand';
-});
+// Close the chat widget. The sessions sidebar stays visible — clicking a
+// session (or ✚ New) re-opens the widget via switchSessionAndOpen.
+toggle.addEventListener('click', closeDiscussion);
 
 // Debug toggle
 debugBtn.addEventListener('click', () => {
@@ -583,34 +586,33 @@ debugBtn.addEventListener('click', () => {
 async function enterStatsMode() {
   if (!display.getSessionId()) return;
   statsMode = true;
-  widget.classList.add('chat-stats-mode');
   statsPanel.hidden = false;
-  statsBtn.textContent = '←';
-  statsBtn.title = 'Back to chat';
+  statsBtn.classList.add('stats-active');
+  statsBtn.title = 'Hide session stats';
 
-  statsPanel.replaceChildren(el('div', { className: 'stats-loading' }, 'Loading stats…'));
+  statsPanelBody.replaceChildren(el('div', { className: 'stats-loading' }, 'Loading stats…'));
   try {
     const res = await fetch(`/api/stats?sessionId=${encodeURIComponent(display.getSessionId())}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
-    renderStatsPanel(statsPanel, data);
+    renderStatsPanel(statsPanelBody, data);
   } catch (err) {
     const retry = el('button', { id: 'stats-retry-btn', onclick: enterStatsMode }, 'Retry');
-    const back  = el('button', { id: 'stats-back-btn',  onclick: exitStatsMode  }, '← Back to chat');
+    const back  = el('button', { id: 'stats-back-btn',  onclick: exitStatsMode  }, '← Close');
     const label = el('div', null, el('strong', null, 'Failed to load stats:'), ' ', String(err.message));
-    statsPanel.replaceChildren(el('div', { className: 'stats-error' }, label, retry, back));
+    statsPanelBody.replaceChildren(el('div', { className: 'stats-error' }, label, retry, back));
   }
 }
 
 function exitStatsMode() {
   statsMode = false;
-  widget.classList.remove('chat-stats-mode');
   statsPanel.hidden = true;
-  statsPanel.replaceChildren();
-  statsBtn.textContent = '📊';
+  statsPanelBody.replaceChildren();
+  statsBtn.classList.remove('stats-active');
   statsBtn.title = 'Session stats';
 }
 
 statsBtn.addEventListener('click', () => {
   if (statsMode) exitStatsMode(); else enterStatsMode();
 });
+statsCloseBtn.addEventListener('click', exitStatsMode);

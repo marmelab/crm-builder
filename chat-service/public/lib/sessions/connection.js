@@ -38,6 +38,18 @@ export function initConnection({ handleWsMessage, appendMessage, resetChatUi }) 
     connectWs();
   }
 
+  // Drop the active session without spinning up a fresh one. WS is closed,
+  // session param is stripped from the URL, and the UI is reset. The next
+  // switchSession() call re-connects.
+  function closeSession() {
+    switchingSession = true;
+    try { ws?.close(); } catch {}
+    const url = new URL(location.href);
+    url.searchParams.delete('session');
+    history.pushState({}, '', url);
+    resetChatUi();
+  }
+
   window.addEventListener('popstate', () => {
     switchingSession = true;
     try { ws?.close(); } catch {}
@@ -53,5 +65,5 @@ export function initConnection({ handleWsMessage, appendMessage, resetChatUi }) 
     return true;
   }
 
-  return { connectWs, switchSession, getWs: () => ws, safeSend };
+  return { connectWs, switchSession, closeSession, getWs: () => ws, safeSend };
 }
