@@ -35,3 +35,5 @@
 * Si j'envoie un message sans cliquer sur "Make a quick change/Set up from scratch", les boutons devraient disparaitre
 
 * le debug mode fonctionne mal avec le mode multi-session
+
+* stats sur les hooks -> pas dépendant des sessions. Même fichier pour toutes les session au lieu de 1 par session

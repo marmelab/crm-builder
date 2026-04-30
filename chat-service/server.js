@@ -3,7 +3,7 @@ import { join } from 'path';
 import { fileURLToPath } from 'url';
 import { WebSocketServer } from 'ws';
 
-import { PORT, WELCOME_CHOICES, DOCUMENTATOR_OPTS } from './lib/server/config.js';
+import { PORT, DOCUMENTATOR_OPTS } from './lib/server/config.js';
 import { scheduleDocumentator } from './lib/documentator-cron.js';
 import { loadSystemPrompt, applySystemPrompt } from './lib/server/system-prompt.js';
 import { openSession } from './lib/server/session-store.js';
@@ -75,9 +75,6 @@ wss.on('connection', async (ws, req) => {
     working: runtime.busy,
     isNew: session.isNew,
   });
-  if (session.isNew) {
-    safeSend(ws, WELCOME_CHOICES);
-  }
   // Send the current progress snapshot so a (re)joining tab paints the
   // counter immediately instead of waiting for the next merge / write event.
   sendProgress(runtime).catch(() => {});

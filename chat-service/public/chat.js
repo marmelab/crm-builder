@@ -116,8 +116,12 @@ const connection = initConnection({
   resetChatUi,
 });
 
+function clearMessageNodes() {
+  messages.querySelectorAll('.msg, .msg-choices, .msg-working').forEach((n) => n.remove());
+}
+
 function resetChatUi() {
-  messages.replaceChildren();
+  clearMessageNodes();
   display.setSessionId(null);
   if (statsMode) exitStatsMode();
   working = false;
@@ -185,7 +189,7 @@ function handleWsMessage(event) {
     display.setSessionId(msg.sessionId);
     display.setDisplayedTitle(msg.title || 'New session');
     display.setDisplayedState(msg.state || 'in_progress');
-    messages.innerHTML = '';
+    clearMessageNodes();
     const list = msg.messages || [];
     const queuedIdx = new Set();
     let remaining = msg.queuedCount || 0;
@@ -273,6 +277,45 @@ function handleWsMessage(event) {
 }
 
 connection.connectWs();
+
+const modal = document.getElementById('chat-modal');
+const modalBackdrop = document.getElementById('chat-modal-backdrop');
+const modalCancel = document.getElementById('chat-modal-cancel');
+const modalConfirm = document.getElementById('chat-modal-confirm');
+
+function openConfirmModal() {
+  return new Promise((resolve) => {
+    const close = (result) => {
+      modal.hidden = true;
+      modalConfirm.removeEventListener('click', onConfirm);
+      modalCancel.removeEventListener('click', onCancel);
+      modalBackdrop.removeEventListener('click', onCancel);
+      document.removeEventListener('keydown', onKey);
+      resolve(result);
+    };
+    const onConfirm = () => close(true);
+    const onCancel  = () => close(false);
+    const onKey = (e) => {
+      if (e.key === 'Escape') onCancel();
+      if (e.key === 'Enter') onConfirm();
+    };
+    modalConfirm.addEventListener('click', onConfirm);
+    modalCancel.addEventListener('click', onCancel);
+    modalBackdrop.addEventListener('click', onCancel);
+    document.addEventListener('keydown', onKey);
+    modal.hidden = false;
+    modalConfirm.focus();
+  });
+}
+
+document.getElementById('chat-empty-link').addEventListener('click', async () => {
+  if (!(await openConfirmModal())) return;
+  const label = '🗺️  Set up my CRM from scratch';
+  if (!connection.safeSend({ content: 'FULL_SETUP', display: label })) return;
+  appendMessage('user', label);
+  hasUserMessage = true;
+  historyApi.refreshHistoryIfOpen();
+});
 
 function appendChoices(content, options, seq = ++seqCounter) {
   const wrap = document.createElement('div');
