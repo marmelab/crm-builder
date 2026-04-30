@@ -37,9 +37,12 @@ wss.on('connection', async (ws, req) => {
 
   let runtime = runtimes.get(session.id);
   const joining = !!runtime;
-  // `session.messages` holds a fresh snapshot read just now from the log —
-  // always send these on init (the runtime's own `session.messages` would
-  // be the stale snapshot from when the runtime was first opened).
+  // `session.timeline` is a fresh snapshot read just now from the log —
+  // always send it on init (the runtime's snapshot would be stale by the
+  // time another tab joins). The timeline interleaves messages and debug
+  // events in chronological order, so a refreshed tab paints them in the
+  // same positions a live-connected tab saw them.
+  const freshTimeline = session.timeline || [];
   const freshMessages = session.messages;
   if (!runtime) {
     runtime = createRuntime(session);
@@ -62,6 +65,13 @@ wss.on('connection', async (ws, req) => {
     sessionId: runtime.session.id,
     title: runtime.session.meta.title,
     state: runtime.session.meta.state || 'in_progress',
+    // Chronological interleave of messages and debug events — replaces the
+    // separate `messages` + `debugEvents` fields. The client renders items in
+    // order so debugs sit between the messages they happened between, not
+    // bunched at the end after a refresh.
+    timeline: freshTimeline,
+    // `messages` is kept for back-compat with any older client; the new
+    // client ignores it when `timeline` is present.
     messages: freshMessages,
     // Messages currently waiting in the queue are persisted in the log like
     // any other user message; the "waiting" badge is a pure client-side

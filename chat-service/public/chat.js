@@ -192,13 +192,39 @@ function handleWsMessage(event) {
     display.setDisplayedTitle(msg.title || 'New session');
     display.setDisplayedState(msg.state || 'in_progress');
     clearMessageNodes();
-    const list = msg.messages || [];
+    // Prefer the chronological timeline; fall back to the legacy split fields
+    // if the server didn't send one (older deploy).
+    const timeline = Array.isArray(msg.timeline) && msg.timeline.length
+      ? msg.timeline
+      : [
+          ...(msg.messages || []).map((m) => ({ kind: 'message', role: m.role, content: m.content })),
+          ...(msg.debugEvents || []).map((d) => ({ kind: 'debug', ...d })),
+        ];
+    // Tail user messages still in the queue: walk the timeline backwards and
+    // mark the last N user-message items as queued (queue holds user-only).
     const queuedIdx = new Set();
     let remaining = msg.queuedCount || 0;
-    for (let i = list.length - 1; i >= 0 && remaining > 0; i--) {
-      if (list[i].role === 'user') { queuedIdx.add(i); remaining--; }
+    for (let i = timeline.length - 1; i >= 0 && remaining > 0; i--) {
+      const it = timeline[i];
+      if (it.kind === 'message' && it.role === 'user') {
+        queuedIdx.add(i);
+        remaining--;
+      }
     }
-    list.forEach((m, i) => appendMessage(m.role, m.content, { queued: queuedIdx.has(i) }));
+    timeline.forEach((it, i) => {
+      if (it.kind === 'message') {
+        appendMessage(it.role, it.content, { queued: queuedIdx.has(i) });
+        return;
+      }
+      // Debug event — buffer it so a later debug-toggle ON can replay it,
+      // and render now if debug is already ON.
+      const s = ++seqCounter;
+      pushDebugEvent({ msg: it, seq: s });
+      if (debugMode) {
+        if (it.type === 'debug') appendDebug(it.tool, it.input, it.agent, s);
+        else if (it.type === 'debug_raw') renderDebugRaw(it, s);
+      }
+    });
     if (msg.working) {
       working = true;
       renderWorkingUi();

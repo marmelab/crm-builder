@@ -31,5 +31,3 @@
 * on unMount on supprime la NouvelleDiscussion ? Est ce que ça fonctionne au refresh aussi ?
 
 * enlever silent-mode-check
-
-* le debug mode fonctionne mal avec le mode multi-session

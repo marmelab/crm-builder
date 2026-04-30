@@ -9,27 +9,74 @@ import { LOG_DIR, UUID_RE, ALLOWED_STATES } from './config.js';
 // claudeSessionId) so the listing page doesn't have to parse every log.
 // Visible messages (user + assistant) are derived from log.jsonl on demand.
 
+// Cap on debug events replayed to a (re)joining client. Matches the client's
+// in-memory buffer cap (chat-service/public/chat.js: DEBUG_BUFFER_MAX) so a
+// freshly-joined tab toggling debug ON sees the same depth as a tab that
+// stayed connected through the turn.
+const DEBUG_REPLAY_MAX = 1000;
+
 export function digestLog(logText) {
-  const messages = [];
+  // Single chronological timeline — message and debug entries appear in the
+  // exact order they were logged so a (re)joining client can replay them
+  // faithfully (instead of dumping debugs at the end).
+  // Items are tagged: { kind: 'message', role, content, ts } or
+  //                   { kind: 'debug', type: 'debug'|'debug_raw', ... }.
+  const timeline = [];
+  // Indices into `timeline` for the debug entries, used to drop the oldest
+  // debug items (without touching messages) when DEBUG_REPLAY_MAX is exceeded.
+  // Dropped slots are marked null; we filter once at the end.
+  const debugSlots = [];
+  let droppedAny = false;
   let tokensUsed = 0;
   let costUsd = 0;
+
+  const trackDebug = () => {
+    debugSlots.push(timeline.length - 1);
+    if (debugSlots.length > DEBUG_REPLAY_MAX) {
+      const drop = debugSlots.shift();
+      timeline[drop] = null;
+      droppedAny = true;
+    }
+  };
+
   for (const line of logText.split('\n')) {
     if (!line) continue;
     let entry;
     try { entry = JSON.parse(line); } catch { continue; }
     if (entry.dir === 'in' && entry.type === 'user_message') {
-      messages.push({ role: 'user', content: entry.display || entry.content || '', ts: entry.ts });
+      timeline.push({ kind: 'message', role: 'user', content: entry.display || entry.content || '', ts: entry.ts });
     } else if (entry.dir === 'out' && entry.type === 'message' && entry.role === 'assistant') {
-      messages.push({ role: 'assistant', content: entry.content || '', ts: entry.ts });
-    } else if (entry.dir === 'out' && entry.type === 'debug_raw' && entry.event?.type === 'result') {
-      // Each result event is end-of-spawn; total_cost_usd is the cumulative cost
-      // for that spawn, so summing per-result is correct (one result per spawn).
-      const u = entry.event.usage || {};
-      tokensUsed += (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.output_tokens || 0);
-      costUsd += entry.event.total_cost_usd || 0;
+      timeline.push({ kind: 'message', role: 'assistant', content: entry.content || '', ts: entry.ts });
+    } else if (entry.dir === 'out' && entry.type === 'debug_raw') {
+      if (entry.event?.type === 'result') {
+        // Each result event is end-of-spawn; total_cost_usd is the cumulative cost
+        // for that spawn, so summing per-result is correct (one result per spawn).
+        const u = entry.event.usage || {};
+        tokensUsed += (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.output_tokens || 0);
+        costUsd += entry.event.total_cost_usd || 0;
+      }
+      timeline.push({ kind: 'debug', type: 'debug_raw', event: entry.event });
+      trackDebug();
+    } else if (entry.dir === 'out' && entry.type === 'debug') {
+      timeline.push({ kind: 'debug', type: 'debug', tool: entry.tool, input: entry.input, agent: entry.agent });
+      trackDebug();
     }
   }
-  return { messages, stats: { tokensUsed, costUsd } };
+
+  const cleanTimeline = droppedAny ? timeline.filter((x) => x !== null) : timeline;
+  // Back-compat views — same data, just split by kind. Existing callers
+  // (readMessages, runtime stats hydration, tests) keep working unchanged.
+  const messages = [];
+  const recentDebug = [];
+  for (const it of cleanTimeline) {
+    if (it.kind === 'message') {
+      messages.push({ role: it.role, content: it.content, ts: it.ts });
+    } else {
+      if (it.type === 'debug_raw') recentDebug.push({ type: 'debug_raw', event: it.event });
+      else recentDebug.push({ type: 'debug', tool: it.tool, input: it.input, agent: it.agent });
+    }
+  }
+  return { messages, recentDebug, timeline: cleanTimeline, stats: { tokensUsed, costUsd } };
 }
 
 export async function readDigest(id) {
@@ -37,7 +84,7 @@ export async function readDigest(id) {
     const raw = await readFile(`${LOG_DIR}/${id}/log.jsonl`, 'utf8');
     return digestLog(raw);
   } catch {
-    return { messages: [], stats: { tokensUsed: 0, costUsd: 0 } };
+    return { messages: [], recentDebug: [], timeline: [], stats: { tokensUsed: 0, costUsd: 0 } };
   }
 }
 
@@ -51,6 +98,8 @@ export async function openSession(requestedId) {
   let meta = null;
   let isNew = false;
   let messages = [];
+  let recentDebug = [];
+  let timeline = [];
   let stats = { tokensUsed: 0, costUsd: 0 };
 
   if (id) {
@@ -58,6 +107,8 @@ export async function openSession(requestedId) {
       meta = JSON.parse(await readFile(`${LOG_DIR}/${id}/meta.json`, 'utf8'));
       const digest = await readDigest(id);
       messages = digest.messages;
+      recentDebug = digest.recentDebug;
+      timeline = digest.timeline;
       stats = digest.stats;
     } catch {
       id = null;
@@ -91,6 +142,13 @@ export async function openSession(requestedId) {
     isNew,
     get meta() { return meta; },
     messages,
+    // Debug events of the session (sliding window, capped) — kept for callers
+    // that don't care about chronological ordering.
+    recentDebug,
+    // Chronologically-ordered interleave of messages and debug events. Used
+    // by the init frame so a refresh paints debugs in their original position
+    // relative to the surrounding messages, not bunched at the end.
+    timeline,
     // Cumulative tokens/cost reconstructed from the log so the inline ticker
     // survives a runtime teardown (last tab closed) and a page refresh.
     stats,
