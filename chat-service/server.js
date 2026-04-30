@@ -81,6 +81,18 @@ wss.on('connection', async (ws, req) => {
   // Send the current progress snapshot so a (re)joining tab paints the
   // counter immediately instead of waiting for the next merge / write event.
   sendProgress(runtime).catch(() => {});
+  // Repaint the cumulative tokens/cost ticker on (re)connect — runtime.stats
+  // is seeded from the log digest, but resetChatUi just cleared the DOM.
+  // Skip when there's nothing to show (fresh session) to avoid a "0 tokens
+  // · $0.000" flash before the first turn lands.
+  if (runtime.stats.tokensUsed > 0 || runtime.stats.costUsd > 0) {
+    sendToWs(ws, {
+      type: 'stats',
+      tokensUsed: runtime.stats.tokensUsed,
+      costUsd: runtime.stats.costUsd + runtime.stats.costUsdCurrentSpawn,
+      activeAgents: runtime.stats.activeAgents,
+    });
+  }
 
   ws.on('message', (data) => {
     let parsed;

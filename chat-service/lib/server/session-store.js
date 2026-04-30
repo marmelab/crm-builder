@@ -9,28 +9,40 @@ import { LOG_DIR, UUID_RE, ALLOWED_STATES } from './config.js';
 // claudeSessionId) so the listing page doesn't have to parse every log.
 // Visible messages (user + assistant) are derived from log.jsonl on demand.
 
-function messagesFromLog(logText) {
-  const out = [];
+function digestLog(logText) {
+  const messages = [];
+  let tokensUsed = 0;
+  let costUsd = 0;
   for (const line of logText.split('\n')) {
     if (!line) continue;
     let entry;
     try { entry = JSON.parse(line); } catch { continue; }
     if (entry.dir === 'in' && entry.type === 'user_message') {
-      out.push({ role: 'user', content: entry.display || entry.content || '', ts: entry.ts });
+      messages.push({ role: 'user', content: entry.display || entry.content || '', ts: entry.ts });
     } else if (entry.dir === 'out' && entry.type === 'message' && entry.role === 'assistant') {
-      out.push({ role: 'assistant', content: entry.content || '', ts: entry.ts });
+      messages.push({ role: 'assistant', content: entry.content || '', ts: entry.ts });
+    } else if (entry.dir === 'out' && entry.type === 'debug_raw' && entry.event?.type === 'result') {
+      // Each result event is end-of-spawn; total_cost_usd is the cumulative cost
+      // for that spawn, so summing per-result is correct (one result per spawn).
+      const u = entry.event.usage || {};
+      tokensUsed += (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.output_tokens || 0);
+      costUsd += entry.event.total_cost_usd || 0;
     }
   }
-  return out;
+  return { messages, stats: { tokensUsed, costUsd } };
+}
+
+export async function readDigest(id) {
+  try {
+    const raw = await readFile(`${LOG_DIR}/${id}/log.jsonl`, 'utf8');
+    return digestLog(raw);
+  } catch {
+    return { messages: [], stats: { tokensUsed: 0, costUsd: 0 } };
+  }
 }
 
 export async function readMessages(id) {
-  try {
-    const raw = await readFile(`${LOG_DIR}/${id}/log.jsonl`, 'utf8');
-    return messagesFromLog(raw);
-  } catch {
-    return [];
-  }
+  return (await readDigest(id)).messages;
 }
 
 export async function openSession(requestedId) {
@@ -39,11 +51,14 @@ export async function openSession(requestedId) {
   let meta = null;
   let isNew = false;
   let messages = [];
+  let stats = { tokensUsed: 0, costUsd: 0 };
 
   if (id) {
     try {
       meta = JSON.parse(await readFile(`${LOG_DIR}/${id}/meta.json`, 'utf8'));
-      messages = await readMessages(id);
+      const digest = await readDigest(id);
+      messages = digest.messages;
+      stats = digest.stats;
     } catch {
       id = null;
       meta = null;
@@ -76,6 +91,9 @@ export async function openSession(requestedId) {
     isNew,
     get meta() { return meta; },
     messages,
+    // Cumulative tokens/cost reconstructed from the log so the inline ticker
+    // survives a runtime teardown (last tab closed) and a page refresh.
+    stats,
     logWrite: (dir, data) =>
       logStream.write(JSON.stringify({ ts: new Date().toISOString(), dir, ...data }) + '\n'),
     // Record that a visible message has just been appended to the log (meta side effects only).

@@ -36,12 +36,6 @@ let debugMode = false;
 let hasUserMessage = false;
 let statsMode = false;
 
-function updateStatsBtnVisibility() {
-  if (!hasUserMessage) { statsBtn.hidden = true; return; }
-  statsBtn.hidden = false;
-  statsBtn.disabled = working;
-}
-
 let seqCounter = 0;
 
 // Capped: an orchestrator turn emits hundreds of debug_raw frames; without a
@@ -204,7 +198,6 @@ function handleWsMessage(event) {
       renderWorkingUi();
     }
     hasUserMessage = list.some((m) => m.role === 'user');
-    updateStatsBtnVisibility();
     historyApi.refreshHistoryIfOpen();
     return;
   }
@@ -232,7 +225,7 @@ function handleWsMessage(event) {
       }
     }
     renderWorkingUi();
-    updateStatsBtnVisibility();
+    if (statsMode && wasWorking !== working) scheduleStatsPanelRefresh();
     return;
   }
 
@@ -252,6 +245,7 @@ function handleWsMessage(event) {
     const agents = msg.activeAgents || 0;
     const agentsPart = agents > 0 ? `🤖 ${agents} · ` : '';
     stats.textContent = `${agentsPart}${formatTokens(msg.tokensUsed)} tokens · $${msg.costUsd.toFixed(3)}`;
+    if (statsMode) scheduleStatsPanelRefresh();
     return;
   }
 
@@ -307,7 +301,6 @@ function appendChoices(content, options, seq = ++seqCounter) {
       wrap.remove();
       appendMessage('user', label);
       hasUserMessage = true;
-      updateStatsBtnVisibility();
       historyApi.refreshHistoryIfOpen();
     });
     wrap.appendChild(btn);
@@ -558,7 +551,6 @@ form.addEventListener('submit', (e) => {
   input.value = '';
   input.style.height = 'auto';
   hasUserMessage = true;
-  updateStatsBtnVisibility();
 });
 
 // Close the chat widget. The sessions sidebar stays visible — clicking a
@@ -583,6 +575,41 @@ debugBtn.addEventListener('click', () => {
   }
 });
 
+const STATS_REFRESH_MIN_INTERVAL_MS = 2000;
+let statsRefreshing = false;
+let statsRefreshPendingTimer = null;
+let statsLastRefreshAt = 0;
+
+async function refreshStatsPanel() {
+  if (!statsMode) return;
+  const sessionId = display.getSessionId();
+  if (!sessionId) return;
+  if (statsRefreshing) return;
+  statsRefreshing = true;
+  statsLastRefreshAt = Date.now();
+  try {
+    const res = await fetch(`/api/stats?sessionId=${encodeURIComponent(sessionId)}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (statsMode) renderStatsPanel(statsPanelBody, data);
+  } catch (_err) {
+    // Silent on background refresh — keep the previously-rendered panel visible.
+  } finally {
+    statsRefreshing = false;
+  }
+}
+
+function scheduleStatsPanelRefresh() {
+  if (!statsMode) return;
+  if (statsRefreshPendingTimer) return;
+  const since = Date.now() - statsLastRefreshAt;
+  const delay = Math.max(0, STATS_REFRESH_MIN_INTERVAL_MS - since);
+  statsRefreshPendingTimer = setTimeout(() => {
+    statsRefreshPendingTimer = null;
+    refreshStatsPanel();
+  }, delay);
+}
+
 async function enterStatsMode() {
   if (!display.getSessionId()) return;
   statsMode = true;
@@ -596,6 +623,7 @@ async function enterStatsMode() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     renderStatsPanel(statsPanelBody, data);
+    statsLastRefreshAt = Date.now();
   } catch (err) {
     const retry = el('button', { id: 'stats-retry-btn', onclick: enterStatsMode }, 'Retry');
     const back  = el('button', { id: 'stats-back-btn',  onclick: exitStatsMode  }, '← Close');
@@ -610,6 +638,10 @@ function exitStatsMode() {
   statsPanelBody.replaceChildren();
   statsBtn.classList.remove('stats-active');
   statsBtn.title = 'Session stats';
+  if (statsRefreshPendingTimer) {
+    clearTimeout(statsRefreshPendingTimer);
+    statsRefreshPendingTimer = null;
+  }
 }
 
 statsBtn.addEventListener('click', () => {
