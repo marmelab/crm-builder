@@ -32,11 +32,4 @@
 
 * enlever silent-mode-check
 
-* Si j'envoie un message sans cliquer sur "Make a quick change/Set up from scratch", les boutons devraient disparaitre
-
 * le debug mode fonctionne mal avec le mode multi-session
-
-"No saved sessions." n'est pas centré dans "history-list"
-
-* dans le "chat-history-panel" en mode "collapsed", je veux un nouveau bouton. L'icone sera une icone de message.
-* Ce bouton ouvrira une petite pop-up avec les 5 derniere conversations. ça me choisir rapidement l'une de ces conversations

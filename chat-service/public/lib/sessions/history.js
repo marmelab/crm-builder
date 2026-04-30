@@ -58,5 +58,5 @@ export function initHistory({ historyPanel, historyList, historyEmpty, getSessio
 
   loadHistory();
 
-  return { refreshHistory };
+  return { refreshHistory, renderHistoryItem };
 }

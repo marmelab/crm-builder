@@ -89,6 +89,43 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
 #chat-history-panel.collapsed .history-logo { display: none; }
 #chat-history-panel.collapsed #chat-new { justify-content: center; padding: 10px 0; }
 
+#history-recent-btn {
+  display: none;
+  align-items: center; justify-content: center;
+  width: 100%; padding: 10px 0;
+  background: none; border: none;
+  border-bottom: 1px solid #2c2c2e;
+  color: #8e8e93; cursor: pointer;
+  transition: background .15s, color .15s;
+}
+#history-recent-btn:hover { background: #2c2c2e; color: #fff; }
+#history-recent-btn svg { display: block; }
+#chat-history-panel.collapsed #history-recent-btn { display: flex; }
+
+#history-recent-popup {
+  position: fixed; z-index: 300;
+  left: calc(var(--sidebar-width) + 6px);
+  width: 280px; max-height: 60vh;
+  background: #1c1c1e; border: 1px solid #3a3a3c; border-radius: 10px;
+  box-shadow: 0 10px 40px rgba(0,0,0,.6);
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+#history-recent-popup[hidden] { display: none; }
+#history-recent-popup-header {
+  padding: 10px 14px; border-bottom: 1px solid #2c2c2e;
+  font-weight: 600; color: #f2f2f7; font-size: 13px;
+  flex-shrink: 0;
+}
+#history-recent-list {
+  list-style: none; overflow-y: auto; padding: 6px 0; margin: 0;
+  flex: 1;
+}
+#history-recent-empty {
+  padding: 18px; color: #636366; font-size: 12px; text-align: center;
+}
+#history-recent-empty[hidden] { display: none; }
+
 /* Stop button — same shape/footprint as #chat-send, takes its place inside
    #chat-form whenever a Claude turn is in progress. */
 #chat-stop {

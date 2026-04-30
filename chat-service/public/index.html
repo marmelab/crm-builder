@@ -65,8 +65,17 @@
       <span class="chat-new-icon">✚</span>
       <span class="chat-new-label">New session</span>
     </button>
+    <button id="history-recent-btn" title="Recent sessions" aria-label="Show recent sessions">
+      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+    </button>
     <ul id="history-list"></ul>
     <div id="history-empty" hidden>No saved sessions.</div>
+  </div>
+
+  <div id="history-recent-popup" hidden role="dialog" aria-label="Recent sessions">
+    <div id="history-recent-popup-header">Recent sessions</div>
+    <ul id="history-recent-list"></ul>
+    <div id="history-recent-empty" hidden>No saved sessions.</div>
   </div>
 
   <div id="chat-modal" hidden role="dialog" aria-modal="true" aria-labelledby="chat-modal-title">

@@ -11,6 +11,10 @@ const historyPanel = document.getElementById('chat-history-panel');
 const historyCollapseBtn = document.getElementById('history-collapse');
 const historyList = document.getElementById('history-list');
 const historyEmpty = document.getElementById('history-empty');
+const historyRecentBtn = document.getElementById('history-recent-btn');
+const historyRecentPopup = document.getElementById('history-recent-popup');
+const historyRecentList = document.getElementById('history-recent-list');
+const historyRecentEmpty = document.getElementById('history-recent-empty');
 const chatTitle = document.getElementById('chat-title');
 const form     = document.getElementById('chat-form');
 const input    = document.getElementById('chat-input');
@@ -595,7 +599,56 @@ historyCollapseBtn.addEventListener('click', () => {
   historyCollapseBtn.title = collapsed ? 'Expand panel' : 'Collapse panel';
   historyCollapseBtn.setAttribute('aria-label', historyCollapseBtn.title);
   // Refreshes are skipped while collapsed; pull the latest list on expand.
-  if (!collapsed) historyApi.refreshHistory();
+  if (!collapsed) {
+    historyApi.refreshHistory();
+    closeRecentPopup();
+  }
+});
+
+function closeRecentPopup() {
+  historyRecentPopup.hidden = true;
+}
+
+async function openRecentPopup() {
+  // Anchor the popup vertically next to the trigger button.
+  const rect = historyRecentBtn.getBoundingClientRect();
+  historyRecentPopup.style.top = `${rect.top}px`;
+  try {
+    const res = await fetch('/api/sessions');
+    const list = await res.json();
+    historyRecentList.innerHTML = '';
+    const top5 = list.slice(0, 5);
+    if (top5.length === 0) {
+      historyRecentEmpty.hidden = false;
+    } else {
+      historyRecentEmpty.hidden = true;
+      top5.forEach((d) => {
+        const item = historyApi.renderHistoryItem(d);
+        item.addEventListener('click', closeRecentPopup);
+        historyRecentList.appendChild(item);
+      });
+    }
+    historyRecentPopup.hidden = false;
+  } catch (err) {
+    console.error('Failed to load recent sessions:', err);
+  }
+}
+
+historyRecentBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (historyRecentPopup.hidden) openRecentPopup();
+  else closeRecentPopup();
+});
+
+document.addEventListener('click', (e) => {
+  if (historyRecentPopup.hidden) return;
+  if (historyRecentPopup.contains(e.target)) return;
+  if (historyRecentBtn.contains(e.target)) return;
+  closeRecentPopup();
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !historyRecentPopup.hidden) closeRecentPopup();
 });
 
 // Debug toggle
