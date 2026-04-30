@@ -24,7 +24,18 @@ export function formatTokens(n) {
 }
 
 export function formatDuration(ms) {
-  return `${Math.round(ms / 1000)}s`;
+  if (ms <= 0) return '0s';
+  // Sub-second durations still show as "1s" so a tool call that actually ran
+  // (e.g. a 30ms Read) doesn't render as "0s".
+  const totalS = Math.max(1, Math.round(ms / 1000));
+  const s = totalS % 60;
+  const totalM = Math.floor(totalS / 60);
+  const m = totalM % 60;
+  const h = Math.floor(totalM / 60);
+  const pad = (n) => String(n).padStart(2, '0');
+  if (h > 0) return `${h}h ${pad(m)}m ${pad(s)}s`;
+  if (m > 0) return `${m}m ${pad(s)}s`;
+  return `${s}s`;
 }
 
 export function escapeHtml(s) {
