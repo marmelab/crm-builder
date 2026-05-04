@@ -51,6 +51,7 @@ for WT in $WORKTREES; do
   if [ $EXIT_CODE -ne 0 ]; then
     FAILED=1
     AGGREGATED_ERR+="=== unit-fn failed in $WT ===\n$(echo "$OUTPUT" | tail -40)\n\n"
+    echo "[$(date -Iseconds)] unit-fn FAIL wt=$WT EXIT=$EXIT_CODE" >> "$LOG"
   else
     echo "[$(date -Iseconds)] unit-fn OK wt=$WT" >> "$LOG"
   fi

@@ -676,6 +676,11 @@ function parseHookLine(line) {
   if (state === 'START') kind = 'start';
   else if (state === 'SKIP') kind = 'skip';
   else if (state === 'OK') kind = 'ok';
+  else if (state === 'FAIL') {
+    kind = 'fail';
+    const em = rest.match(/EXIT=(\d+)/);
+    exitCode = em ? Number(em[1]) : 2;
+  }
   else if (state.startsWith('EXIT=')) { kind = 'exit'; exitCode = Number(state.slice(5)); }
   return { ts, shortName, kind, exitCode, worktree, rest };
 }
@@ -698,22 +703,41 @@ async function readHooksLog(path, winStart, winEnd) {
 }
 
 function aggregateHooks(hookLines) {
-  const openByKey = new Map();
+  // A "run" is bracketed by START / EXIT in the log. Inside, the script logs
+  // per-worktree OK or FAIL lines (each with wt=…). We prefer those as
+  // executions because they carry the worktree info needed to attach hooks
+  // to the right phase in the timeline. The wrap-up EXIT line carries no
+  // worktree, so we only emit it as an execution when the run produced no
+  // per-worktree result (e.g. e2e, which doesn't loop on worktrees).
+  const openByName = new Map(); // shortName → { ts, sawPerWorktree }
   const execsByName = new Map();
   for (const line of hookLines) {
     const fullName = HOOK_NAME_MAP[line.shortName] || `${line.shortName}.sh`;
     if (!execsByName.has(fullName)) execsByName.set(fullName, []);
-    const key = `${line.shortName}|${line.worktree ?? '-'}`;
     if (line.kind === 'start') {
-      openByKey.set(key, line);
-    } else if (line.kind === 'exit') {
-      const start = openByKey.get(key) ?? openByKey.get(`${line.shortName}|-`);
+      openByName.set(line.shortName, { ts: line.ts, sawPerWorktree: false });
+    } else if (line.kind === 'ok' || line.kind === 'fail') {
+      const start = openByName.get(line.shortName);
+      if (start) start.sawPerWorktree = true;
       const startTs = start?.ts ?? line.ts;
-      openByKey.delete(key);
       execsByName.get(fullName).push({
-        ts: startTs, worktree: line.worktree ?? start?.worktree ?? null,
-        durationMs: msBetween(startTs, line.ts), exitCode: line.exitCode, tail: null,
+        ts: startTs,
+        worktree: line.worktree ?? null,
+        durationMs: msBetween(startTs, line.ts),
+        exitCode: line.kind === 'ok' ? 0 : (line.exitCode ?? 2),
+        tail: null,
       });
+    } else if (line.kind === 'exit') {
+      const start = openByName.get(line.shortName);
+      const startTs = start?.ts ?? line.ts;
+      openByName.delete(line.shortName);
+      if (!start?.sawPerWorktree) {
+        execsByName.get(fullName).push({
+          ts: startTs, worktree: line.worktree ?? null,
+          durationMs: msBetween(startTs, line.ts),
+          exitCode: line.exitCode, tail: null,
+        });
+      }
     } else if (line.kind === 'skip') {
       execsByName.get(fullName).push({
         ts: line.ts, worktree: line.worktree, durationMs: 0, exitCode: null, skip: true, tail: null,
@@ -740,7 +764,10 @@ function aggregateHooks(hookLines) {
 
 function extractWorktreeFromAgentPrompt(prompt) {
   if (typeof prompt !== 'string') return null;
-  const m = prompt.match(/WORKTREE_PATH=(\S+)/);
+  // SIMPLE flow uses `WORKTREE_PATH=…`; COMPLEX team prompts use `WORKTREE: …`.
+  // Match both so hook executions can be attached to the right phase regardless
+  // of which dispatch path produced the agent.
+  const m = prompt.match(/WORKTREE(?:_PATH)?[=:]\s*(\S+)/);
   return m ? m[1] : null;
 }
 

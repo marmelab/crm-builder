@@ -57,6 +57,7 @@ for WT in $WORKTREES; do
   if [ $EXIT_CODE -ne 0 ]; then
     FAILED=1
     AGGREGATED_ERR+="=== typecheck failed in $WT ===\n$(echo "$OUTPUT" | tail -20)\n\n"
+    echo "[$(date -Iseconds)] typecheck FAIL wt=$WT EXIT=$EXIT_CODE" >> "$LOG"
   else
     echo "[$(date -Iseconds)] typecheck OK wt=$WT" >> "$LOG"
   fi

@@ -41,6 +41,7 @@ for WT in $WORKTREES; do
   if [ $EXIT_CODE -ne 0 ]; then
     FAILED=1
     AGGREGATED_ERR+="=== prettier failed in $WT ===\n$(echo "$OUTPUT" | tail -15)\n\n"
+    echo "[$(date -Iseconds)] prettier FAIL wt=$WT EXIT=$EXIT_CODE" >> "$LOG"
   else
     echo "[$(date -Iseconds)] prettier OK wt=$WT" >> "$LOG"
   fi
