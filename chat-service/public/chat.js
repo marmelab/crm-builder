@@ -1,6 +1,6 @@
 import { el, formatTokens } from './lib/dom.js';
-import { renderStatsPanel } from './lib/stats/index.js';
-import { initConnection, initDisplay, initHistory } from './lib/sessions/index.js';
+import { renderStatsPanel, initStatsRefresh } from './lib/stats/index.js';
+import { initConnection, initDisplay, initHistory, openConfirmModal, initRecentPopup } from './lib/sessions/index.js';
 
 const widget   = document.getElementById('chat-widget');
 const toggle   = document.getElementById('chat-toggle');
@@ -11,10 +11,6 @@ const historyPanel = document.getElementById('chat-history-panel');
 const historyCollapseBtn = document.getElementById('history-collapse');
 const historyList = document.getElementById('history-list');
 const historyEmpty = document.getElementById('history-empty');
-const historyRecentBtn = document.getElementById('history-recent-btn');
-const historyRecentPopup = document.getElementById('history-recent-popup');
-const historyRecentList = document.getElementById('history-recent-list');
-const historyRecentEmpty = document.getElementById('history-recent-empty');
 const chatTitle = document.getElementById('chat-title');
 const form     = document.getElementById('chat-form');
 const input    = document.getElementById('chat-input');
@@ -256,7 +252,7 @@ function handleWsMessage(event) {
       }
     }
     renderWorkingUi();
-    if (statsMode && wasWorking !== working) scheduleStatsPanelRefresh();
+    if (statsMode && wasWorking !== working) statsRefresh.schedule();
     return;
   }
 
@@ -276,7 +272,7 @@ function handleWsMessage(event) {
     const agents = msg.activeAgents || 0;
     const agentsPart = agents > 0 ? `🤖 ${agents} · ` : '';
     stats.textContent = `${agentsPart}${formatTokens(msg.tokensUsed)} tokens · $${msg.costUsd.toFixed(3)}`;
-    if (statsMode) scheduleStatsPanelRefresh();
+    if (statsMode) statsRefresh.schedule();
     return;
   }
 
@@ -304,41 +300,6 @@ function handleWsMessage(event) {
 }
 
 connection.connectWs();
-
-const modal = document.getElementById('chat-modal');
-const modalBackdrop = document.getElementById('chat-modal-backdrop');
-const modalCancel = document.getElementById('chat-modal-cancel');
-const modalConfirm = document.getElementById('chat-modal-confirm');
-
-function openConfirmModal() {
-  return new Promise((resolve) => {
-    const close = (result) => {
-      modal.hidden = true;
-      modalConfirm.removeEventListener('click', onConfirm);
-      modalCancel.removeEventListener('click', onCancel);
-      modalBackdrop.removeEventListener('click', onCancel);
-      document.removeEventListener('keydown', onKey);
-      resolve(result);
-    };
-    const onConfirm = () => close(true);
-    const onCancel  = () => close(false);
-    const onKey = (e) => {
-      if (e.key === 'Escape') onCancel();
-      // Enter confirms only when focus is outside the modal buttons; if a
-      // button is focused, the browser's native click activation handles it
-      // (so Enter while tabbed to Cancel cancels, not confirms).
-      if (e.key === 'Enter' && document.activeElement !== modalCancel && document.activeElement !== modalConfirm) {
-        onConfirm();
-      }
-    };
-    modalConfirm.addEventListener('click', onConfirm);
-    modalCancel.addEventListener('click', onCancel);
-    modalBackdrop.addEventListener('click', onCancel);
-    document.addEventListener('keydown', onKey);
-    modal.hidden = false;
-    modalConfirm.focus();
-  });
-}
 
 document.getElementById('chat-empty-link').addEventListener('click', async () => {
   if (!(await openConfirmModal())) return;
@@ -640,6 +601,8 @@ function applySidebarCollapsed(collapsed) {
 // Restore the user's previous choice across reloads.
 applySidebarCollapsed(localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1');
 
+const recentPopup = initRecentPopup({ renderHistoryItem: historyApi.renderHistoryItem });
+
 historyCollapseBtn.addEventListener('click', () => {
   const collapsed = !historyPanel.classList.contains('collapsed');
   applySidebarCollapsed(collapsed);
@@ -647,61 +610,8 @@ historyCollapseBtn.addEventListener('click', () => {
   // Refreshes are skipped while collapsed; pull the latest list on expand.
   if (!collapsed) {
     historyApi.refreshHistory();
-    closeRecentPopup();
+    recentPopup.closeRecentPopup();
   }
-});
-
-function closeRecentPopup() {
-  historyRecentPopup.hidden = true;
-}
-
-async function openRecentPopup() {
-  // Anchor the popup vertically next to the trigger button.
-  const rect = historyRecentBtn.getBoundingClientRect();
-  historyRecentPopup.style.top = `${rect.top}px`;
-  try {
-    const res = await fetch('/api/sessions');
-    const list = await res.json();
-    historyRecentList.innerHTML = '';
-    const top5 = list.slice(0, 5);
-    if (top5.length === 0) {
-      historyRecentEmpty.hidden = false;
-    } else {
-      historyRecentEmpty.hidden = true;
-      top5.forEach((d) => {
-        const item = historyApi.renderHistoryItem(d);
-        item.addEventListener('click', closeRecentPopup);
-        historyRecentList.appendChild(item);
-      });
-    }
-    historyRecentPopup.hidden = false;
-  } catch (err) {
-    console.error('Failed to load recent sessions:', err);
-  }
-}
-
-historyRecentBtn.addEventListener('click', (e) => {
-  e.stopPropagation();
-  if (historyRecentPopup.hidden) openRecentPopup();
-  else closeRecentPopup();
-});
-
-document.addEventListener('click', (e) => {
-  if (historyRecentPopup.hidden) return;
-  if (historyRecentPopup.contains(e.target)) return;
-  if (historyRecentBtn.contains(e.target)) return;
-  closeRecentPopup();
-});
-
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && !historyRecentPopup.hidden) closeRecentPopup();
-});
-
-// `top` is computed from the trigger button's bounding rect at open time, so a
-// viewport resize would leave the popup floating — close it instead of trying
-// to re-anchor live.
-window.addEventListener('resize', () => {
-  if (!historyRecentPopup.hidden) closeRecentPopup();
 });
 
 // Debug toggle
@@ -722,40 +632,11 @@ debugBtn.addEventListener('click', () => {
   }
 });
 
-const STATS_REFRESH_MIN_INTERVAL_MS = 2000;
-let statsRefreshing = false;
-let statsRefreshPendingTimer = null;
-let statsLastRefreshAt = 0;
-
-async function refreshStatsPanel() {
-  if (!statsMode) return;
-  const sessionId = display.getSessionId();
-  if (!sessionId) return;
-  if (statsRefreshing) return;
-  statsRefreshing = true;
-  statsLastRefreshAt = Date.now();
-  try {
-    const res = await fetch(`/api/stats?sessionId=${encodeURIComponent(sessionId)}`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    if (statsMode) renderStatsPanel(statsPanelBody, data);
-  } catch (_err) {
-    // Silent on background refresh — keep the previously-rendered panel visible.
-  } finally {
-    statsRefreshing = false;
-  }
-}
-
-function scheduleStatsPanelRefresh() {
-  if (!statsMode) return;
-  if (statsRefreshPendingTimer) return;
-  const since = Date.now() - statsLastRefreshAt;
-  const delay = Math.max(0, STATS_REFRESH_MIN_INTERVAL_MS - since);
-  statsRefreshPendingTimer = setTimeout(() => {
-    statsRefreshPendingTimer = null;
-    refreshStatsPanel();
-  }, delay);
-}
+const statsRefresh = initStatsRefresh({
+  getSessionId: () => display.getSessionId(),
+  isStatsMode: () => statsMode,
+  panel: statsPanelBody,
+});
 
 async function enterStatsMode() {
   if (!display.getSessionId()) return;
@@ -770,7 +651,7 @@ async function enterStatsMode() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     renderStatsPanel(statsPanelBody, data);
-    statsLastRefreshAt = Date.now();
+    statsRefresh.markRefreshed();
   } catch (err) {
     const retry = el('button', { id: 'stats-retry-btn', onclick: enterStatsMode }, 'Retry');
     const back  = el('button', { id: 'stats-back-btn',  onclick: exitStatsMode  }, '← Close');
@@ -785,10 +666,7 @@ function exitStatsMode() {
   statsPanelBody.replaceChildren();
   statsBtn.classList.remove('stats-active');
   statsBtn.title = 'Session stats';
-  if (statsRefreshPendingTimer) {
-    clearTimeout(statsRefreshPendingTimer);
-    statsRefreshPendingTimer = null;
-  }
+  statsRefresh.clearPending();
 }
 
 statsBtn.addEventListener('click', () => {

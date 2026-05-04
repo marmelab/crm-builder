@@ -11,3 +11,5 @@ export function renderStatsPanel(panel, data) {
     renderErrorsRetriesSection(data),
   );
 }
+
+export { initStatsRefresh } from './refresh.js';
