@@ -8,7 +8,6 @@ tools:
   - Glob
   - Grep
   - SendMessage
-  - Skill
 skills:
   - e2e-conventions
 ---

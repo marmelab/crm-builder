@@ -339,11 +339,38 @@ function toolDetail(toolName, input) {
     case 'Grep': return `"${input.pattern ?? ''}"${input.path ? ' in ' + input.path : ''}`;
     case 'Glob': return input.pattern ?? null;
     case 'Skill': return input.skill ?? null;
+    case 'Agent':
+    case 'Task': return `${input.subagent_type || '?'}: ${(input.description || '').slice(0, 70)}`;
+    case 'TeamCreate': return `team=${input.team_name || '?'}`;
+    case 'TeamDelete': return `team=${input.team_name || '?'}`;
+    case 'SendMessage': return sendMessageDetail(input);
     default: return null;
   }
 }
 
-const SKIP_CHILD = new Set(['Agent', 'Task', 'TeamCreate', 'TeamDelete']);
+// SendMessage detail: highlight the verdict semantics so reviewers'
+// APPROVED/BLOCKED replies and devs' "ready, please review" pings stand out
+// in the timeline. Reduces guesswork when scanning the chronology.
+function sendMessageDetail(input) {
+  const to = input.to || '?';
+  const raw = input.message;
+  const text = typeof raw === 'string' ? raw : (raw && typeof raw === 'object' ? JSON.stringify(raw) : '');
+  const head = text.slice(0, 60);
+  let tag = '';
+  if (/shutdown_request/i.test(text)) tag = '🛑';
+  else if (/^APPROVED\b/i.test(text)) tag = '✅';
+  else if (/^BLOCKED\b/i.test(text) || /^RED\b/i.test(text)) tag = '❌';
+  else if (/^GREEN\b/i.test(text)) tag = '✅';
+  else if (/\bready\b.*\b(review|validate|merge)\b/i.test(text) || /^GO\b/.test(text)) tag = '📨';
+  else if (/^merged\s+TASK-/i.test(text) || /merge\s+failed/i.test(text)) tag = '🔀';
+  return `${tag ? tag + ' ' : ''}→ ${to}${head ? ' :: ' + head : ''}`;
+}
+
+// Tool calls excluded from per-phase children. Keep dispatch-control verbs
+// (Agent/Task/TeamCreate/TeamDelete) visible in the orchestrator timeline —
+// previously they were skipped, leaving an unexplained 1-2min gap between
+// the planner's reply and the first dev's GO.
+const SKIP_CHILD = new Set();
 
 function buildToolResultMap(events) {
   const m = new Map();

@@ -52,6 +52,12 @@ chown -R developer:developer /home/developer/.claude 2>/dev/null || true
 # Chat-service logs dir (bind-mounted in dev, needs developer write access)
 mkdir -p /chat-service/logs 2>/dev/null || true
 chmod 777 /chat-service/logs 2>/dev/null || true
+# hooks.log is touched/appended by dozens of subagent processes; ensure it
+# exists and is writable by `developer` so a stale root-owned file from a
+# previous troubleshooting session doesn't silently break logging.
+touch /chat-service/logs/hooks.log 2>/dev/null || true
+chown developer:developer /chat-service/logs/hooks.log 2>/dev/null || true
+chmod 664 /chat-service/logs/hooks.log 2>/dev/null || true
 
 # Runtime-generated docs (reflections) — bind-mounted from host ./crm-docs.
 # On a fresh host, the directory may be empty and owned by root (if Docker runs as

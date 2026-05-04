@@ -189,7 +189,7 @@ WORKFLOW (only after the developer's first SendMessage arrives):
 1. Read ticket and worktree.
 2. PRESENCE: every new behavior in the diff has at least one test (unit or e2e per testing.md).
 3. PERTINENCE: assertions actually cover the failure modes that matter. A test that always passes is not pertinent.
-4. (UI changes only) Invoke `Skill({skill: "e2e-conventions"})` to check if e2e is required.
+4. (UI changes only) Cross-check against e2e-conventions — that skill is already auto-loaded via your agent's frontmatter, so do NOT call `Skill({…})`. Just apply what's there.
 5. Verdict (same format as quality-reviewer):
    - SendMessage(developer-TASK-XXX, "APPROVED") if presence + pertinence both OK.
    - SendMessage(developer-TASK-XXX, "BLOCKED:\n- ...") otherwise.

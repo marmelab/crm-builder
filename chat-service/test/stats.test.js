@@ -93,14 +93,22 @@ test('aggregateSession: parallel-two-teams fixture has correct team assignments'
   assert.equal(bootstrap.teamName, null);
 });
 
-test('aggregateSession: orchestrator phase children exclude Agent/Task/Team* dispatches', async () => {
+test('aggregateSession: orchestrator phase children include Agent/Task/Team* dispatches', async () => {
+  // Dispatch-control tool calls (Agent, TeamCreate, TeamDelete) are now kept
+  // in the orchestrator timeline so the gap between planner reply and first
+  // GO is explained — they used to be skipped, leaving an unexplained ~2 min
+  // dead zone in the chronology.
   const out = await aggregateSession({
     sessionLogPath: fx('single-team-single-ticket.jsonl'),
     hooksLogPath: null,
     sessionId: 'sess-single',
   });
   const orch = out.phases.find((p) => p.kind === 'orchestrator');
-  assert.equal(orch.children.filter((c) => c.kind === 'tool_use').length, 0);
+  const toolNames = orch.children.filter((c) => c.kind === 'tool_use').map((c) => c.tool);
+  assert.ok(toolNames.includes('Agent') || toolNames.includes('Task'),
+    `expected Agent/Task in orchestrator children, got: ${toolNames.join(', ')}`);
+  assert.ok(toolNames.includes('TeamCreate'),
+    `expected TeamCreate in orchestrator children, got: ${toolNames.join(', ')}`);
 });
 
 test('aggregateSession: toolCounts ordered by count desc', async () => {

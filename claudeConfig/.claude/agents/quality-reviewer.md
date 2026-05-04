@@ -8,7 +8,6 @@ tools:
   - Glob
   - Bash
   - SendMessage
-  - Skill
 skills:
   - frontend-dev
   - backend-dev

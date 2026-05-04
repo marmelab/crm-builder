@@ -10,7 +10,10 @@ export function relLabelFactory(baseTs) {
   };
 }
 
-export const TOOL_ICON = { Read: '📖', Write: '✏️', Edit: '✏️', Bash: '⚡', Grep: '🔍', Glob: '🔍' };
+export const TOOL_ICON = {
+  Read: '📖', Write: '✏️', Edit: '✏️', Bash: '⚡', Grep: '🔍', Glob: '🔍',
+  Agent: '🚀', Task: '🚀', TeamCreate: '👥', TeamDelete: '🗑️', SendMessage: '💬',
+};
 export function toolIcon(name) { return TOOL_ICON[name] || '🔧'; }
 
 const TASK_ID_RE = /(TASK-\d{3,})/;
