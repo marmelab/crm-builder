@@ -949,6 +949,139 @@ A full-day pass on the chat UI: scrap the floating-widget-with-FAB shell in favo
 
 ---
 
+## Phase 34 — Agent-team peer-to-peer redesign + stats hardening + devcontainer + housekeeping (2026-04-28 → 2026-05-04, branch `fix/agent-teams-real-communication`)
+
+Long-running branch that started as a redesign of the agent-team coordination model and accumulated three more workstreams along the way: a structural infra refactor (single `/app` volume, hard-linked node_modules), a devcontainer for sandboxed dev, and a series of stats-panel fixes that surfaced once the new team flow exposed previously-hidden timing and attribution bugs. The branch was rebased onto `main` (Phase 33 / `refonte-UI`) at the end and the stats backend factored into a sequenced pipeline before merging.
+
+### Agent-team redesign — peer-to-peer flow, single shared team, single shared merger
+
+The previous orchestration was hub-and-spoke: every dev↔reviewer exchange went through `chat-orchestrator` as a broker. That model burned tokens, serialised parallel tickets through the lead's turn, and produced a 1-2 min latency per fix-cycle. The redesign moves to direct peer-to-peer communication with the lead spawning teams and stepping aside.
+
+Phase 0 of the redesign was a four-question empirical probe (Q1 message delivery, Q2 name@team addressing, Q3 `CLAUDE_SESSION_ID` visibility, Q4 hooks.log permissions) — see [docs/superpowers/runs/](docs/superpowers/runs/) for the artefacts. Two findings reshaped the plan:
+- **Q1b (deeper probe)**: the runtime auto-injects teammate replies as `<teammate-message>` blocks on the next user turn IF the lead yields after `SendMessage`. No polling, no inbox-reading. The skill v2 makes "yield turn after SendMessage" a hard rule.
+- **Q3**: `CLAUDE_SESSION_ID` is NOT exposed natively in the spawned process env. Required for the lead's filesystem cleanup of subagent transcripts. The chat-service now injects it via `claude-spawn.js` + new `lib/spawn-env.js`.
+
+Then the actual redesign:
+
+- **Layout v2 (peer-to-peer)** — `feat(skill): rewrite agent-team skill for peer-to-peer flow`. Lead spawns 4 agents per ticket with `name@team` addressing, sends ONE `go` message, dev↔reviewers fix-cycle directly. Lead does deterministic filesystem cleanup of subagent transcripts at end-of-wave.
+- **Mid-implementation pivot to Option C (single team, suffixed names)** — the runtime documents "one team per lead at a time, no nested teams" (https://code.claude.com/docs/en/agent-teams). The v2 layout (one team per ticket, multiple teams per wave) violates this. Option C: ONE shared `tickets` team for the whole wave, members addressed by deterministic suffixed names (`developer-TASK-001`, `quality-reviewer-TASK-001`, …). Each agent's spawn prompt carries `TASK_ID` and `COUNTERPARTS` so it only ever talks to its own ticket-pair and team-lead. Cross-ticket SendMessage is explicitly forbidden.
+- **Single shared merger across the wave** — multiple parallel mergers all serialise on `.git/index.lock` anyway. The merger becomes a singleton bare-named member of the shared team that loops over `ready: TASK-XXX` messages from any developer-TASK-XXX. Per-wave member count drops from `4N` to `3N+1`. Per-ticket abort no longer touches the merger.
+- **claude -p multi-turn behaviour empirically validated** — earlier suspicion of a "forced wrap-up" injection in `claude -p` was misattributed: the bare error message "Use requestShutdown to gracefully terminate teammates first" turned out to be the runtime's own `TeamDelete` payload, not a CLI injection. `claude -p` does support multi-turn yield natively for in-process teammates. The Agent SDK migration was deferred.
+- **Graceful team shutdown protocol** — Phase 3 of the skill is now a strict 5-step sequence: `SendMessage(shutdown_request)` to each member → yield turn (brief text, no tools) so replies arrive → next turn verify `shutdown_approved` from each → `TeamDelete({})` → cleanup. The "embryo" bug (run #6) where shutdown_approved replies landed unread because the lead never yielded was the motivation. Multiple iteration commits chased the failure modes (uppercase/lowercase team-dir picking, manual rm before vs after TeamDelete, etc.) — final shape codified in the skill + enforced by the new gating hook (below).
+
+**Why**: the previous broker model was both slow (every reviewer round-trip went `dev → orchestrator → reviewer → orchestrator → dev`, ~60s wasted per hop) and token-expensive (orchestrator had to read every dev/reviewer message). Direct peer-to-peer with a yielding lead halves both costs. Option C was forced by a runtime constraint discovered mid-implementation; the singleton merger is a secondary optimisation that fell out naturally once the team layout was unified.
+
+### New hook architecture (5 SubagentStop → 1 PreToolUse + 2 TeamDelete gates)
+
+The previous validation chain fired on `SubagentStop / developer` after every dev pause regardless of intent. With peer-to-peer flow, devs pause many times per ticket (after each commit, after each reviewer reply) — the hooks fired redundantly and bloated wall-clock by 60-150s per pause.
+
+- **PreToolUse / SendMessage `validate-before-review.sh`** — replaces the 5 `SubagentStop` hooks. Fires exactly once per fix-cycle: when the developer is about to `SendMessage` a reviewer or merger. Runs typecheck + prettier + unit-app + unit-functions + e2e against the dev's worktree (extracted from recipient suffix or message body). First failure exits 2 → SendMessage blocked → dev sees stderr as a `tool_use_error`.
+- **Per-worktree SHA cache** at `/tmp/validate-cache-<wt>.sha` short-circuits the chain when HEAD hasn't moved. Two consecutive SendMessages on the same commit (typical: dev pings quality-reviewer then test-validator) trigger one validation; the second hits the cache instantly.
+- **PreToolUse / TeamDelete `teamdelete-gate.sh`** — blocks `TeamDelete` if any non-lead member hasn't acknowledged shutdown (no `shutdown_approved` in the lead's inbox, or one is present but unread). Replaces the runtime's bare error with a pointer to the skill's Phase 3 protocol. 16 unit tests cover the resolution paths.
+- **PostToolUse / TeamDelete `teamdelete-cleanup.sh`** — silently removes residual `~/.claude/teams/<team>/` directory after a successful TeamDelete. The runtime removes `config.json` but leaves `inboxes/` on disk; the cleanup runs as bash (bypassing the tool-level `.claude/` permission gate) with strict regex on `team_name` to prevent path traversal. 10 unit tests.
+- **PreToolUse / Bash `block-orchestrator-merge.sh`** — blocks the orchestrator from running `git merge` / `git pull` / etc. (those are the merger's job). Catches a class of failures where the orchestrator would attempt to "help" by merging itself.
+- **PreToolUse / SendMessage `block-premature-shutdowns.sh`** — blocks `shutdown_request` before any merger report exists in the lead's inbox. Catches the bug where the orchestrator fires shutdowns right after the GO batch, before any work has happened.
+- **`jq` dependency removed** — `teamdelete-{cleanup,gate}.sh` and `validate-before-review.sh` parse stdin via `node -e` instead of `jq`. The image doesn't ship jq and adding it would be a new system dependency.
+- **Bench harness `chmod +x`** for `circuit-breaker.sh` and `prettier-on-stop.sh` (were missing).
+- **Hook tests wired into `make test`** — five `claudeConfig/.claude/hooks/test/*.test.sh` files (71 assertions in total) cover the contracts of `block-orchestrator-merge`, `block-premature-shutdowns`, `teamdelete-cleanup`, `teamdelete-gate`, and `validate-before-review`. New `make test-hooks` target loops `bash $$f` across them; `make test` now chains it after the chat-service unit tests so a hook-contract regression breaks the same target the bench harness uses.
+
+**Why**: the SubagentStop chain ran when work wasn't ready; the SendMessage chain runs when work is being handed off — semantically the right trigger. The per-worktree SHA cache turns a chain of redundant runs into a single one. The two TeamDelete hooks codify the graceful-shutdown invariant that took five iterations of skill rewriting to discover.
+
+### SIMPLE flow split from COMPLEX
+
+Single-developer cosmetic changes (a colour swap, a label edit, hide an element) don't need the full team — they need one Sonnet developer and a merger. Spawning 7 agents for a 1-line change was an order of magnitude overkill.
+
+- **New `simple-developer` agent** (Sonnet, narrower tools, scope-limited) for 1-file cosmetic changes. No team, no review, no reflection.
+- **`chat-orchestrator` state machine split**: STATE S-DEV → S-MERGE → S-DONE for SIMPLE; STATE A → B → C → D for COMPLEX (planner → wave → teardown).
+- **agent-team SKILL.md is COMPLEX-only**. The merger MERGE STEPS section is the authoritative source for both flows (SIMPLE-mode merger reads the same protocol).
+- **Centralised `validation-commands.md`** as the single source of truth for the "don't run validation manually" rule, replacing duplicated sections in dev / quality-reviewer / test-validator prompts.
+- **vitest watch-mode hang fix**: `run-unit-tests-{app,functions}.sh` now call `vitest run --config <X>` directly instead of `npm run test:unit:*`. The package.json script invokes vitest in watch mode by default; in non-TTY agent context, watch mode silently hangs at startup.
+- **Dev evaluates AWR per-issue** (`fix(agent-team): dev evaluates AWR per-issue instead of re-iterating cycle`) — APPROVED WITH RESERVATIONS now counts as an approval. The dev evaluates each warning the reviewer listed and decides per-issue: fix inline if clearly correct AND small, skip if nit / out-of-scope / explicitly tagged "not blocking". Skipped items move to reflection notes. Observed bug: TASK-002 of session 59680cde burned 2 cycles re-iterating on warnings the reviewer had explicitly tagged "not blocking".
+
+**Why**: separating SIMPLE from COMPLEX paid for itself on the bench — single-line cosmetic changes that used to take ~3 min and 7 agents now take ~45s and 2. AWR mishandling was a smaller leak (~5 min × occurrence) but had become routine in observed sessions.
+
+### Stats panel iteration (visibility upgrades + correctness fixes)
+
+The Phase 33 stats panel surfaced in production with the agent-team branch's runs, exposing several attribution and timing bugs:
+
+- **SendMessage-resume activations** (`fix(stats): index agent phases by task_id, group SendMessage-resume activations`) — agents resumed via SendMessage get a new `tool_use_id` but keep the same `task_id`. The previous indexing-by-tool_use_id created duplicate phases labelled 'unknown'. New shape: index by `task_id`, append to existing phase's `activations[]` instead of creating a new one. Frontend renders one `.stats-activation-band` per activation when there are multiple.
+- **COMPLEX subagents visible in dashboard** (`fix(stats+flow): COMPLEX subagents visible, accurate cost, idle reviewers`) — count `in_process_teammate` task_started events alongside `local_agent` so COMPLEX team members appear (not just orchestrator + planner). Group per-subagent transcripts by `(agentName, firstUuid)` and keep only the largest snapshot per group, fixing a 5-11× duplication that inflated ops/tokens.
+- **Cost summation bug** — `summary.costUsd` used to `+=` `result.total_cost_usd`, but that field is cumulative WITHIN a `claude -p` spawn — every result event reports the running total. With `--resume`, the same spawn issues many result events; summing them produced $265 instead of the real $14.69 (38 results in one session). Now `Math.max(costUsd, ev.total_cost_usd || 0)`.
+- **Orchestrator opsCount** (`fix(stats): exclude sub-agent tool_uses from orchestrator opsCount`) — sub-agent tool_uses carry `parent_tool_use_id` and were being double-counted (once in their phase via `task_notification.usage.tool_uses`, once in orchestrator). Now filtered.
+- **Robust session timing** (`fix(stats+hook): robust session timing, consistent active-time, SHA-cached gate`) — session bounds use only substantive events (`user_message`/`message`/`debug_raw`/`error`). Previously a tab-reopen `init` event 32 min after the last reply inflated `totalMs` from 17 min to 50 min. `workMs` now sums tool durations + bounded thinking gaps (<60s) between consecutive tools.
+- **Per-worktree hooks attached to phase children** (`fix(stats+hooks): wire hook fail/ok per-worktree to phase children`) — `assignHookExecsToPhases` was matching only `WORKTREE_PATH=…` but COMPLEX team prompts use `WORKTREE: …`; both forms now matched. Aggregator was ignoring per-worktree OK lines and the wrap-up `EXIT` line had no `wt=` info, so executions never carried a worktree → never attached. Now processes `kind='ok'` and `kind='fail'` as primary execs and only emits the wrap-up EXIT when no per-worktree events were seen (e2e). The 4 worktree-iterating scripts log `<name> FAIL wt=… EXIT=N` so failures carry worktree info.
+- **Per-worktree validation** (`fix(validation+stats+bench)`) — `validate-before-review` extracts `TASK-XXX` from recipient (or message body for `to=merger`) and exports `VALIDATE_WORKTREE`. Chained scripts (typecheck/prettier/unit-app/unit-fn) honour it instead of looping on all worktrees. One dev's broken tests no longer block parallel SendMessages from peers (observed in session 1055d1b5: 5 unit-app fails on TASK-006 froze 007/008).
+- **Per-session `hooks.log`** — covered in Phase 33 but with cleanup landing here: hook scripts write to `$CHAT_SESSION_DIR/hooks.log` instead of the global `/chat-service/logs/hooks.log`; `claude-spawn.js` exports the env var; `http-routes.js` builds a per-session `hooksLogPath`.
+- **Verdict-coloured SendMessage rows** (`feat(stats)` + `fix(stats)`) — `sendMessageVerdict` exports a structured `verdict` field on each child; `chronology.js` applies a `child-verdict-X` CSS class so BLOCKED / AWR / APPROVED / shutdown / ready / merger-report rows are coloured red / orange / green / red / blue / blue. Distinct `🟡` icon for APPROVED WITH RESERVATIONS.
+- **Show Agent/Task/TeamCreate/TeamDelete dispatches in timeline** (`fix(stats+agents): show dispatches in timeline, verdict icons, idle reviewers`) — these were skipped before, leaving a ~2 min unexplained dead zone in the orchestrator timeline between the planner's reply and the first GO. `toolDetail` produces useful summaries for each.
+- **Skip hooks hidden** — skipped hook rows (SHA cache hit, no-changes worktree, reflection-only diff) are noise in the per-phase chronology. The skip count is still tracked in the hooks aggregate for diagnostics. Now only `ok` and `fail` rows render.
+- **Children sorted chronologically** — hooks are pushed onto `phase.children` after tool_use/skill events, so without a final sort they appeared at the bottom of each phase row but with timestamps earlier than the trailing tools. One sort by `ts/startTs` after all aggregators populate children.
+- **Idle reviewers** — `quality-reviewer` / `test-validator` / `merger` explicitly idle on dispatch and wait for the developer's first SendMessage (NOT the team-lead's). Stops them exploring an empty worktree before the dev commits, which was burning ~50-100K tokens per reviewer per ticket.
+- **Reflection-writing skill capped at 1500 chars** with two sections (Gotchas + Reusable). Multi-page reflections were being skimmed and cost the writer 30-50s/ticket.
+- **Dependency waves section** (`feat(stats): dependency waves at top + colour-code blocked/awr/approved`) — loads `TASK-*.json` files from the session dir, computes wave numbers via topological sort (Kahn's), exposes `tickets` and `waves` arrays in the API response. Renders left-to-right column-per-wave layout with arrows between waves and a one-line verdict ("All N tickets run in parallel" / "Tickets serialized" / "N waves, max parallelism: M").
+- **Tasks pills folded into wave cards** (this conversation) — the summary section used to render a flat row of `🎫 TASK-XXX · 0:42 · 3 agents` pills. With waves at the top, the same data was in two places. The per-task figures (agents count, max-agent wallclock, error count) now inline as a third row under each wave card; the flat pill row is gone, and `.stats-team-row` / `.stats-team-pill` CSS rules with it.
+- **Consecutive duplicate assistant messages suppressed** (`fix(chat-service): suppress consecutive duplicate assistant messages`) — the COMPLEX orchestrator outputs a short status line at every STATE C wake-up. When Sonnet just repeats "Working on it..." on each wake (which it often does), a 4-ticket run can broadcast the same sentence 20+ times. Deduped at the broadcast step (and at persistence so the log is also cleaner); the next non-identical line still fires.
+
+### `chat-service/lib/stats.js` split into a sequenced pipeline
+
+Run as the final cleanup pass before merge: the file had grown to 1,177 lines (the project's coding-style cap is 800) and conflated event parsing, phase reconstruction, hook log correlation, subagent transcript loading, error/retry detection, and the top-level `aggregateSession` orchestrator. Split into a thin entry that sequences ten focused modules:
+
+| File | Responsibility | Lines |
+|---|---|---|
+| `lib/stats.js` | `aggregateSession` orchestrator + `buildTopAgents` / `buildTopToolCalls` | 159 |
+| `lib/stats/io.js` | JSONL reader, ms helpers, `tailPayload`, `computeSummary` | 55 |
+| `lib/stats/events.js` | Tool-use / tool-result extractors, ts indices, worktree-from-prompt | 73 |
+| `lib/stats/tools.js` | `toolDetail`, SendMessage verdict classification | 59 |
+| `lib/stats/teams.js` | `extractTeams`, color hashing | 35 |
+| `lib/stats/phases.js` | `extractPhases`, orchestrator phase, time breakdown, work-ms | 204 |
+| `lib/stats/children.js` | Per-phase tool-use children + stream gaps | 121 |
+| `lib/stats/subagents.js` | `~/.claude/projects/-app/<id>/subagents/` transcript loading | 185 |
+| `lib/stats/hooks.js` | `hooks.log` parser, aggregation, phase assignment | 156 |
+| `lib/stats/insights.js` | Skills + rules aggregation, error + retry detection | 129 |
+| `lib/stats/tickets.js` | `loadTicketsAndWaves` (TASK-*.json + Kahn) | 49 |
+
+All 65 unit tests pass unchanged — the boundaries follow the `aggregateSession` call order so the entry file reads top-down as the actual pipeline (compute summary → extract teams → extract phases → build orchestrator → populate children → derive workMs/breakdown → hooks → skills/rules → errors/retries → tickets). `http-routes.js` keeps its `await import('../stats.js')` import unchanged.
+
+**Why**: locating any one concern required scrolling past unrelated ones, and the file fought the 800-line cap. Modules now read independently and the entry file makes the data-flow legible at a glance.
+
+### Single-volume infra refactor (`crm-source` + `crm-worktrees` → `crm-app`)
+
+- **One `crm-app:/app` volume** replaces the previous `crm-source:/app/src` + `crm-git:/app/.git` + `crm-worktrees:/worktrees` triplet. Worktrees now live at `/app/worktrees` (gitignored at runtime) so `cp -al /app/node_modules /app/worktrees/<task>/node_modules` can hard-link on the same device — fixing the "Invalid cross-device link" failure that truncated worktree node_modules and broke typecheck/vitest validation.
+- **`cp -al` (hard links) instead of symlink** for worktree node_modules. A symlinked node_modules made vite's optimiser treat each worktree as a different project root and re-bundle every dependency on every vitest run. unit-app validation went from ~30s (run directly in `/app`) to 3+ minutes inside the bench. Hard links keep the worktree functionally identical to a real local copy and let vitest's cache stay valid.
+- **Side effects**: full `/app` persists across `docker compose down`. Entrypoint hash-checks `package-lock.json` (`/app/.npm-ci-hash`) to run `npm ci` only when an agent modifies deps; Dockerfile pre-writes the hash so the first boot skips it. `/worktrees` → `/app/worktrees` propagated through agents, agent-team skill, `worktree-scope.md` rule, hooks, and CLAUDE.md.
+
+**Why**: the multi-volume layout's worktrees lived on a different device than node_modules, so hard-linking was impossible — each worktree had to copy 500MB of dependencies, then the copies dropped vitest's cache anyway. The single volume turned a 4-minute-per-ticket validation into a 30-second one.
+
+### Devcontainer scaffolding (initial setup → cleanup)
+
+- **Initial setup** (`chore(devcontainer): add VSCode devcontainer setup`) — `.devcontainer/devcontainer.json` with `mcr.microsoft.com/devcontainers/typescript-node:1-22-bookworm` base, `docker-outside-of-docker` + `github-cli` features, three persistent mounts (`claude-crmbuilder-tooling` → `/home/node/.claude` for OAuth/sessions/memory, `crmbuilder-gh-config` → `/home/node/.config/gh` for `gh auth`, host's `~/.gitconfig` read-only bind for git identity). `post-create.sh` chowns mount points (Docker volumes ship as `root:root`), installs `@anthropic-ai/claude-code` globally, runs `npm install` in `chat-service/`, and seeds `~/.claude` from `.devcontainer/claude-seed/` only if empty (per-user `settings.json` and `memory/` are gitignored). README documents the volume strategy and the refresh-seed command.
+- **Cleanup pass (this conversation)** —
+  - `forwardPorts` + `portsAttributes` retired. VSCode auto-detects forwardable ports when a container binds them; the explicit declaration was pre-binding the ports via the dev-container forwarder, which conflicted with `docker compose up` (`address already in use`) and required a manual "Stop Forwarding Port" via the Ports panel before every demo run.
+  - `.devcontainer/claude-seed/statusline.py` removed (per-user customisation that didn't belong in a shared repo); `post-create.sh` lost the statusline copy block.
+  - `.devcontainer/README.md`: hard-coded `~/.claude/projects/-home-jerome-Work-crm-builder/...` path replaced with the portable `~/.claude/projects/"-$(pwd | tr / -)"/...` form, with a comment explaining Claude Code's `path → -slug` encoding so the README works for any contributor.
+
+**Why**: the dev container is the safe bet for working on this repo — Claude Code runs sandboxed (no host permission prompts on `Bash`), and the persistent volumes mean plugin installs / OAuth / memory survive rebuilds. The cleanup pass made it shareable instead of `jerome`-specific.
+
+### Other bits
+
+- **Bench harness env vars overridable** (`test(bench): make CONTAINER_NAME and TURN_TIMEOUT_MS overridable via env`) — `BENCH_CONTAINER` and `TURN_TIMEOUT_MS` exposed as env vars so the harness can run against an alternate container or under the new agent-team workflow (where even simple cases now spawn a full team and need more wallclock).
+- **`block-bash-validation.sh`** adds `simple-developer` to the block list (alongside `developer`, `quality-reviewer`, `test-validator`).
+- **`entrypoint.sh`** touches + chowns `hooks.log` at boot so a stale root-owned file from a troubleshooting session doesn't silently break hook logging.
+- **`quality-reviewer` + `test-validator` lose the `Skill` tool** — they were loading `agent-team` at runtime against the prompt's explicit ban. Their needed skills (`frontend-dev`/`backend-dev`/`e2e-conventions`) auto-load via the agent's frontmatter.
+
+### Merge of `refonte-UI` (Phase 33) into the agent-team branch
+
+Five conflicts, all resolved by keeping both sides' additions:
+- `chat-service/lib/stats.js` — combined main's `parent_tool_use_id` filter (excludes sub-agent tool_uses from the orchestrator's `opsCount`) with HEAD's token tracking from `result` events.
+- `chat-service/public/chat.css` — both rule blocks kept independently (`.phase-activations` and `#chat-modal`).
+- `chat-service/tests/run.js` — unified on `BENCH_CONTAINER` env var (matches `CLAUDE.md` docs); collapsed the two `CONTAINER` / `CONTAINER_NAME` constants into a single one used by both `resetCrmSource` and `captureDiff`.
+- `claudeConfig/.claude/settings.json` — all hooks merged into the right matchers (Bash gets both `block-orchestrator-merge` from HEAD and `restrict-documentator-bash` from main; `Write|Edit` matcher from main; `SendMessage` and `TeamDelete` matchers from HEAD; `PostToolUse / TeamDelete` cleanup from HEAD).
+- `docker-compose.yml` — kept HEAD's single-volume `crm-app` layout (Phase 31 refactor), added main's `./crm-docs:/app/docs` bind on both profiles so the host can inspect `docs/learnings/patterns.md` and reflections directly.
+
+`npm install` was needed after the merge to pull in `node-cron` (added by main for the documentator agent).
+
+---
+
 ## Open items / known limits
 
 - **`medium-new-field` test** times out at 15 min (bumped to 35 min). Real agent-team flow on a multi-file feature naturally takes 20-30 min.
@@ -962,4 +1095,4 @@ A full-day pass on the chat UI: scrap the floating-widget-with-FAB shell in favo
 
 ---
 
-_Last updated: 2026-05-01 (Phase 33)_
+_Last updated: 2026-05-04 (Phase 34)_

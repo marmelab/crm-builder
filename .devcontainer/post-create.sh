@@ -37,13 +37,6 @@ if [ ! -f "$CLAUDE_DIR/settings.json" ] && [ -f "$SEED_DIR/settings.json" ]; the
   echo "  - settings.json seeded"
 fi
 
-# Statusline: only seed if absent
-if [ ! -f "$CLAUDE_DIR/statusline.py" ] && [ -f "$SEED_DIR/statusline.py" ]; then
-  cp "$SEED_DIR/statusline.py" "$CLAUDE_DIR/statusline.py"
-  chmod +x "$CLAUDE_DIR/statusline.py"
-  echo "  - statusline.py seeded"
-fi
-
 # Memory: copy each file only if absent (preserve any new memory written in container)
 MEM_TARGET="$CLAUDE_DIR/projects/-workspaces-crm-builder/memory"
 if [ -d "$SEED_DIR/memory" ]; then

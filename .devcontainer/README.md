@@ -28,7 +28,7 @@ These volumes are **isolated from the host's `~/.claude`** — login/permissions
    - register `safe.directory` for git
    - install Claude Code globally
    - `npm install` in `chat-service/`
-   - seed `~/.claude` from `.devcontainer/claude-seed/` **only if empty** (settings, statusline, project memory)
+   - seed `~/.claude` from `.devcontainer/claude-seed/` **only if empty** (settings, project memory)
 4. Inside the container, run once:
    ```bash
    claude login        # OAuth, persisted in the volume
@@ -38,20 +38,21 @@ These volumes are **isolated from the host's `~/.claude`** — login/permissions
 
 ## The seed (`.devcontainer/claude-seed/`)
 
-Only used to populate the empty volume on first boot. After that, the live volume wins and the seed is ignored.
+Only used to populate the empty volume on first boot. After that, the live volume wins and the seed is ignored. Both files are per-user and gitignored — populate them locally before the first container build:
 
-| Path | Tracked in git? | Why |
-|---|---|---|
-| `claude-seed/settings.json` | ❌ gitignored | Per-user (plugin selection, theme, hooks) |
-| `claude-seed/memory/` | ❌ gitignored | Per-user (feedback, project notes) |
-| `claude-seed/statusline.py` | ✅ tracked | Generic, reusable across users |
+| Path | Why |
+|---|---|
+| `claude-seed/settings.json` | Per-user (plugin selection, theme, hooks) |
+| `claude-seed/memory/` | Per-user (feedback, project notes) |
 
-To refresh the seed from your host (e.g. after installing a new plugin you want to share with future containers):
+To refresh the seed from your host (e.g. after installing a new plugin you want to carry into future containers):
 
 ```bash
+mkdir -p .devcontainer/claude-seed/memory
 cp ~/.claude/settings.json .devcontainer/claude-seed/settings.json
-cp -L ~/.claude/statusline.py .devcontainer/claude-seed/statusline.py
-cp ~/.claude/projects/-home-jerome-Work-crm-builder/memory/*.md .devcontainer/claude-seed/memory/
+# Claude encodes the host repo path as the project memory dir name:
+#   /home/alice/code/crm-builder → -home-alice-code-crm-builder
+cp ~/.claude/projects/"-$(pwd | tr / -)"/memory/*.md .devcontainer/claude-seed/memory/
 ```
 
 ## Reset

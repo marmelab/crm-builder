@@ -35,15 +35,5 @@
     }
   },
 
-  "remoteUser": "node",
-
-  "forwardPorts": [5173, 7681, 8080, 6173, 7682, 9080],
-  "portsAttributes": {
-    "5173": { "label": "CRM (dev)" },
-    "8080": { "label": "Chat UI (dev)" },
-    "7681": { "label": "Claude terminal (dev)" },
-    "6173": { "label": "CRM (demo-tomorrow)" },
-    "9080": { "label": "Chat UI (demo-tomorrow)" },
-    "7682": { "label": "Claude terminal (demo-tomorrow)" }
-  }
+  "remoteUser": "node"
 }
