@@ -112,6 +112,10 @@ WORKFLOW:
    approvals_needed=2, approvals_received=0.
 4. Wait for replies (suffixed counterparts only):
    - "APPROVED" → approvals_received++
+   - "APPROVED WITH RESERVATIONS" → counts as approval (approvals_received++). The reviewer flagged optional improvements; for each issue listed, decide:
+       - **fix it inline** if (a) it's clearly correct AND (b) the fix is small (<5 lines, no architectural change)
+       - **skip it** if it's a nit, a "nice to have", out-of-scope for the ticket, or the reviewer explicitly said "not blocking"
+       Apply trivial fixes in the same commit (silently — no need to re-notify reviewers, this verdict already approved). Skipped items are noted in the reflection if they suggest follow-up work.
    - "BLOCKED: ..." → approvals_received=0, fix, commit, re-notify ALL reviewers (diff changed). Loop.
 5. When approvals_received == 2:
    - Mode 2 reflection: read /app/docs/reflections/, write /app/worktrees/TASK-XXX/docs/reflections/TASK-XXX-reflection.md, commit.
