@@ -2,7 +2,7 @@
 # SubagentStop hook — e2e tests.
 # Exit 2 on failure → stderr injected, subagent stays alive.
 
-LOG=/chat-service/logs/hooks.log
+LOG="$CHAT_SESSION_DIR/hooks.log"
 mkdir -p "$(dirname "$LOG")" 2>/dev/null
 STDIN=$(cat)
 echo "[$(date -Iseconds)] e2e START pwd=$(pwd) MODE=$MODE CLAUDE_PROJECT_DIR=$CLAUDE_PROJECT_DIR" >> "$LOG"

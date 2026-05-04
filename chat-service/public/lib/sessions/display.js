@@ -1,6 +1,6 @@
 import { STATE_LABELS } from './state-labels.js';
 
-export function initDisplay({ chatTitle, stateBtn, newBtn, switchSession, refreshHistoryIfOpen }) {
+export function initDisplay({ chatTitle, stateBtn, newBtn, switchSession, refreshHistory }) {
   let currentSessionId = null;
   let currentTitle = '';
 
@@ -39,7 +39,7 @@ export function initDisplay({ chatTitle, stateBtn, newBtn, switchSession, refres
       if (!res.ok) throw new Error('rename failed');
       const meta = await res.json();
       setDisplayedTitle(meta.title || 'New session');
-      refreshHistoryIfOpen();
+      refreshHistory();
     } catch (err) {
       console.error('Rename failed:', err);
     }

@@ -15,14 +15,20 @@
       <div id="chat-header-icon">✦</div>
       <span id="chat-title" title="Click to rename">CRM Assistant</span>
       <span id="chat-state" class="state-in_progress" aria-label="Session state"></span>
-      <button id="chat-stats-btn" hidden title="Session stats" aria-label="Show session statistics">📊</button>
-      <button id="chat-stop" title="Stop Claude" aria-label="Stop" hidden>⏹</button>
-      <button id="chat-debug" title="Debug OFF" aria-label="Toggle debug">🔍</button>
-      <button id="chat-expand" title="Expand" aria-label="Expand chat">⤢</button>
+      <button id="chat-stats-btn" title="Session stats" aria-label="Show session statistics">
+        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16v5"/><path d="M16 14v7"/><path d="M20 10v11"/><path d="m22 3-8.646 8.646a.5.5 0 0 1-.708 0L9.354 8.354a.5.5 0 0 0-.707 0L2 15"/><path d="M4 18v3"/><path d="M8 14v7"/></svg>
+      </button>
+      <button id="chat-debug" title="Debug OFF" aria-label="Toggle debug">
+        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20v-9"/><path d="M14 7a4 4 0 0 1 4 4v3a6 6 0 0 1-12 0v-3a4 4 0 0 1 4-4z"/><path d="M14.12 3.88 16 2"/><path d="M21 21a4 4 0 0 0-3.81-4"/><path d="M21 5a4 4 0 0 1-3.55 3.97"/><path d="M22 13h-4"/><path d="M3 21a4 4 0 0 1 3.81-4"/><path d="M3 5a4 4 0 0 0 3.55 3.97"/><path d="M6 13H2"/><path d="m8 2 1.88 1.88"/><path d="M9 7.13V6a3 3 0 1 1 6 0v1.13"/></svg>
+      </button>
       <button id="chat-toggle" aria-label="Toggle chat">✕</button>
     </div>
-    <div id="chat-messages"></div>
-    <div id="chat-stats-panel" hidden></div>
+    <div id="chat-messages">
+      <div id="chat-empty-state">
+        <button type="button" id="chat-empty-link" class="empty-link">Define your business</button>
+        <span class="empty-hint">to get better results</span>
+      </div>
+    </div>
     <form id="chat-form">
       <textarea
         id="chat-input"
@@ -30,25 +36,60 @@
         rows="1"
         autocomplete="off"
       ></textarea>
-      <button type="submit" id="chat-send" aria-label="Send">↑</button>
+      <button type="submit" id="chat-send" aria-label="Send">
+        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>
+      </button>
+      <button type="button" id="chat-stop" title="Stop Claude" aria-label="Stop" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+      </button>
     </form>
     <div id="chat-stats" title="Tokens and cost used in this session"></div>
   </div>
 
-  <div id="chat-actions">
-    <button id="chat-history" title="History" aria-label="Session history">📂</button>
-    <button id="chat-new" title="New session" aria-label="New session">✚</button>
-    <div id="chat-history-panel" hidden>
-      <div id="history-panel-header">
-        <span>Sessions</span>
-        <button id="history-close" aria-label="Close history">✕</button>
-      </div>
-      <ul id="history-list"></ul>
-      <div id="history-empty" hidden>No saved sessions.</div>
+  <aside id="chat-stats-panel" hidden aria-label="Session statistics">
+    <div id="chat-stats-panel-header">
+      <span>Session statistics</span>
+      <button id="chat-stats-close" title="Close stats" aria-label="Close stats">✕</button>
     </div>
+    <div id="chat-stats-panel-body"></div>
+  </aside>
+
+  <div id="chat-history-panel">
+    <div id="history-panel-header">
+      <img class="history-logo" src="/favicon.svg" alt="" width="24" height="24">
+      <button id="history-collapse" title="Collapse panel" aria-label="Collapse panel">
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/></svg>
+      </button>
+    </div>
+    <button id="chat-new" title="New session" aria-label="New session">
+      <span class="chat-new-icon">✚</span>
+      <span class="chat-new-label">New session</span>
+    </button>
+    <button id="history-recent-btn" title="Recent sessions" aria-label="Show recent sessions">
+      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+    </button>
+    <ul id="history-list"></ul>
+    <div id="history-empty" hidden>No saved sessions.</div>
   </div>
 
-  <button id="chat-fab" aria-label="Open assistant">✦</button>
+  <div id="history-recent-popup" hidden role="dialog" aria-label="Recent sessions">
+    <div id="history-recent-popup-header">Recent sessions</div>
+    <ul id="history-recent-list"></ul>
+    <div id="history-recent-empty" hidden>No saved sessions.</div>
+  </div>
+
+  <div id="chat-modal" hidden role="dialog" aria-modal="true" aria-labelledby="chat-modal-title">
+    <div id="chat-modal-backdrop"></div>
+    <div id="chat-modal-panel">
+      <div id="chat-modal-icon">✦</div>
+      <h2 id="chat-modal-title">Set up my CRM from scratch?</h2>
+      <p id="chat-modal-body">We'll start an interview to understand your business and build a complete plan.</p>
+      <div id="chat-modal-actions">
+        <button type="button" id="chat-modal-cancel" class="modal-btn modal-btn-secondary">Cancel</button>
+        <button type="button" id="chat-modal-confirm" class="modal-btn modal-btn-primary">Let's go</button>
+      </div>
+    </div>
+  </div>
 
   <script type="module" src="/chat.js"></script>
 </body>

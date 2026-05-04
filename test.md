@@ -29,3 +29,5 @@
 
 * lors ce qu'on quitte une session vides (vide = sans message utilisateur ou uniquement le message "quick modif"/"full setup") on doit la supprimer
 * on unMount on supprime la NouvelleDiscussion ? Est ce que ça fonctionne au refresh aussi ?
+
+* enlever silent-mode-check

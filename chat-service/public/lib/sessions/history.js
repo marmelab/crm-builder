@@ -1,16 +1,16 @@
 import { STATE_LABELS } from './state-labels.js';
 import { formatRelative } from '../dom.js';
 
-export function initHistory({ historyPanel, historyList, historyEmpty, historyBtn, historyClose, getSessionId, switchSession }) {
-  let historyRefreshTimer = null;
+export function initHistory({ historyPanel, historyList, historyEmpty, getSessionId, switchSession, closeDiscussion }) {
+  let refreshTimer = null;
 
-  function refreshHistoryIfOpen() {
-    if (historyPanel.hidden) return;
-    clearTimeout(historyRefreshTimer);
-    historyRefreshTimer = setTimeout(openHistory, 250);
+  function refreshHistory() {
+    if (historyPanel.classList.contains('collapsed')) return;
+    clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(loadHistory, 250);
   }
 
-  async function openHistory() {
+  async function loadHistory() {
     try {
       const res = await fetch('/api/sessions');
       const list = await res.json();
@@ -21,7 +21,6 @@ export function initHistory({ historyPanel, historyList, historyEmpty, historyBt
         historyEmpty.hidden = true;
         list.forEach((d) => historyList.appendChild(renderHistoryItem(d)));
       }
-      historyPanel.hidden = false;
     } catch (err) {
       console.error('Failed to load history:', err);
     }
@@ -49,7 +48,7 @@ export function initHistory({ historyPanel, historyList, historyEmpty, historyBt
 
     li.addEventListener('click', () => {
       if (d.id === getSessionId()) {
-        historyPanel.hidden = true;
+        closeDiscussion();
         return;
       }
       switchSession(d.id);
@@ -57,17 +56,7 @@ export function initHistory({ historyPanel, historyList, historyEmpty, historyBt
     return li;
   }
 
-  function closeHistory() {
-    clearTimeout(historyRefreshTimer);
-    historyRefreshTimer = null;
-    historyPanel.hidden = true;
-  }
+  loadHistory();
 
-  historyBtn.addEventListener('click', () => {
-    if (historyPanel.hidden) openHistory();
-    else closeHistory();
-  });
-  historyClose.addEventListener('click', closeHistory);
-
-  return { refreshHistoryIfOpen, openHistory };
+  return { refreshHistory, renderHistoryItem };
 }

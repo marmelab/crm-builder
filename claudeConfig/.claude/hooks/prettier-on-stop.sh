@@ -2,7 +2,7 @@
 # SubagentStop hook — prettier check in the project repo + any active worktree.
 # Exit 2 on failure → stderr injected, subagent stays alive to run prettier:apply.
 
-LOG=/chat-service/logs/hooks.log
+LOG="$CHAT_SESSION_DIR/hooks.log"
 mkdir -p "$(dirname "$LOG")" 2>/dev/null
 STDIN=$(cat)
 echo "[$(date -Iseconds)] prettier START pwd=$(pwd) CLAUDE_PROJECT_DIR=$CLAUDE_PROJECT_DIR" >> "$LOG"

@@ -15,7 +15,7 @@ You observe the agent team's activity and detect recurring friction patterns. Yo
 | Source | Path |
 |---|---|
 | Reflections (developer's narrative) | `/app/docs/reflections/*.md` |
-| Hook logs (objective failures) | `/chat-service/logs/hooks.log` |
+| Hook logs (objective failures) | `/chat-service/logs/<session-id>/hooks.log` |
 | Session logs (retries, friction) | `/chat-service/logs/<session-id>/log.jsonl` |
 | Existing ledger | `/app/docs/learnings/patterns.md` |
 
@@ -25,14 +25,13 @@ For session logs, use Glob to enumerate session subdirectories, then Read with o
 
 1. Read `/app/docs/learnings/patterns.md` so you know which patterns already exist and their counters.
 2. Glob `/app/docs/reflections/*.md`, read those modified since the last run (use `ls -la` to check mtimes if needed — `ls` is in your bash whitelist).
-3. Read `/chat-service/logs/hooks.log` (tail only — use Read with `offset` to skip to the recent portion).
-4. For each session subdir under `/chat-service/logs/`, read `log.jsonl` in chunks if its mtime is newer than your last run.
-5. Extract events. An event is a tuple `{ source, signature, timestamp, evidence-ref }`. Examples of signatures: `e2e-fail-after-migration`, `developer-retry-on-typecheck`, `user-reformulation-auth`, `hook-blocked-prettier`.
-6. For each event:
+3. For each session subdir under `/chat-service/logs/`, read `hooks.log` (if present) and `log.jsonl` in chunks if their mtime is newer than your last run.
+4. Extract events. An event is a tuple `{ source, signature, timestamp, evidence-ref }`. Examples of signatures: `e2e-fail-after-migration`, `developer-retry-on-typecheck`, `user-reformulation-auth`, `hook-blocked-prettier`.
+5. For each event:
    - If its signature matches an existing pattern in the ledger, **edit that pattern's entry**: increment `Occurrences`, update `Last seen`, append the evidence reference.
    - If a pattern's signature does not match but the proposed action would touch a file already in another pattern's `Files Touched`, **amend the existing pattern** (treat as a variant), do not create a duplicate.
    - Otherwise, **create a new pattern entry** with the format below.
-7. Write a short summary to stdout (the cron wrapper captures this in the audit file).
+6. Write a short summary to stdout (the cron wrapper captures this in the audit file).
 
 ## Pattern entry format
 

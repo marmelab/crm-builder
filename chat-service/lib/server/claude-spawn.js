@@ -44,6 +44,7 @@ export function spawnClaude(userMessage, claudeSessionId, sessionDir) {
       ...process.env,
       HOME: CLAUDE_HOME,
       CLAUDE_PROJECT_DIR: CWD,
+      CHAT_SESSION_DIR: sessionDir,
       MODE: mode,
     },
     cwd: CWD,

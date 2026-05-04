@@ -4,11 +4,10 @@ export function renderSummarySection(data) {
   const kpi = el('div', { className: 'stats-kpi-line' },
     el('span', null, `⏱️ ${formatDuration(data.summary.totalMs)} total`),
     el('span', null, `🤖 ${data.summary.agentsCount} agents`),
-    el('span', null, `🔧 ${data.summary.opsCount} ops`),
     el('span', null, `🪙 ${formatTokens(data.summary.tokensTotal)} tokens`),
     el('span', null, `💵 $${data.summary.costUsd.toFixed(3)}`),
-    el('span', { className: 'kpi-warn' }, `⚠️ ${data.summary.errorsCount} errors`),
-    el('span', { className: 'kpi-warn' }, `🔁 ${data.summary.retriesCount} retries`),
+    el('span', { className: `kpi-spacer${data.summary.errorsCount ? ' kpi-warn' : ''}` }, `⚠️ ${data.summary.errorsCount} errors`),
+    el('span', data.summary.retriesCount ? { className: 'kpi-warn' } : null, `🔁 ${data.summary.retriesCount} retries`),
   );
 
   const teamRow = data.teams.length

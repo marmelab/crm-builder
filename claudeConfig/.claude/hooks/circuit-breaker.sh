@@ -55,7 +55,7 @@ COUNT=$((COUNT + 1))
 echo "$COUNT" > "$COUNTER_FILE"
 
 # Observability: record the keyed count so we can audit per-agent budgets.
-LOG=/chat-service/logs/hooks.log
+LOG="$CHAT_SESSION_DIR/hooks.log"
 mkdir -p "$(dirname "$LOG")" 2>/dev/null
 echo "[$(date -Iseconds)] circuit-breaker key=${KEY} hash=${KEY_HASH} count=${COUNT}" >> "$LOG" 2>/dev/null || true
 
