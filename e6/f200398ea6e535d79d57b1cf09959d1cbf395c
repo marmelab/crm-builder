@@ -1,0 +1,14 @@
+test.md
+  h_84c0d888491a2d 37-38
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "e6f200398ea6e535d79d57b1cf09959d1cbf395c",
+  "prompts": {},
+  "humans": {
+    "h_84c0d888491a2d": {
+      "author": "Jerome"
+    }
+  }
+}
