@@ -78,6 +78,19 @@
     <div id="history-recent-empty" hidden>No saved sessions.</div>
   </div>
 
+  <div id="chat-modal" hidden role="dialog" aria-modal="true" aria-labelledby="chat-modal-title">
+    <div id="chat-modal-backdrop"></div>
+    <div id="chat-modal-panel">
+      <div id="chat-modal-icon">✦</div>
+      <h2 id="chat-modal-title">Set up my CRM from scratch?</h2>
+      <p id="chat-modal-body">We'll start an interview to understand your business and build a complete plan.</p>
+      <div id="chat-modal-actions">
+        <button type="button" id="chat-modal-cancel" class="modal-btn modal-btn-secondary">Cancel</button>
+        <button type="button" id="chat-modal-confirm" class="modal-btn modal-btn-primary">Let's go</button>
+      </div>
+    </div>
+  </div>
+
   <script type="module" src="/chat.js"></script>
 </body>
 </html>
