@@ -92,7 +92,12 @@ function renderChildRow(child, relLabel) {
   let icon = '🔧', label = child.kind, detail = '';
   if (child.kind === 'tool_use') { icon = toolIcon(child.tool); label = child.tool; detail = child.detail ?? ''; }
   else if (child.kind === 'skill') { icon = '🧠'; label = 'Skill'; detail = child.skill; }
-  else if (child.kind === 'hook') { icon = '🪝'; label = child.hookName; detail = `${child.worktree || ''} ${child.result || ''}`.trim(); }
+  else if (child.kind === 'hook') {
+    const failed = child.result === 'fail';
+    icon = failed ? '❌' : '🪝';
+    label = child.hookName;
+    detail = `${child.worktree || ''} ${child.result || ''}${failed && child.exitCode != null ? ` exit=${child.exitCode}` : ''}`.trim();
+  }
   else if (child.kind === 'stream_gap') {
     const silent = !child.eventsDuringGap;
     icon = silent ? '⏸️' : '💭';
@@ -107,7 +112,9 @@ function renderChildRow(child, relLabel) {
   const detailSpan = el('span', { className: 'child-detail', title: String(detail) });
   detailSpan.textContent = String(detail);
 
-  return el('div', { className: `child-row child-${child.kind}` },
+  const failedHook = child.kind === 'hook' && child.result === 'fail';
+  const cls = `child-row child-${child.kind}${failedHook ? ' child-hook-fail' : ''}`;
+  return el('div', { className: cls },
     el('span', { className: 'child-time' }, relLabel(child.ts || child.startTs)),
     el('span', { className: 'child-icon' }, icon),
     el('span', { className: 'child-label' }, label),

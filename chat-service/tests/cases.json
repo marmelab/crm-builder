@@ -39,6 +39,20 @@
     }
   },
   {
+    "id": "complex-task-priorities",
+    "category": "complex",
+    "mode": "quick_edit",
+    "prompt": "I'd like to add a priority concept to tasks (High, Medium, Low), and sort tasks by priority on the Dashboard and on the Contact view",
+    "expect": {
+      "mustInvoke": [
+        "planner",
+        "developer"
+      ],
+      "maxDurationMs": 3600000,
+      "maxCostUsd": 10.00
+    }
+  },
+  {
     "id": "medium-new-field",
     "category": "medium",
     "mode": "quick_edit",
@@ -64,6 +78,189 @@
       ],
       "maxDurationMs": 60000,
       "maxCostUsd": 0.30
+    }
+  },
+  {
+    "id": "simple-remove-task-type",
+    "category": "simple",
+    "mode": "quick_edit",
+    "prompt": "I don't need the 'type' field on tasks, can you remove it?",
+    "expect": {
+      "mustNotInvoke": [
+        "planner"
+      ],
+      "maxDurationMs": 240000,
+      "maxCostUsd": 1.00
+    }
+  },
+  {
+    "id": "complex-my-tasks-page",
+    "category": "complex",
+    "mode": "quick_edit",
+    "prompt": "I'd like a dedicated page where I can see the tasks assigned to me. I also want to be able to browse old tasks I've already moved to DONE, and view tasks assigned to another Sale. Finally, I'd like to add details to tasks (a Notes field supporting URL links, phone numbers, emails…)",
+    "expect": {
+      "mustInvoke": [
+        "planner",
+        "developer"
+      ],
+      "maxDurationMs": 4500000,
+      "maxCostUsd": 15.00
+    }
+  },
+  {
+    "id": "complex-custom-look-and-feel",
+    "category": "complex",
+    "mode": "quick_edit",
+    "prompt": "Customize the look and feel of the CRM to align it with my company's products (I'll provide screenshots or links to the target interfaces)",
+    "expect": {
+      "mustInvoke": [
+        "planner",
+        "developer"
+      ],
+      "maxDurationMs": 3600000,
+      "maxCostUsd": 10.00
+    }
+  },
+  {
+    "id": "complex-services-sales-stats",
+    "category": "complex",
+    "mode": "quick_edit",
+    "prompt": "I want a list of services to sell. I want statistics and sales graphs per customer — for example frequency, quantity and order value. I'd also like to see the evolution of the total amount sold, to track whether sales are increasing.",
+    "expect": {
+      "mustInvoke": [
+        "planner",
+        "developer"
+      ],
+      "maxDurationMs": 5400000,
+      "maxCostUsd": 18.00
+    }
+  },
+  {
+    "id": "complex-prospect-calendar",
+    "category": "complex",
+    "mode": "quick_edit",
+    "prompt": "A calendar that lets me organize my prospect meetings and similar appointments",
+    "expect": {
+      "mustInvoke": [
+        "planner",
+        "developer"
+      ],
+      "maxDurationMs": 3600000,
+      "maxCostUsd": 10.00
+    }
+  },
+  {
+    "id": "complex-quarterly-objectives",
+    "category": "complex",
+    "mode": "quick_edit",
+    "prompt": "Manage objectives per quarter and per year, with visibility on progress towards each objective",
+    "expect": {
+      "mustInvoke": [
+        "planner",
+        "developer"
+      ],
+      "maxDurationMs": 3600000,
+      "maxCostUsd": 10.00
+    }
+  },
+  {
+    "id": "medium-deal-lost-reason",
+    "category": "medium",
+    "mode": "quick_edit",
+    "prompt": "I want the CRM to ask me for a reason when I move a deal to LOST, and the reason should be emailed to the manager",
+    "expect": {
+      "mustInvoke": [
+        "planner",
+        "developer"
+      ],
+      "maxDurationMs": 2700000,
+      "maxCostUsd": 7.00
+    }
+  },
+  {
+    "id": "medium-manager-pipeline-summary",
+    "category": "medium",
+    "mode": "quick_edit",
+    "prompt": "As a manager, I want to see on my home screen the total pipeline (excluding lost and delayed deals) for each of my sales reps",
+    "expect": {
+      "mustInvoke": [
+        "planner",
+        "developer"
+      ],
+      "maxDurationMs": 2700000,
+      "maxCostUsd": 7.00
+    }
+  },
+  {
+    "id": "medium-manager-closing-vs-target",
+    "category": "medium",
+    "mode": "quick_edit",
+    "prompt": "As a manager, I want to see closing performance (deals WON) versus the target",
+    "expect": {
+      "mustInvoke": [
+        "planner",
+        "developer"
+      ],
+      "maxDurationMs": 2700000,
+      "maxCostUsd": 7.00
+    }
+  },
+  {
+    "id": "from-scratch-recruitment-agency",
+    "category": "from-scratch",
+    "mode": "full_setup",
+    "prompt": "I want a CRM for my recruitment agency. My contacts are either prospects, clients, or candidates for a recruitment campaign assigned by a client. Candidates go through a multi-step process (first contact or spontaneous application, screening against the role, background checks, first meeting, selection or rejection for the campaign, proposal to the client, then acceptance or rejection by the client, and finally successful hire after the trial period for billing). Candidates I've met for one role can be reused for another, so I need the history of roles I've proposed each candidate for. My company has 2 recruiters who share the candidate database. We mostly recruit technical profiles (developer, machine learning engineer, CTO, infra lead, lead developer, etc.) but occasionally we recruit Product Owners or team managers.",
+    "expect": {
+      "mustInvoke": [
+        "project-manager",
+        "planner",
+        "developer"
+      ],
+      "maxDurationMs": 9000000,
+      "maxCostUsd": 35.00
+    }
+  },
+  {
+    "id": "from-scratch-art-classes",
+    "category": "from-scratch",
+    "mode": "full_setup",
+    "prompt": "I want a tool to manage my art teaching activity. I have students and sessions (a session can have up to 15 students). I often overbook by 2 students to compensate for cancellations. Sessions are scheduled several weeks in advance, and I want students to be able to log into a form where they can book the slots they want, within the limits of their subscription (they typically subscribe to 20 sessions per year). I also accept people who come for a single session, and free trial sessions. I also need to allow cancellations. At the end of each month I need a recap of the number of sessions completed per person, and the number of pre-purchased sessions remaining. No need to manage venues, I only have one. I also need to be able to add notes per person to keep track of their specific needs over time.",
+    "expect": {
+      "mustInvoke": [
+        "project-manager",
+        "planner",
+        "developer"
+      ],
+      "maxDurationMs": 9000000,
+      "maxCostUsd": 35.00
+    }
+  },
+  {
+    "id": "complex-marketing-campaigns",
+    "category": "complex",
+    "mode": "quick_edit",
+    "prompt": "I want to manage targeted communication campaigns. Launch email / SMS campaigns for batches of contacts by connecting to Brevo. Create and track call campaigns: I need to be able to add batches of contacts matching specific filters, then track the progress of my call campaign. I want to be able to call in one click using my IPBX and write a note during the call. I need to be able to record the success or failure of each call (answered? not answered? voicemail? not assigned? wrong person?). I must be able to track campaign progress (which calls have been made and which haven't). I'd also like to be able to recreate a call campaign from the calls that didn't succeed (no answer). Nice to have: I'd like to be able to split a campaign into sub-groups / columns, so I can assign several agents to it (each agent takes one column).",
+    "expect": {
+      "mustInvoke": [
+        "planner",
+        "developer"
+      ],
+      "maxDurationMs": 7200000,
+      "maxCostUsd": 25.00
+    }
+  },
+  {
+    "id": "complex-ipbx-screen-pop",
+    "category": "complex",
+    "mode": "quick_edit",
+    "prompt": "I have an IPBX and I'd like to do screen pops with the contact and CRM information. I can configure my IPBX to open a URL with the parameters call=ingoing or call=outgoing, and callnum={phone number}. I'd like a page that's called with these parameters and shows me the contact(s) matching the number (which can be in international format with 0033, +33 or in national format starting with 0, like 01, 02, 03, 04, 06, 07, 09…). I need to be able to fill in a note with the call content, marked as an incoming call. Nice to have: show the date of the last call in the contact details on the right side of the contact page.",
+    "expect": {
+      "mustInvoke": [
+        "planner",
+        "developer"
+      ],
+      "maxDurationMs": 5400000,
+      "maxCostUsd": 18.00
     }
   }
 ]

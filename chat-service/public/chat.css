@@ -391,6 +391,8 @@ body { height: 100vh; overflow: hidden; font-family: system-ui, sans-serif; back
 .child-detail { color: #8e8e93; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .child-dur { color: #636366; font-variant-numeric: tabular-nums; }
 .child-hook .child-label { color: #a78bfa; }
+.child-hook-fail .child-label { color: #f87171; font-weight: 600; }
+.child-hook-fail .child-detail { color: #fca5a5; }
 .child-skill .child-label { color: #34d399; }
 .child-stream_gap { opacity: 0.65; font-style: italic; }
 .child-stream_gap .child-label { color: #8e8e93; }

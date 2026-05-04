@@ -70,6 +70,43 @@ INPUT='{"tool_name":"SendMessage","tool_input":{}}'
 echo "$INPUT" | "$SCRIPT_UNDER_TEST" >/dev/null 2>&1
 assert_exit "skip when tool_input.to is missing" 0 $?
 
+assert_stderr_contains() {
+  local desc="$1"
+  local needle="$2"
+  local actual="$3"
+  if echo "$actual" | grep -qF -- "$needle"; then
+    PASS=$((PASS+1))
+    echo "PASS — $desc"
+  else
+    FAIL=$((FAIL+1))
+    echo "FAIL — $desc (looking for '$needle' in stderr)"
+    echo "  stderr was: $actual"
+  fi
+}
+
+# VALIDATE_WORKTREE extraction tests — the hook must narrow validation to
+# the caller's single worktree, not all worktrees (cross-worktree poisoning).
+
+# 10: TASK-XXX in suffixed reviewer name → worktree extracted
+INPUT='{"tool_name":"SendMessage","tool_input":{"to":"quality-reviewer-TASK-001","message":"ready"}}'
+ERR=$(echo "$INPUT" | VALIDATE_DRY_RUN=1 "$SCRIPT_UNDER_TEST" 2>&1 >/dev/null)
+assert_stderr_contains "extract worktree from quality-reviewer-TASK-001" "VALIDATE_WORKTREE=/app/worktrees/TASK-001" "$ERR"
+
+# 11: to=merger, TASK-XXX in message body
+INPUT='{"tool_name":"SendMessage","tool_input":{"to":"merger","message":"ready: TASK-001, branch=feature/x"}}'
+ERR=$(echo "$INPUT" | VALIDATE_DRY_RUN=1 "$SCRIPT_UNDER_TEST" 2>&1 >/dev/null)
+assert_stderr_contains "extract worktree from merger message body" "VALIDATE_WORKTREE=/app/worktrees/TASK-001" "$ERR"
+
+# 12: legacy @-suffix form
+INPUT='{"tool_name":"SendMessage","tool_input":{"to":"quality-reviewer@ticket-TASK-001","message":"ready"}}'
+ERR=$(echo "$INPUT" | VALIDATE_DRY_RUN=1 "$SCRIPT_UNDER_TEST" 2>&1 >/dev/null)
+assert_stderr_contains "extract worktree from legacy @ticket-TASK-001" "VALIDATE_WORKTREE=/app/worktrees/TASK-001" "$ERR"
+
+# 13: no TASK-XXX anywhere → fallback to <all>
+INPUT='{"tool_name":"SendMessage","tool_input":{"to":"merger","message":"ready"}}'
+ERR=$(echo "$INPUT" | VALIDATE_DRY_RUN=1 "$SCRIPT_UNDER_TEST" 2>&1 >/dev/null)
+assert_stderr_contains "fallback to <all> when no TASK-XXX present" "VALIDATE_WORKTREE=<all>" "$ERR"
+
 echo ""
 echo "Passed: $PASS"
 echo "Failed: $FAIL"

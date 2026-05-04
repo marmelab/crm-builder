@@ -170,7 +170,11 @@ Total dispatches: **N developers + 2N reviewers + 1 merger = 3N + 1**.
 
 → Enter STATE C on next turn.
 
-**CRITICAL ANTI-PATTERN:** Do NOT send `shutdown_request` in this same turn. It kills reviewers before the dev sends "ready". Hooks block this; the right behavior is: don't emit shutdowns at STATE B at all.
+**CRITICAL ANTI-PATTERN — STATE B → STATE D in one turn**
+
+After the last `SendMessage(GO)`, you may feel the wave is "set up" and want to immediately fire `SendMessage(shutdown_request)` to all members. **Do not.** The wave has not yet *started* — the developers haven't even read their GO message. Shutting them down here kills the conversation before any work happens.
+
+The rule: **once you emit the last `SendMessage(GO)`, stop.** Output the *"Working on it..."* line and end the turn. Phase 3 begins only on a future turn, after the merger has reported `merged TASK-XXX` for every ticket in the wave (see STATE C → STATE D).
 
 ---
 

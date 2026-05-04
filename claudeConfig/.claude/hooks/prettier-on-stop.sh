@@ -12,7 +12,12 @@ cd "$REPO" || { echo "[$(date -Iseconds)] prettier EXIT=0 cd_failed" >> "$LOG"; 
 
 # Only check ACTIVE feature worktrees under /app/worktrees/. See typecheck hook
 # for the rationale (skip main repo — pre-existing state is not our concern).
-WORKTREES=$(git worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2}' | grep "^/app/worktrees/" || true)
+# VALIDATE_WORKTREE narrows to one worktree (set by validate-before-review.sh).
+if [ -n "${VALIDATE_WORKTREE:-}" ] && [ -d "$VALIDATE_WORKTREE" ]; then
+  WORKTREES="$VALIDATE_WORKTREE"
+else
+  WORKTREES=$(git worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2}' | grep "^/app/worktrees/" || true)
+fi
 
 if [ -z "$WORKTREES" ]; then
   echo "[$(date -Iseconds)] prettier EXIT=0 no_active_worktree" >> "$LOG"

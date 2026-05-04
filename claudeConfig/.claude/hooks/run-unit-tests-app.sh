@@ -10,7 +10,13 @@ echo "[$(date -Iseconds)] unit-app START pwd=$(pwd) CLAUDE_PROJECT_DIR=$CLAUDE_P
 REPO="${CLAUDE_PROJECT_DIR:-/app}"
 cd "$REPO" || { echo "[$(date -Iseconds)] unit-app EXIT=0 cd_failed" >> "$LOG"; exit 0; }
 
-WORKTREES=$(git worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2}' | grep "^/app/worktrees/" || true)
+# VALIDATE_WORKTREE narrows to one worktree (set by validate-before-review.sh).
+# See typecheck hook header for rationale.
+if [ -n "${VALIDATE_WORKTREE:-}" ] && [ -d "$VALIDATE_WORKTREE" ]; then
+  WORKTREES="$VALIDATE_WORKTREE"
+else
+  WORKTREES=$(git worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2}' | grep "^/app/worktrees/" || true)
+fi
 
 if [ -z "$WORKTREES" ]; then
   echo "[$(date -Iseconds)] unit-app EXIT=0 no_active_worktree" >> "$LOG"

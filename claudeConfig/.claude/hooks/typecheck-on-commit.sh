@@ -15,7 +15,15 @@ cd "$REPO" || { echo "[$(date -Iseconds)] typecheck EXIT=0 cd_failed" >> "$LOG";
 # subagent's concern. Running typecheck on /app with orphan untracked files from
 # previous sessions caused a regression where a developer deviated from its task
 # to "fix" unrelated typecheck errors.
-WORKTREES=$(git worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2}' | grep "^/app/worktrees/" || true)
+#
+# VALIDATE_WORKTREE: when set by validate-before-review.sh, restrict to that
+# single worktree. Avoids the "shared brakes" issue where one dev's broken
+# state blocks all parallel SendMessages (one bad TASK poisoning N reviewers).
+if [ -n "${VALIDATE_WORKTREE:-}" ] && [ -d "$VALIDATE_WORKTREE" ]; then
+  WORKTREES="$VALIDATE_WORKTREE"
+else
+  WORKTREES=$(git worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2}' | grep "^/app/worktrees/" || true)
+fi
 
 if [ -z "$WORKTREES" ]; then
   echo "[$(date -Iseconds)] typecheck EXIT=0 no_active_worktree" >> "$LOG"

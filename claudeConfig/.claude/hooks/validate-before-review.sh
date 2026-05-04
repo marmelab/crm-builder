@@ -57,7 +57,35 @@ case "$TO" in
     ;;
 esac
 
-echo "[$(date -Iseconds)] validate-before-review START to=$TO" >> "$LOG" 2>/dev/null || true
+# Derive the caller's worktree so chained scripts validate only that one.
+# Cross-worktree validation made one dev's broken tests block all parallel
+# devs' SendMessages — see chronology of session 1055d1b5… for the exact
+# failure mode (5 unit-app fails on TASK-006 froze TASK-007 and TASK-008).
+#
+# Source of truth, in order:
+#  1. Suffix on the recipient name (most reviewers/validators)
+#  2. TASK-XXX in the message body (for to=merger which has no suffix)
+TASK_ID=$(echo "$TO" | grep -oE 'TASK-[0-9]+' | head -1)
+if [ -z "$TASK_ID" ]; then
+  TASK_ID=$(node -e '
+try {
+  const i = JSON.parse(process.argv[1] || "{}");
+  const msg = (i.tool_input && i.tool_input.message) || "";
+  const text = typeof msg === "string" ? msg : JSON.stringify(msg);
+  const m = text.match(/TASK-[0-9]+/);
+  process.stdout.write(m ? m[0] : "");
+} catch { process.stdout.write(""); }
+' "$STDIN" 2>/dev/null || echo "")
+fi
+
+if [ -n "$TASK_ID" ]; then
+  # The chained scripts re-check that this dir exists before using it; if the
+  # worktree has been removed (e.g. post-merge), they fall back to scanning
+  # all active worktrees, which will be a no-op when none remain.
+  export VALIDATE_WORKTREE="/app/worktrees/$TASK_ID"
+fi
+
+echo "[$(date -Iseconds)] validate-before-review START to=$TO worktree=${VALIDATE_WORKTREE:-<all>}" >> "$LOG" 2>/dev/null || true
 
 # SHA cache: skip the validation chain if HEAD of any active worktree matches
 # the SHA we last validated successfully. The cache invalidates as soon as the
@@ -85,6 +113,8 @@ fi
 # Dry-run hooks (test-only)
 case "${VALIDATE_DRY_RUN:-}" in
   1)
+    # Echo the extracted worktree on stderr so tests can verify the parse.
+    echo "VALIDATE_WORKTREE=${VALIDATE_WORKTREE:-<all>}" >&2
     echo "[$(date -Iseconds)] validate-before-review DRY_RUN=1, skipping checks, exit 0" >> "$LOG" 2>/dev/null || true
     exit 0
     ;;
