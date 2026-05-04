@@ -1,7 +1,7 @@
 .env
-/sessions/
+/sessions*/
 /old-sessions/
-/crm-docs/
+/crm-docs*/
 test.md
 chat-service/tests/results/run-*.json
 
@@ -11,3 +11,6 @@ chat-service/tests/results/run-*.json
 
 # Local Claude Code permissions (per-user)
 /.claude/settings.local.json
+
+# Host-side git worktrees (separate from /worktrees inside docker)
+/.worktrees/
