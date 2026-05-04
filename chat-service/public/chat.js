@@ -112,6 +112,9 @@ const connection = initConnection({
   handleWsMessage,
   appendMessage,
   resetChatUi,
+  onPopstate: (hasSession) => {
+    widget.classList.toggle('chat-closed', !hasSession);
+  },
 });
 
 function clearMessageNodes() {
@@ -185,6 +188,14 @@ function handleWsMessage(event) {
 
   if (msg.type === 'init') {
     display.setSessionId(msg.sessionId);
+    // Reflect the live session in the URL so a refresh resumes it instead
+    // of being treated as "no session" and closing the widget. replace, not
+    // push — the empty-URL state is transitional and shouldn't stack in history.
+    const url = new URL(location.href);
+    if (url.searchParams.get('session') !== msg.sessionId) {
+      url.searchParams.set('session', msg.sessionId);
+      history.replaceState({}, '', url);
+    }
     display.setDisplayedTitle(msg.title || 'New session');
     display.setDisplayedState(msg.state || 'in_progress');
     clearMessageNodes();
@@ -299,7 +310,16 @@ function handleWsMessage(event) {
   }
 }
 
-connection.connectWs();
+// Refreshing without a session in the URL must NOT spawn a fresh server
+// session — the user closed the discussion deliberately, and a new session
+// would also litter sessions/ with empty directories. Connect only when
+// there's a session to resume; otherwise keep the widget closed and let
+// the user pick from history or click "New session".
+if (new URLSearchParams(location.search).get('session')) {
+  connection.connectWs();
+} else {
+  widget.classList.add('chat-closed');
+}
 
 document.getElementById('chat-empty-link').addEventListener('click', async () => {
   if (!(await openConfirmModal())) return;
