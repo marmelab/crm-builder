@@ -1021,6 +1021,15 @@ export async function aggregateSession({ sessionLogPath, hooksLogPath, sessionId
   const hooks = aggregateHooks(hookLines);
   assignHookExecsToPhases(events, phases, hooks);
 
+  // Sort each phase's children chronologically so tools and hooks interleave
+  // in the timeline rather than tools-then-hooks (hooks are pushed last so
+  // their MM:SS would otherwise sit at the bottom of the row but with earlier
+  // timestamps than the trailing tools).
+  const childTs = (c) => c.ts || c.startTs || '';
+  for (const p of phases) {
+    p.children.sort((a, b) => childTs(a).localeCompare(childTs(b)));
+  }
+
   // Aggregate skills and rules
   const skills = aggregateSkills(finalPhases);
   const rules = aggregateRules(events, finalPhases);
