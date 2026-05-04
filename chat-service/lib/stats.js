@@ -1,5 +1,5 @@
 import { createReadStream } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -348,6 +348,26 @@ function toolDetail(toolName, input) {
   }
 }
 
+// Classify a SendMessage's semantic intent. Used both for the icon prefix in
+// the detail string AND as a separate `verdict` field on the child so the
+// renderer can colour-code rows (red BLOCKED, orange AWR, etc.).
+function sendMessageVerdict(text) {
+  if (/shutdown_request/i.test(text)) return 'shutdown';
+  // Order matters: AWR before plain APPROVED.
+  if (/^APPROVED\s+WITH\s+RESERVATIONS\b/i.test(text)) return 'awr';
+  if (/^APPROVED\b/i.test(text)) return 'approved';
+  if (/^BLOCKED\b/i.test(text) || /^RED\b/i.test(text)) return 'blocked';
+  if (/^GREEN\b/i.test(text)) return 'approved';
+  if (/\bready\b.*\b(review|validate|merge)\b/i.test(text) || /^GO\b/.test(text)) return 'ready';
+  if (/^merged\s+TASK-/i.test(text) || /merge\s+failed/i.test(text)) return 'merger-report';
+  return null;
+}
+
+const VERDICT_ICON = {
+  shutdown: '🛑', awr: '🟡', approved: '✅', blocked: '❌',
+  ready: '📨', 'merger-report': '🔀',
+};
+
 // SendMessage detail: highlight the verdict semantics so reviewers'
 // APPROVED/BLOCKED replies and devs' "ready, please review" pings stand out
 // in the timeline. Reduces guesswork when scanning the chronology.
@@ -356,18 +376,15 @@ function sendMessageDetail(input) {
   const raw = input.message;
   const text = typeof raw === 'string' ? raw : (raw && typeof raw === 'object' ? JSON.stringify(raw) : '');
   const head = text.slice(0, 60);
-  let tag = '';
-  if (/shutdown_request/i.test(text)) tag = '🛑';
-  // Order matters: check AWR before plain APPROVED. AWR means "I approve but
-  // with caveats" — visually distinct from clean APPROVED because the dev
-  // often (mis)reads it as "must fix" and re-iterates a cycle.
-  else if (/^APPROVED\s+WITH\s+RESERVATIONS\b/i.test(text)) tag = '🟡';
-  else if (/^APPROVED\b/i.test(text)) tag = '✅';
-  else if (/^BLOCKED\b/i.test(text) || /^RED\b/i.test(text)) tag = '❌';
-  else if (/^GREEN\b/i.test(text)) tag = '✅';
-  else if (/\bready\b.*\b(review|validate|merge)\b/i.test(text) || /^GO\b/.test(text)) tag = '📨';
-  else if (/^merged\s+TASK-/i.test(text) || /merge\s+failed/i.test(text)) tag = '🔀';
+  const verdict = sendMessageVerdict(text);
+  const tag = verdict ? VERDICT_ICON[verdict] : '';
   return `${tag ? tag + ' ' : ''}→ ${to}${head ? ' :: ' + head : ''}`;
+}
+
+function sendMessageVerdictFromInput(input) {
+  const raw = input?.message;
+  const text = typeof raw === 'string' ? raw : (raw && typeof raw === 'object' ? JSON.stringify(raw) : '');
+  return sendMessageVerdict(text);
 }
 
 // Tool calls excluded from per-phase children. Keep dispatch-control verbs
@@ -470,6 +487,7 @@ async function populateChildrenAndCounts(events, phases, orchestrator, claudeSes
             tool: b.name, detail: toolDetail(b.name, b.input),
             ts: rec.ts, durationMs, isApprox,
             agentType: owner.agentType,
+            verdict: b.name === 'SendMessage' ? sendMessageVerdictFromInput(b.input) : null,
           });
           const tc = toolCounts.get(b.name) || { tool: b.name, count: 0, totalDurationMs: 0 };
           tc.count++; tc.totalDurationMs += durationMs;
@@ -656,6 +674,7 @@ async function appendSubagentToolUses(file, phase, toolCounts, allToolCalls) {
           tool: b.name, detail: toolDetail(b.name, b.input),
           ts: e.timestamp, durationMs, isApprox,
           agentType: phase.agentType,
+          verdict: b.name === 'SendMessage' ? sendMessageVerdictFromInput(b.input) : null,
         });
         const tc = toolCounts.get(b.name) || { tool: b.name, count: 0, totalDurationMs: 0 };
         tc.count++; tc.totalDurationMs += durationMs;
@@ -975,6 +994,53 @@ function detectRetries(phases, errors) {
   return retries.sort((a, b) => a.ts.localeCompare(b.ts));
 }
 
+// Read TASK-*.json files from the session directory and compute their wave
+// number from the dependency graph (Kahn's algorithm — every ticket whose
+// deps are already merged moves into the next wave). Returns null if the
+// session has no ticket files (SIMPLE flow, planner failed, ...).
+async function loadTicketsAndWaves(sessionDir) {
+  let entries;
+  try { entries = await readdir(sessionDir); } catch { return null; }
+  const taskFiles = entries.filter((n) => /^TASK-\d+\.json$/.test(n));
+  if (taskFiles.length === 0) return null;
+  const tickets = [];
+  for (const f of taskFiles) {
+    try {
+      const t = JSON.parse(await readFile(join(sessionDir, f), 'utf8'));
+      tickets.push({
+        id: t.ticket_id || f.replace(/\.json$/, ''),
+        title: t.title || '',
+        dependencies: Array.isArray(t.dependencies) ? t.dependencies : [],
+        parallelSafe: t.parallel_safe !== false,
+        status: t.status || 'pending',
+        riskLevel: t.risk_level || null,
+      });
+    } catch { /* skip malformed */ }
+  }
+  // Topological wave assignment
+  const byId = new Map(tickets.map((t) => [t.id, t]));
+  const remaining = new Set(tickets.map((t) => t.id));
+  const waves = [];
+  let safety = tickets.length + 1; // protect against dep cycles
+  while (remaining.size > 0 && safety-- > 0) {
+    const ready = [...remaining].filter((id) => {
+      const t = byId.get(id);
+      return t.dependencies.every((d) => !remaining.has(d));
+    });
+    if (ready.length === 0) {
+      // Cycle or unresolvable dep — drop the rest into a final "stuck" wave.
+      waves.push([...remaining]);
+      break;
+    }
+    waves.push(ready);
+    for (const id of ready) remaining.delete(id);
+  }
+  for (let i = 0; i < waves.length; i++) {
+    for (const id of waves[i]) byId.get(id).wave = i + 1;
+  }
+  return { tickets: tickets.sort((a, b) => a.id.localeCompare(b.id)), waves };
+}
+
 export async function aggregateSession({ sessionLogPath, hooksLogPath, sessionId }) {
   const events = [];
   for await (const ev of readJsonl(sessionLogPath)) events.push(ev);
@@ -1100,5 +1166,6 @@ export async function aggregateSession({ sessionLogPath, hooksLogPath, sessionId
     topToolCalls,
     toolCounts,
     skills, hooks, rules, errors, retries,
+    ...(await loadTicketsAndWaves(dirname(sessionLogPath))) ?? {},
   };
 }

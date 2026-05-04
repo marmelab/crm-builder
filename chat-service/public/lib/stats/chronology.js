@@ -119,7 +119,8 @@ function renderChildRow(child, relLabel) {
   detailSpan.textContent = String(detail);
 
   const failedHook = child.kind === 'hook' && child.result === 'fail';
-  const cls = `child-row child-${child.kind}${failedHook ? ' child-hook-fail' : ''}`;
+  const verdictCls = child.verdict ? ` child-verdict-${child.verdict}` : '';
+  const cls = `child-row child-${child.kind}${failedHook ? ' child-hook-fail' : ''}${verdictCls}`;
   return el('div', { className: cls },
     el('span', { className: 'child-time' }, relLabel(child.ts || child.startTs)),
     el('span', { className: 'child-icon' }, icon),
