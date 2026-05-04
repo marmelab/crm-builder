@@ -2,7 +2,6 @@ import { el, formatTokens } from './lib/dom.js';
 import { renderStatsPanel } from './lib/stats/index.js';
 import { initConnection, initDisplay, initHistory } from './lib/sessions/index.js';
 import { openConfirmModal } from './lib/chat-modal.js';
-import './lib/chat-stats-panel.js';
 
 const widget   = document.getElementById('chat-widget');
 const toggle   = document.getElementById('chat-toggle');
@@ -26,6 +25,8 @@ const messages = document.getElementById('chat-messages');
 const stats = document.getElementById('chat-stats');
 const statsBtn = document.getElementById('chat-stats-btn');
 const statsPanel = document.getElementById('chat-stats-panel');
+const statsPanelBody = document.getElementById('chat-stats-panel-body');
+const statsCloseBtn = document.getElementById('chat-stats-close');
 
 let working  = false;
 let progressTotal = 0;
@@ -703,7 +704,7 @@ async function refreshStatsPanel() {
     const res = await fetch(`/api/stats?sessionId=${encodeURIComponent(sessionId)}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
-    if (statsMode) renderStatsPanel(statsPanel.body, data);
+    if (statsMode) renderStatsPanel(statsPanelBody, data);
   } catch (_err) {
     // Silent on background refresh — keep the previously-rendered panel visible.
   } finally {
@@ -729,25 +730,25 @@ async function enterStatsMode() {
   statsBtn.classList.add('stats-active');
   statsBtn.title = 'Hide session stats';
 
-  statsPanel.body.replaceChildren(el('div', { className: 'stats-loading' }, 'Loading stats…'));
+  statsPanelBody.replaceChildren(el('div', { className: 'stats-loading' }, 'Loading stats…'));
   try {
     const res = await fetch(`/api/stats?sessionId=${encodeURIComponent(display.getSessionId())}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
-    renderStatsPanel(statsPanel.body, data);
+    renderStatsPanel(statsPanelBody, data);
     statsLastRefreshAt = Date.now();
   } catch (err) {
     const retry = el('button', { id: 'stats-retry-btn', onclick: enterStatsMode }, 'Retry');
     const back  = el('button', { id: 'stats-back-btn',  onclick: exitStatsMode  }, '← Close');
     const label = el('div', null, el('strong', null, 'Failed to load stats:'), ' ', String(err.message));
-    statsPanel.body.replaceChildren(el('div', { className: 'stats-error' }, label, retry, back));
+    statsPanelBody.replaceChildren(el('div', { className: 'stats-error' }, label, retry, back));
   }
 }
 
 function exitStatsMode() {
   statsMode = false;
   statsPanel.hidden = true;
-  statsPanel.body.replaceChildren();
+  statsPanelBody.replaceChildren();
   statsBtn.classList.remove('stats-active');
   statsBtn.title = 'Session stats';
   if (statsRefreshPendingTimer) {
@@ -759,4 +760,4 @@ function exitStatsMode() {
 statsBtn.addEventListener('click', () => {
   if (statsMode) exitStatsMode(); else enterStatsMode();
 });
-statsPanel.addEventListener('close', exitStatsMode);
+statsCloseBtn.addEventListener('click', exitStatsMode);

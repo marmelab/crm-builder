@@ -46,7 +46,13 @@
     <div id="chat-stats" title="Tokens and cost used in this session"></div>
   </div>
 
-  <chat-stats-panel id="chat-stats-panel" hidden></chat-stats-panel>
+  <aside id="chat-stats-panel" hidden aria-label="Session statistics">
+    <div id="chat-stats-panel-header">
+      <span>Session statistics</span>
+      <button id="chat-stats-close" title="Close stats" aria-label="Close stats">✕</button>
+    </div>
+    <div id="chat-stats-panel-body"></div>
+  </aside>
 
   <div id="chat-history-panel">
     <div id="history-panel-header">
