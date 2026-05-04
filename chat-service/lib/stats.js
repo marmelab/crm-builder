@@ -358,6 +358,10 @@ function sendMessageDetail(input) {
   const head = text.slice(0, 60);
   let tag = '';
   if (/shutdown_request/i.test(text)) tag = '🛑';
+  // Order matters: check AWR before plain APPROVED. AWR means "I approve but
+  // with caveats" — visually distinct from clean APPROVED because the dev
+  // often (mis)reads it as "must fix" and re-iterates a cycle.
+  else if (/^APPROVED\s+WITH\s+RESERVATIONS\b/i.test(text)) tag = '🟡';
   else if (/^APPROVED\b/i.test(text)) tag = '✅';
   else if (/^BLOCKED\b/i.test(text) || /^RED\b/i.test(text)) tag = '❌';
   else if (/^GREEN\b/i.test(text)) tag = '✅';
