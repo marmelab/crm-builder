@@ -78,11 +78,14 @@ function renderPhaseRow(phase, relLabel) {
     bands, warn, retry, taskBadge,
   ));
 
-  if (phase.children.length === 0) {
+  // Skipped hooks (no actual run — e.g. SHA cache hit, or no changes in the
+  // worktree) carry no information for the user; only show ok/fail rows.
+  const visibleChildren = phase.children.filter((c) => !(c.kind === 'hook' && c.result === 'skip'));
+  if (visibleChildren.length === 0) {
     det.appendChild(el('div', { className: 'phase-empty' }, '(no sub-events)'));
   } else {
     const list = el('div', { className: 'phase-children' });
-    for (const c of phase.children) list.appendChild(renderChildRow(c, relLabel));
+    for (const c of visibleChildren) list.appendChild(renderChildRow(c, relLabel));
     det.appendChild(list);
   }
   return det;
