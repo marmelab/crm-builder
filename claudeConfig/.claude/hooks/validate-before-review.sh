@@ -1,21 +1,24 @@
 #!/bin/bash
 # PreToolUse hook for SendMessage tool.
-# When the developer is about to SendMessage the merger, run the project
-# validation chain. If any step fails, exit 2 to block the SendMessage;
-# the dev sees the stderr as a tool_use_error.
+# When the developer is about to SendMessage a reviewer or the merger, run
+# the project validation chain. If any step fails, exit 2 to block the
+# SendMessage; the dev sees the stderr as a tool_use_error.
+#
+# Why gate reviewers AND merger:
+# - If validation fails (typecheck, unit, etc.), the dev must fix and commit
+#   again — and the reviewers must re-evaluate the new commit. Letting them
+#   review a broken state would waste their cycle on issues the gate would
+#   have caught. So reviewers must see only validated commits.
+# - The SHA cache below makes the cost of validating before every reviewer
+#   message essentially zero on un-changed HEADs: the typical "dev SendMessages
+#   reviewer-A then reviewer-B" pair runs the chain once for A, then hits the
+#   cache for B (~10ms instead of ~60s).
 #
 # Behavior:
 # - Reads the tool input JSON from stdin.
-# - Validation runs ONLY for `to=merger` (or merger-*/merger@* legacy forms).
-#   Reviewers (quality-reviewer-*, test-validator-*) are intentionally skipped:
-#   their job is semantic review, not catching typecheck/test failures (the
-#   merger gate catches those). Running validation on every dev↔reviewer round
-#   added ~60s per cycle — for one TASK with 4-5 cycles, that was ~5 minutes
-#   of dead time per ticket. The merger gate is sufficient since the dev cannot
-#   merge until validation passes there.
-# - For `to=merger`: cache by worktree HEAD sha. If a previous run on the same
-#   sha succeeded, skip the chain (instant). The cache is invalidated by every
-#   new commit (new sha) and is per-worktree (kept in /tmp).
+# - Skips for non-reviewer/non-merger recipients (team-lead, other devs, …).
+# - Per-worktree SHA cache: if a previous run on the same HEAD sha succeeded,
+#   skip the chain (instant). The cache is invalidated by every new commit.
 # - Otherwise runs (in order): typecheck, prettier, unit-app, unit-functions, e2e.
 # - First failure → exit 2 with the failing script's stderr passed through.
 #
@@ -46,14 +49,8 @@ else
 fi
 
 case "$TO" in
-  merger-*|merger|merger@*)
-    : # gate enabled — only for merger
-    ;;
-  quality-reviewer-*|test-validator-*|quality-reviewer@*|test-validator@*)
-    # Reviewer SendMessages are NOT gated. The merger gate is sufficient and
-    # this used to add ~60s × 4-5 cycles per ticket of dead time.
-    echo "[$(date -Iseconds)] validate-before-review SKIP to=$TO (reviewer — gate only on merger)" >> "$LOG" 2>/dev/null || true
-    exit 0
+  quality-reviewer-*|test-validator-*|merger-*|merger|quality-reviewer@*|test-validator@*|merger@*)
+    : # gate enabled
     ;;
   *)
     exit 0

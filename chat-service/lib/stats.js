@@ -234,27 +234,41 @@ function buildOrchestratorPhase(events, agentPhases, startTs, endTs) {
   const merged = mergeIntervals(intervals);
   const agentCoverageMs = merged.reduce((a, [s, e]) => a + (e - s), 0);
   let opsCount = 0;
+  let tokensTotal = 0;
   const skip = new Set(['Agent', 'Task', 'TeamCreate', 'TeamDelete']);
   for (const rec of events) {
-    if (rec.type !== 'debug_raw' || rec.event?.type !== 'assistant') continue;
-    for (const b of extractToolUsesFromAssistant(rec.event)) {
-      if (skip.has(b.name)) continue;
-      opsCount++;
+    if (rec.type !== 'debug_raw' || !rec.event) continue;
+    const ev = rec.event;
+    if (ev.type === 'assistant') {
+      for (const b of extractToolUsesFromAssistant(ev)) {
+        if (skip.has(b.name)) continue;
+        opsCount++;
+      }
+    } else if (ev.type === 'result') {
+      // result.usage carries this turn's token cost (cache_read excluded —
+      // it's cheap rehydration, not billed against the working set).
+      const u = ev.usage || {};
+      tokensTotal += (u.input_tokens || 0)
+        + (u.cache_creation_input_tokens || 0)
+        + (u.output_tokens || 0);
     }
   }
   return {
     phaseId: 'orchestrator', kind: 'orchestrator', agentType: 'orchestrator',
     description: 'Orchestrator', teamName: null,
     startTs, endTs, durationMs: Math.max(0, totalMs - agentCoverageMs),
-    opsCount, tokensTotal: 0, errorsCount: 0, retriesCount: 0, children: [],
+    opsCount, tokensTotal, errorsCount: 0, retriesCount: 0, children: [],
   };
 }
 
 function buildTimeBreakdown(orchestrator, agentPhases) {
-  // workMs (sum of tool_use durations) is the actual time the agent did things;
-  // durationMs is wall-clock between dispatch and last activation, which for
-  // COMPLEX team members includes long idle periods waiting on SendMessages.
-  const byAgent = new Map([['orchestrator', orchestrator.workMs ?? orchestrator.durationMs]]);
+  // For sub-agents, workMs (tool durations + bounded thinking gaps) excludes
+  // long idle waits on peers — the right "active" measure.
+  // For the orchestrator, almost all its tool_uses are SendMessage (filtered
+  // out of workMs), so workMs collapses to ~0. Its durationMs (computed as
+  // session wallclock minus the coverage of its sub-agent intervals) is the
+  // closer proxy for "time the orchestrator was actively driving".
+  const byAgent = new Map([['orchestrator', orchestrator.durationMs ?? 0]]);
   for (const p of agentPhases) {
     const ms = p.workMs ?? p.durationMs;
     byAgent.set(p.agentType, (byAgent.get(p.agentType) || 0) + ms);
@@ -262,21 +276,44 @@ function buildTimeBreakdown(orchestrator, agentPhases) {
   return [...byAgent].map(([agent, ms]) => ({ agent, ms })).sort((a, b) => b.ms - a.ms);
 }
 
-// Sum every tool_use child's durationMs to derive the active-work time of a
-// phase. Skills are quick metadata reads (typically ≤100ms each) — included.
+// Active-work time of a phase = sum of tool durations + thinking gaps
+// between consecutive tools (only when the gap is short enough to plausibly
+// be the model deciding what to do next, not a long idle wait on a peer).
 //
-// SendMessage is excluded: its tool duration includes the validate-before-review
-// PreToolUse hook (typecheck + prettier + unit tests + e2e, often 60-150s) plus
-// the receiving agent's wake-up. None of that is the SENDER's active work —
-// counting it inflates dev workMs by ~10× on COMPLEX runs (observed: 615s vs
-// real ~50s of editing). Treat SendMessage as zero-cost communication for the
-// purposes of "what was this agent actually doing?".
+// SendMessage is excluded from both the tool duration AND the gap span: its
+// duration contains the validate-before-review hook (typecheck + tests, often
+// 60-150s) which is not active work for the sender. Long gaps after a
+// SendMessage are also waits, not thinking — they get clipped by the threshold.
+//
+// THINKING_GAP_THRESHOLD: bumped to 60s based on observed traces where the
+// orchestrator legitimately thinks ~30-50s when classifying a request or
+// drafting a plan. Anything beyond a minute is almost certainly an idle wait.
 const COMM_TOOLS = new Set(['SendMessage']);
+const THINKING_GAP_THRESHOLD = 60000;
+
 function computePhaseWorkMs(phase) {
-  return (phase.children || [])
+  const tools = (phase.children || [])
     .filter((c) => c.kind === 'tool_use' || c.kind === 'skill')
     .filter((c) => !(c.kind === 'tool_use' && COMM_TOOLS.has(c.tool)))
-    .reduce((s, c) => s + (c.durationMs || 0), 0);
+    .map((c) => ({
+      ts: c.ts || c.startTs,
+      durationMs: c.durationMs || 0,
+    }))
+    .filter((c) => c.ts)
+    .sort((a, b) => a.ts.localeCompare(b.ts));
+  if (tools.length === 0) return 0;
+  let active = 0;
+  let prevEndMs = null;
+  for (const t of tools) {
+    const startMs = new Date(t.ts).getTime();
+    if (prevEndMs !== null) {
+      const gap = startMs - prevEndMs;
+      if (gap > 0 && gap < THINKING_GAP_THRESHOLD) active += gap;
+    }
+    active += t.durationMs;
+    prevEndMs = startMs + t.durationMs;
+  }
+  return active;
 }
 
 function buildPhaseOwnerMap(events, agentPhases) {
@@ -884,8 +921,16 @@ export async function aggregateSession({ sessionLogPath, hooksLogPath, sessionId
   const events = [];
   for await (const ev of readJsonl(sessionLogPath)) events.push(ev);
 
-  const startTs = events[0]?.ts ?? null;
-  const endTs = events[events.length - 1]?.ts ?? null;
+  // Session bounds: ignore client-noise events that fire on tab open / WebSocket
+  // reconnect (`init`, `progress`, `status`, `state`, `stats`, `choices`,
+  // `title`). They can land long after the actual conversation finishes —
+  // observed: a reconnect 32 minutes after the last reply pushed totalMs from
+  // 17 min to 50 min. Real session boundaries come from substantive events:
+  // user_message, message, debug_raw (Claude SDK stream), error.
+  const SUBSTANTIVE = new Set(['user_message', 'message', 'debug_raw', 'error']);
+  const substantive = events.filter((ev) => ev.ts && SUBSTANTIVE.has(ev.type));
+  const startTs = substantive[0]?.ts ?? events[0]?.ts ?? null;
+  const endTs = substantive[substantive.length - 1]?.ts ?? events[events.length - 1]?.ts ?? null;
   const durationMs = startTs && endTs ? msBetween(startTs, endTs) : 0;
 
   // Read claudeSessionId from meta.json (sibling of log.jsonl) — needed to

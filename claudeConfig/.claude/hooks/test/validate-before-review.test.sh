@@ -30,16 +30,16 @@ INPUT='{"tool_name":"SendMessage","tool_input":{"to":"developer-TASK-002","messa
 echo "$INPUT" | "$SCRIPT_UNDER_TEST" >/dev/null 2>&1
 assert_exit "skip when to=developer-TASK-002" 0 $?
 
-# Test 3: skip when target is quality-reviewer (reviewers are NOT gated since
-# the merger gate is sufficient and reviewers do semantic-only review).
+# Test 3: validate when target is quality-reviewer (reviewers ARE gated so
+# they only ever see validated commits; SHA cache makes repeats cheap).
 INPUT='{"tool_name":"SendMessage","tool_input":{"to":"quality-reviewer-TASK-001","message":"ready"}}'
-echo "$INPUT" | "$SCRIPT_UNDER_TEST" >/dev/null 2>&1
-assert_exit "skip when to=quality-reviewer-TASK-001 (reviewers not gated)" 0 $?
+VALIDATE_DRY_RUN=1 echo "$INPUT" | VALIDATE_DRY_RUN=1 "$SCRIPT_UNDER_TEST" >/dev/null 2>&1
+assert_exit "validate when to=quality-reviewer-TASK-001" 0 $?
 
-# Test 4: skip when target is test-validator (same reasoning as Test 3)
+# Test 4: validate when target is test-validator
 INPUT='{"tool_name":"SendMessage","tool_input":{"to":"test-validator-TASK-001","message":"ready"}}'
-echo "$INPUT" | "$SCRIPT_UNDER_TEST" >/dev/null 2>&1
-assert_exit "skip when to=test-validator-TASK-001 (reviewers not gated)" 0 $?
+VALIDATE_DRY_RUN=1 echo "$INPUT" | VALIDATE_DRY_RUN=1 "$SCRIPT_UNDER_TEST" >/dev/null 2>&1
+assert_exit "validate when to=test-validator-TASK-001" 0 $?
 
 # Test 5: validate when target is merger (v3 suffixed — back-compat for v3.0 per-ticket merger)
 INPUT='{"tool_name":"SendMessage","tool_input":{"to":"merger-TASK-001","message":"ready"}}'
@@ -51,16 +51,15 @@ INPUT='{"tool_name":"SendMessage","tool_input":{"to":"merger","message":"ready: 
 VALIDATE_DRY_RUN=1 echo "$INPUT" | VALIDATE_DRY_RUN=1 "$SCRIPT_UNDER_TEST" >/dev/null 2>&1
 assert_exit "validate when to=merger (v3.1 shared singleton)" 0 $?
 
-# Test 6: failure case — VALIDATE_DRY_RUN=fail simulates a failing sub-script.
-# Targets merger because reviewers no longer trigger validation.
-INPUT='{"tool_name":"SendMessage","tool_input":{"to":"merger","message":"ready: TASK-001"}}'
+# Test 6: failure case — VALIDATE_DRY_RUN=fail simulates a failing sub-script
+INPUT='{"tool_name":"SendMessage","tool_input":{"to":"quality-reviewer-TASK-001","message":"ready"}}'
 echo "$INPUT" | VALIDATE_DRY_RUN=fail "$SCRIPT_UNDER_TEST" >/dev/null 2>&1
-assert_exit "block when one validator fails (merger gate)" 2 $?
+assert_exit "block when one validator fails" 2 $?
 
-# Test 7: legacy @-suffix reviewer form is also skipped (consistent with v3 forms)
+# Test 7: legacy @-suffix reviewer form still validated
 INPUT='{"tool_name":"SendMessage","tool_input":{"to":"quality-reviewer@ticket-TASK-001","message":"ready"}}'
-echo "$INPUT" | "$SCRIPT_UNDER_TEST" >/dev/null 2>&1
-assert_exit "skip when to=quality-reviewer@ticket-TASK-001 (legacy reviewer)" 0 $?
+VALIDATE_DRY_RUN=1 echo "$INPUT" | VALIDATE_DRY_RUN=1 "$SCRIPT_UNDER_TEST" >/dev/null 2>&1
+assert_exit "validate when to=quality-reviewer@ticket-TASK-001 (legacy)" 0 $?
 
 # Test 8: malformed input — empty stdin → skip (not a SendMessage we can parse)
 echo "" | "$SCRIPT_UNDER_TEST" >/dev/null 2>&1

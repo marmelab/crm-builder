@@ -13,25 +13,33 @@ export function relLabelFactory(baseTs) {
 export const TOOL_ICON = { Read: '📖', Write: '✏️', Edit: '✏️', Bash: '⚡', Grep: '🔍', Glob: '🔍' };
 export function toolIcon(name) { return TOOL_ICON[name] || '🔧'; }
 
+const TASK_ID_RE = /(TASK-\d{3,})/;
+function taskIdOf(phase) {
+  const m = (phase.agentName || phase.description || '').match(TASK_ID_RE);
+  return m ? m[1] : null;
+}
+
 export function renderChronologySection(data) {
   const relLabel = relLabelFactory(data.startTs);
-  const teamColor = (name) => data.teams.find((t) => t.team_name === name)?.color || '#64748b';
 
-  const rows = data.phases.map((phase) => renderPhaseRow(phase, relLabel, teamColor));
+  const rows = data.phases.map((phase) => renderPhaseRow(phase, relLabel));
   return el('section', { className: 'stats-section' },
     el('h3', { className: 'stats-section-title' }, 'Timeline'),
     ...rows,
   );
 }
 
-function renderPhaseRow(phase, relLabel, teamColor) {
+function renderPhaseRow(phase, relLabel) {
   const det = el('details', { className: 'phase-row' });
   const dot = phase.kind === 'orchestrator' ? '🎭' : '🤖';
 
-  const teamBadge = phase.teamName
-    ? el('span', { className: 'phase-team', style: { color: teamColor(phase.teamName), borderColor: teamColor(phase.teamName) } },
-        `👥 ${phase.teamName.replace(/^ticket-/, '')}`)
-    : (phase.kind === 'agent' ? el('span', { className: 'phase-team muted' }, '🎭 no team') : null);
+  // Task badge replaces the previous team badge — every COMPLEX phase
+  // belongs to exactly one ticket; the team_name "tickets" no longer
+  // adds information once we know the ticket.
+  const taskId = taskIdOf(phase);
+  const taskBadge = taskId
+    ? el('span', { className: 'phase-team' }, `🎫 ${taskId}`)
+    : (phase.kind === 'agent' ? el('span', { className: 'phase-team muted' }, '— no task') : null);
 
   const warn  = phase.errorsCount  ? el('span', { className: 'phase-warn' }, `⚠️ ${phase.errorsCount}`)  : null;
   const retry = phase.retriesCount ? el('span', { className: 'phase-warn' }, `🔁 ${phase.retriesCount}`) : null;
@@ -44,14 +52,30 @@ function renderPhaseRow(phase, relLabel, teamColor) {
         })))
     : null;
 
+  // Active time (workMs) is the time the agent was busy: tool execution +
+  // bounded thinking gaps. Wallclock is dispatch→shutdown including idle
+  // waits on peers — useful but misleading on its own. We show active first
+  // (it's the figure that matches the timeBreakdown bar chart) and the
+  // wallclock is in the hover title so the row stays compact.
+  // Orchestrator: most of its tool_uses are SendMessage (excluded from
+  // workMs) so workMs collapses to ~0. Use durationMs for it (which is
+  // already computed as session-total minus sub-agent coverage) — this
+  // matches what timeBreakdown does on the bar chart.
+  const activeMs = phase.kind === 'orchestrator'
+    ? (phase.durationMs ?? 0)
+    : (phase.workMs ?? phase.durationMs ?? 0);
+  const stats = el('span', {
+    className: 'phase-stats',
+    title: `active ${formatDuration(activeMs)} · wall ${formatDuration(phase.durationMs ?? 0)} · ${phase.opsCount} ops · ${formatTokens(phase.tokensTotal || 0)} tokens`,
+  }, `${formatDuration(activeMs)} active · ${phase.opsCount} ops · ${formatTokens(phase.tokensTotal || 0)} tok`);
+
   det.appendChild(el('summary', null,
     el('span', { className: 'phase-time' }, relLabel(phase.startTs)),
     el('span', { className: 'phase-icon' }, dot),
     el('span', { className: 'phase-name' }, phase.agentType || phase.kind),
     el('span', { className: 'phase-desc' }, phase.description),
-    el('span', { className: 'phase-stats' },
-      `${formatDuration(phase.durationMs)} · ${phase.opsCount} ops · ${formatTokens(phase.tokensTotal || 0)} tok`),
-    bands, warn, retry, teamBadge,
+    stats,
+    bands, warn, retry, taskBadge,
   ));
 
   if (phase.children.length === 0) {

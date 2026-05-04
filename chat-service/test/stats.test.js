@@ -39,10 +39,13 @@ test('aggregateSession: computes summary totals from simple session', async () =
     hooksLogPath: null,
     sessionId: '00000000-0000-0000-0000-000000000002',
   });
+  // endTs takes the last substantive event (debug_raw with the result),
+  // ignoring the trailing client-noise `status` event at 03.100 — fixes a
+  // bug where reconnect-time noise inflated session duration by 30+ min.
   assert.equal(out.startTs, '2026-04-23T12:00:00.000Z');
-  assert.equal(out.endTs, '2026-04-23T12:00:03.100Z');
-  assert.equal(out.durationMs, 3100);
-  assert.equal(out.summary.totalMs, 3100);
+  assert.equal(out.endTs, '2026-04-23T12:00:03.000Z');
+  assert.equal(out.durationMs, 3000);
+  assert.equal(out.summary.totalMs, 3000);
   assert.equal(out.summary.opsCount, 2);
   assert.equal(out.summary.tokensTotal, 100 + 200 + 50);
   assert.equal(out.summary.costUsd, 0.01);
