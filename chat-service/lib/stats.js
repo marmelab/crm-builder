@@ -240,6 +240,10 @@ function buildOrchestratorPhase(events, agentPhases, startTs, endTs) {
     if (rec.type !== 'debug_raw' || !rec.event) continue;
     const ev = rec.event;
     if (ev.type === 'assistant') {
+      // Only orchestrator-emitted tool_uses — sub-agent tool_uses carry a
+      // parent_tool_use_id and are already counted in their phase's opsCount
+      // via the task_notification.usage.tool_uses field.
+      if (ev.parent_tool_use_id != null) continue;
       for (const b of extractToolUsesFromAssistant(ev)) {
         if (skip.has(b.name)) continue;
         opsCount++;
@@ -840,10 +844,12 @@ function assignHookExecsToPhases(events, phases, hookAggregates) {
       worktreeByPhaseId.set(ev.task_id, toolUseIdToWorktree.get(ev.tool_use_id));
     }
   }
+  const phaseIdByWorktree = new Map();
+  for (const [phaseId, wt] of worktreeByPhaseId) phaseIdByWorktree.set(wt, phaseId);
   for (const agg of hookAggregates) {
     for (const exec of agg.executions) {
       if (!exec.worktree) continue;
-      const phaseId = [...worktreeByPhaseId.entries()].find(([, wt]) => wt === exec.worktree)?.[0];
+      const phaseId = phaseIdByWorktree.get(exec.worktree);
       if (!phaseId) continue;
       const phase = phases.find((p) => p.phaseId === phaseId);
       if (!phase) continue;

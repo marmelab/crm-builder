@@ -83,7 +83,7 @@ fi
 
 if [ -n "$BLOCKED" ]; then
   REASON="Validation command forbidden: $BLOCKED See developer.md \"Validation commands — DO NOT RUN THEM\"."
-  LOG=/chat-service/logs/hooks.log
+  LOG="$CHAT_SESSION_DIR/hooks.log"
   mkdir -p "$(dirname "$LOG")" 2>/dev/null
   echo "[$(date -Iseconds)] block-bash-validation BLOCKED cmd=${CMD:0:120}" >> "$LOG" 2>/dev/null || true
   echo "{\"decision\":\"block\",\"reason\":\"$REASON\"}"

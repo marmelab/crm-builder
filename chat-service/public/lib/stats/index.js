@@ -1,7 +1,6 @@
 import { renderSummarySection } from './summary.js';
 import { renderWavesSection } from './waves.js';
 import { renderChronologySection } from './chronology.js';
-import { renderTopOpsSection } from './top-ops.js';
 import { renderSkillsHooksRulesSection } from './skills-hooks.js';
 import { renderErrorsRetriesSection } from './errors.js';
 
@@ -12,9 +11,10 @@ export function renderStatsPanel(panel, data) {
     renderSummarySection(data),
     renderWavesSection(data),
     renderChronologySection(data),
-    renderTopOpsSection(data),
     renderSkillsHooksRulesSection(data),
     renderErrorsRetriesSection(data),
   ].filter(Boolean);
   panel.replaceChildren(...sections);
 }
+
+export { initStatsRefresh } from './refresh.js';

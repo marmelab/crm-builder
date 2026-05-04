@@ -817,6 +817,138 @@ Targets: `build`, `up` (demo profile), `up-full` (full profile), `down`, `restar
 
 ---
 
+## Phase 32 — Documentator agent (phase 1, 2026-04-27, branch `feat/agent-documentator`)
+
+A new agent that observes the team's activity and writes a structured "patterns ledger" for the maintainer to review. Phase 1 is **read-only**: no config mutation, no auto-application of proposed actions. The trajectory is calibration first (the maintainer reviews detection quality + applicability), acting later (phase 2 — counter-gated auto-apply per action category, designed but not implemented).
+
+### Documentator agent
+- New `claudeConfig/.claude/agents/documentator.md` (sonnet, restricted tool list).
+- Reads 5 sources every run: `docs/reflections/*.md`, `/chat-service/logs/hooks.log`, per-session `log.jsonl` files (offset/limit reads — these get large), and the existing ledger.
+- Writes only to `/app/docs/learnings/patterns.md`. Never touches anything under `/app/src/`, `/home/developer/.claude/`, or shipped config.
+- Pattern entry format with fields: `Status`, `Occurrences`, `First seen`, `Last seen`, `Evidence` (TASK-IDs / session-IDs / hooks.log line ranges), `Symptom`, `Hypothesis`, `Proposed action` (`Type`, `Files Touched`, `Depends on`, `Content`), `Promotion criteria for phase 2`.
+- Action-type hierarchy from least to most invasive: `skill-extension < new-hook < new-rule < new-skill < modify-existing < agent-prompt-edit`, plus `escalation` for cases no additive lever captures.
+
+### Cron module + manual endpoint
+- New `chat-service/lib/documentator-cron.js` (~160 lines): `shouldSkipRun`, `loadDocumentatorPrompt`, `runDocumentator`, `scheduleDocumentator`. Five unit tests cover the deterministic helpers (TDD).
+- Daily cron at `0 3 * * *` Europe/Paris via `node-cron`. Skips when no session log has mtime newer than the last-run marker.
+- `POST /api/documentator/run` for ad-hoc runs — **loopback only** (`req.socket.remoteAddress` checked against `127.0.0.1`, `::1`, `::ffff:127.0.0.1`, otherwise 403). Triggers a paid claude run, so an open external endpoint would be a free-money pump.
+- Hardening: 30-min wall-clock timeout with `SIGTERM → 5s grace → SIGKILL` escalation; single-flight guard via module-local `documentatorRunning` flag held until `'close'` actually fires; `last-run.txt` only updated when `exitCode === 0` (spawn errors / timeouts must NOT silently mark the run as successful — that would suppress the next 24h of detections).
+- Audit trail per run at `docs/learnings/runs/YYYY-MM-DD-run.md` — raw stream-json frames + spawn-error / timeout markers.
+
+**Why**: today the team produces reflections (per-ticket narratives by DEVELOPER, read only by DEVELOPER), but no mechanism aggregates patterns across reflections + hook failures + retries + user friction. Adding a daily synthesizer means recurring frictions become visible (with counter + evidence trail), which is the prerequisite for any later "evolve the team based on real signals" work.
+
+### Bash whitelist hook
+- New `claudeConfig/.claude/hooks/restrict-documentator-bash.sh`, registered as the 5th `PreToolUse / Bash` hook. Gated on `DOCUMENTATOR_RUN=1` env var (set in the spawn env from the cron module) — pass-through for every other agent and for non-documentator claude sessions.
+- Whitelist: `git log`, `git show`, `ls`, `wc -l`. Anything else → exit 2 + stderr message.
+- **Metachar guard before the prefix check**. The first version was prefix-only and let `git log; rm -rf /app/docs/learnings/patterns.md` through (`;` chains the second command after the whitelisted first). The hardened version rejects any command containing `;`, `&&`, `||`, `|`, backtick, `$(`, `>`, `<`, or newline before the regex prefix check, so shell-metachar exploits land on exit 2.
+
+**Why**: documentator's "read-only mandate" depends on Bash being unable to exfiltrate or mutate. The hook is the only enforcement (frontmatter `tools` is informational with `-p` spawn). Caught in the e2e smoke: agent attempted `ls -la /chat-service/logs/ | tail -30`, hook blocked the pipe, agent adapted to `ls` + `wc -l` separately.
+
+### Bootstrap + bind for inspection
+- `entrypoint.sh` extended to create `/app/docs/learnings/runs/` and seed `patterns.md` with the canonical header on first boot (heredoc guarded by `[ ! -f ... ]`).
+- The named volume `crm-docs:/app/docs` was switched to a host bind-mount `./crm-docs:/app/docs` in the demo and full profiles. `./crm-docs/` is gitignored. Lets the maintainer open `crm-docs/learnings/patterns.md` directly in VS Code without `docker exec` or `docker cp`. Existing volume content was migrated via `docker cp` before the swap; the orphaned named volume can be removed with `docker volume rm crm-builder_crm-docs`.
+
+### Wiring
+- `chat-service/server.js` calls `scheduleDocumentator(DOCUMENTATOR_OPTS)` in the boot block before `httpServer.listen()`.
+- `DOCUMENTATOR_OPTS` exported from `chat-service/lib/server/config.js` (composed from `LOG_DIR`, `CLAUDE_HOME`, `CWD`).
+- The POST route lives in `chat-service/lib/server/http-routes.js`, which imports `runDocumentator` from `../documentator-cron.js`.
+
+### Field labels — English-only
+- The initial agent prompt used French field labels (`Premier vu`, `Dernier vu`, `Symptôme`, `Hypothèse`, `Action proposée`, `Contenu`, etc.) carried over from the design discussion. Fixed to English (`First seen`, `Last seen`, `Symptom`, `Hypothesis`, `Proposed action`, `Content`) to match the CLAUDE.md "agent prompts → English" convention. Existing 7 patterns produced in the smoke run were sed-replaced in place to keep the ledger consistent.
+
+### Design + plan
+- `docs/superpowers/specs/2026-04-27-documentator-design.md` — full spec with phase 1 / phase 2 trajectory, ledger format, validation criteria, deferred questions.
+- `docs/superpowers/plans/2026-04-27-documentator-phase1.md` — 10-task implementation plan executed via subagent-driven development (fresh subagent per task + spec compliance + code quality reviewer between tasks).
+
+### Smoke test
+- `docker compose --profile demo up -d`, manual trigger via `curl -X POST http://localhost:8080/api/documentator/run` from inside the container. Exit 0, 7 minutes, $1.08 sonnet.
+- 7 patterns detected on the first run (P-001 `prettier-exit2-persistent-worktree` through P-007 `base-branch-typecheck-contamination`). Each entry has the canonical format, evidence trail to `hooks.log` line ranges + TASK-IDs, and a concrete `Proposed action` with `Files Touched` and `Content`.
+- `node-cron` was `npm install`-ed at runtime against the live container; **a fresh `docker build -t atomic-crm-dev .` is required** before any clean-environment deploy (otherwise `chat-service` FATALs with `ERR_MODULE_NOT_FOUND: 'node-cron'`). `package.json` and `package-lock.json` already carry the dep.
+
+---
+
+## Phase 33 — UI redesign: persistent layout + side stats + log-hydrated state (2026-04-30, branch `refonte-UI`)
+
+A full-day pass on the chat UI: scrap the floating-widget-with-FAB shell in favour of a docked, full-height application layout (sessions sidebar + chat panel + CRM iframe), make the stats panel a real side aside instead of a mode that hijacks the chat area, and harden state continuity so refreshing or closing+reopening a tab no longer loses tokens/cost/debug history. Plus several bug fixes that surfaced once the panels were more visible (per-session `hooks.log`, formatDuration zero, debug-mode survival across sessions).
+
+### Layout: docked three-column shell, no more FAB
+
+- The previous shell had a 420×620 floating widget pinned bottom-right, a `#chat-fab` reopen button, a `#chat-actions` toolbar floating to its left, and a `#chat-history-panel` that slid out as a popup. All five gone.
+- New layout in `chat.css` is driven by two CSS custom properties on `<body>`: `--sidebar-width` (300px / 48px collapsed / 0 closed) and `--widget-width` (35vw / 0 closed). `body:has(#chat-history-panel.collapsed)` and `body:has(#chat-widget.chat-closed)` retarget those vars so the iframe / widget stack stays in sync without JS layout code.
+- `#crm-frame` is `left: var(--sidebar-width); width: calc(100vw - var(--sidebar-width))`, `#chat-widget` is `left: var(--sidebar-width); width: var(--widget-width)`, both with matching `transition: left/width .2s` — collapsing the sidebar or closing the widget animates everything together.
+- `#chat-widget.chat-closed` no longer `display: none`s; it stays in flow with `width: 0; opacity: 0; pointer-events: none` so the close→reopen transition is smooth and the iframe expands into the freed space.
+
+**Why**: the floating widget made the CRM iframe + sessions list compete for screen real estate (the widget covered the bottom-right corner of the CRM, and the sessions popup covered the widget). Docking turns the chat into a first-class panel of the app shell, gives sessions permanent visibility, and lets the user collapse rather than dismiss when they need more CRM room.
+
+### Persistent sessions sidebar (collapsible, recent-sessions fly-out)
+
+- New `#chat-history-panel` is a vertical sidebar always present on the left edge. Header shows the favicon + a collapse button; below it sit a sticky `+ New session` button and the scrolling history list.
+- Collapse state is persisted in `localStorage` under `chat-sidebar-collapsed` so reloads remember the user's preference. Collapsing hides everything except the `+` icon, the collapse-toggle, and a new `#history-recent-btn` (chat-bubble icon).
+- `#history-recent-btn` opens a popover showing the 5 most recent sessions, anchored vertically next to its trigger via a runtime `getBoundingClientRect()` read. The popover closes on outside-click, on `Escape`, on session-switch, and on `window.resize` (chosen over re-anchoring live — the rect-based positioning would drift during resize and the resize itself usually means the user is changing their layout, so closing is the more honest behaviour).
+- `loadHistory()` now runs unconditionally at boot rather than only when the panel is opened; `refreshHistory()` is a no-op when the panel is collapsed (collapsed mode uses the recent-sessions popover instead, which fetches on each open).
+- History list items use a separate `closeDiscussion()` path when the user clicks the *currently active* session (used to be `historyPanel.hidden = true`, which doesn't apply to a permanent panel).
+
+**Why**: with the sidebar always visible, the previous open/close logic was wrong on every level — `historyPanel.hidden` no longer toggles, "open history" no longer happens explicitly, and clicking the active session now means "close the chat panel" not "close the history popup". The collapsed-mode recent fly-out is the compromise so users who want maximum CRM room still have one-click access to recent sessions without expanding the full sidebar.
+
+### Welcome modal replaces `WELCOME_CHOICES`
+
+- `WELCOME_CHOICES` (the inline two-button "Set up my CRM from scratch / Make a quick change" prompt) deleted from `lib/server/config.js`. The init handler no longer sends `choices` for new sessions.
+- Replaced by an empty-state link inside `#chat-messages`: `Define your business` — opens a confirmation modal (`#chat-modal`) with title "Set up my CRM from scratch?", a Cancel/Let's go pair, backdrop-click + Escape + Enter handling.
+- Enter-to-confirm only fires when neither button has focus — so a user who tabs to Cancel and presses Enter cancels (the browser's native button activation handles that case), avoiding the trap where Enter always means "confirm".
+- On confirm, the client sends `{ content: 'FULL_SETUP', display: '🗺️  Set up my CRM from scratch' }` — same payload as the old choice button, so the orchestrator side is unchanged.
+
+**Why**: the inline choices made every empty session feel like a vending-machine ("pick a button"), even for users who already knew what they wanted. The free-form input is now the default; the FULL_SETUP affordance is still discoverable via a single-line CTA in the empty state. The confirmation modal exists because FULL_SETUP launches a 30+ minute interview — users were occasionally clicking it by mistake and ending up in the wrong flow.
+
+### Side stats panel (sliding aside, live refresh)
+
+- `#chat-stats-panel` was previously an in-widget element that the chat-area mode-switched into via `widget.classList.add('chat-stats-mode')` — chat content was hidden, stats took over, the toolbar button toggled `📊` ⇄ `←`.
+- Now it's an `<aside>` docked to the right of the chat widget (full-height, slides in/out via `transform: translateX(100%)`), with its own header + close button. Chat content stays visible behind it, so users can read the conversation while inspecting stats.
+- The `📊` button is no longer hidden until the first user message — it shows immediately. The button toggles a `.stats-active` class for visual feedback instead of swapping its glyph.
+- New live-refresh: `scheduleStatsPanelRefresh()` re-fetches `/api/stats` whenever `stats` or `status` events arrive while the panel is open, debounced to a minimum 2s interval (`STATS_REFRESH_MIN_INTERVAL_MS`) to keep the panel in sync with an in-progress turn without thrashing the aggregator.
+- Top-ops section dropped (`stats/top-ops.js` removed, `summary.js` no longer surfaces "ops" count). The summary KPI line keeps duration / agents / tokens / cost / errors / retries.
+
+**Why**: the chat-replaces-stats mode meant users couldn't watch a long-running turn while reading what was previously said — they had to flip back and forth. The aside lets both views coexist. The live refresh closes the gap between the inline `🤖 N · X in · Y out · $Z` ticker (always live) and the rich panel (used to be a frozen snapshot from when you opened it). Top-ops was redundant with the chronology section's per-phase costs.
+
+### Stats hydrated from the log (survive runtime teardown)
+
+- `messagesFromLog` is replaced by `digestLog`, which now also extracts `{ tokensUsed, costUsd }` by summing across `result` events in the log (per-spawn cumulative `total_cost_usd`, sum of `input + cache_creation + output` tokens — `cache_read` still excluded as before).
+- `openSession` returns the digest's `stats` alongside `messages` / `recentDebug` / `timeline`. `createRuntime` seeds `stats.tokensUsed` and `stats.costUsd` from `session.stats?.tokensUsed || 0` instead of starting at 0.
+- On (re)connect, `server.js` emits a `stats` frame *only if* `tokensUsed > 0 || costUsd > 0` so a fresh session doesn't flash "0 tokens · $0.000" before the first turn lands.
+
+**Why**: previously, when the last connected tab closed the runtime was torn down, and the next page-load got `tokensUsed = 0 / costUsd = $0.000` even though the log carried full history. Users complained that "the cost counter resets when I refresh". The log is the source of truth for messages already; piping the same digest through to derive cumulative stats is the natural fix and keeps the inline ticker honest across runtime lifetimes.
+
+### Debug events in chronological timeline (replaces append-at-end)
+
+- `digestLog` now produces a single `timeline: [{kind: 'message'|'debug', ...}]` chronological interleave instead of two separate arrays. Messages and debug events appear in the order they were logged, capped at `DEBUG_REPLAY_MAX = 1000` debug entries (oldest dropped, message ordering preserved via a side index of debug slot positions).
+- `init` frame now carries `timeline` (new field) alongside `messages` (kept for back-compat with older clients). When `timeline` is present, the client renders items in order — debugs land between the messages they happened between, not bunched at the end after a refresh.
+- Client buffers each replayed debug event back into `pushDebugEvent` so a later debug-mode toggle still has the same in-memory buffer that a continuously-connected tab would have.
+- The cap exists because an orchestrator turn emits hundreds of `debug_raw` frames and the log grows unbounded across multi-turn sessions; without a cap, a refreshed tab could replay tens of thousands of debug events and freeze the renderer.
+
+**Why**: the previous "messages first, then a wall of debugs" layout was wrong about temporality — a debug event explaining a tool call should sit *next to* the assistant message that triggered it, not three turns later. The cap-with-message-preservation invariant came up in review: dropping older debug entries is fine, but dropping a message would be a data-loss bug.
+
+### Per-session `hooks.log` (was leaking across sessions)
+
+- All hook scripts (`block-bash-file-write.sh`, `block-bash-validation.sh`, `circuit-breaker.sh`, `prettier-on-stop.sh`, `run-e2e-tests.sh`, `run-unit-tests-app.sh`, `run-unit-tests-functions.sh`, `typecheck-on-commit.sh`) now write to `$CHAT_SESSION_DIR/hooks.log` instead of the global `/chat-service/logs/hooks.log`.
+- `claude-spawn.js` exports `CHAT_SESSION_DIR=<sessionDir>` into the spawn env; hooks read it from the environment.
+- `lib/server/config.js` no longer exports `HOOKS_LOG_PATH`; `http-routes.js` builds a per-session `hooksLogPath` for `aggregateSession`.
+- `documentator.md` updated to read from `/chat-service/logs/<session-id>/hooks.log`, and the agent's iteration loop folds hooks-log reads into the session-subdir scan (one less Read source).
+
+**Why**: the global `hooks.log` mixed events from concurrent sessions, which made the per-session stats panel attribute another session's circuit-breaker trips and prettier failures to the wrong session. Once the stats panel became a permanent fixture (rather than an occasional lookup), this leak was suddenly visible on every screen.
+
+### Polish round
+
+- **SVG icons** replace emoji buttons on the toolbar (`📊 → bar-chart-2`, `🔍 → bug`, `↑ → arrow-up`, `⏹ → stop-square`, `✚ → text label "+ New session"`, `📂 → square-with-divider` for sidebar collapse, `chat-bubble` for recent-sessions popover trigger). Inline lucide-style SVGs, no asset pipeline.
+- **`formatDuration` rewrite** in `public/lib/dom.js` — was returning `0s` for sub-second durations and `1m 5s` without zero-padding. Now: clamps to ≥ 1s (so a real 30ms tool call doesn't render as "0s"), zero-pads minutes/seconds (`1m 05s`), supports hours (`1h 05m 03s`).
+- **Stop button moved into the form** (next to send) instead of the header. Send is hidden while working; stop replaces it. Cleaner mental model: the input area shows the action you can currently take.
+- **`exitStatsMode` on session-switch** — `resetChatUi` now calls `exitStatsMode()` if the panel is open, so switching sessions doesn't leave a stale stats panel showing data from the previous session.
+- **Debug mode survives session switch** — `clearMessageNodes()` only removes message DOM nodes, not the debug button state. Was previously `messages.replaceChildren()` which combined with toggle re-init silently dropped the active debug class on session-switch.
+- **Modal-mode Enter handling** — when the welcome modal is open, Enter inside the chat textarea no longer fires the form submit (handled at the modal's own keydown listener with focus-aware logic).
+- **Sidebar-state persistence under tests** — `chat-service/test/session-store.test.js` (new, 192 lines) covers the `digestLog` helper: tokens-without-cache-read, cost summation across multiple result events, malformed-JSON tolerance, debug timeline ordering, the `DEBUG_REPLAY_MAX` cap with message preservation. `chat-service/test/session-store.test.js` extended in c6c3f17 with debug-mode replay tests (+99 lines).
+- **Auto-focus the textarea on new session** — `switchSessionAndOpen(null)` calls `input.focus()` so the user can start typing immediately. Recent-sessions popover closes on `window.resize` (anchored coordinates would drift).
+- **`#chat-empty-state` empty hint** — "Define your business [link] to get better results" appears only when the messages list is empty, fades out as soon as the first message lands.
+
+---
+
 ## Open items / known limits
 
 - **`medium-new-field` test** times out at 15 min (bumped to 35 min). Real agent-team flow on a multi-file feature naturally takes 20-30 min.
@@ -830,4 +962,4 @@ Targets: `build`, `up` (demo profile), `up-full` (full profile), `down`, `restar
 
 ---
 
-_Last updated: 2026-04-27 (Phase 31)_
+_Last updated: 2026-05-01 (Phase 33)_

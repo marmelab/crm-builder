@@ -2,7 +2,7 @@
 # SubagentStop hook — unit tests (app) in each active worktree with changes.
 # Exit 2 on failure → stderr injected, subagent stays alive.
 
-LOG=/chat-service/logs/hooks.log
+LOG="$CHAT_SESSION_DIR/hooks.log"
 mkdir -p "$(dirname "$LOG")" 2>/dev/null
 STDIN=$(cat)
 echo "[$(date -Iseconds)] unit-app START pwd=$(pwd) CLAUDE_PROJECT_DIR=$CLAUDE_PROJECT_DIR" >> "$LOG"

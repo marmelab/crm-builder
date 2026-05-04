@@ -1,7 +1,9 @@
-import { readFile } from 'fs/promises';
-import { extname, join } from 'path';
-import { LOG_DIR, HOOKS_LOG_PATH, ALLOWED_STATES, MIME_TYPES, UUID_RE } from './config.js';
+import { readFile } from 'node:fs/promises';
+import { extname, join } from 'node:path';
+import { LOG_DIR, ALLOWED_STATES, MIME_TYPES, UUID_RE, DOCUMENTATOR_OPTS } from './config.js';
 import { listSessions, getSession, patchSession } from './session-store.js';
+import { runtimes } from './runtime.js';
+import { runDocumentator } from '../documentator-cron.js';
 
 function readJsonBody(req) {
   return new Promise((resolve, reject) => {
@@ -26,9 +28,10 @@ async function handleStatsRequest(req, res) {
     return;
   }
   const logPath = `${LOG_DIR}/${sessionId}/log.jsonl`;
+  const hooksLogPath = `${LOG_DIR}/${sessionId}/hooks.log`;
   try {
     const { aggregateSession } = await import('../stats.js');
-    const out = await aggregateSession({ sessionLogPath: logPath, hooksLogPath: HOOKS_LOG_PATH, sessionId });
+    const out = await aggregateSession({ sessionLogPath: logPath, hooksLogPath, sessionId });
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(out));
   } catch (err) {
@@ -46,6 +49,30 @@ async function handleStatsRequest(req, res) {
 export function createRequestHandler({ publicDir }) {
   return async (req, res) => {
     if (req.url?.startsWith('/api/stats')) return handleStatsRequest(req, res);
+
+    // API: trigger a documentator run manually (loopback only — see config.js for opts).
+    if (req.url === '/api/documentator/run' && req.method === 'POST') {
+      const remote = req.socket.remoteAddress || '';
+      const isLoopback =
+        remote === '127.0.0.1' ||
+        remote === '::1' ||
+        remote === '::ffff:127.0.0.1';
+      if (!isLoopback) {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'documentator manual trigger restricted to loopback' }));
+        return;
+      }
+      runDocumentator(DOCUMENTATOR_OPTS)
+        .then((result) => {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(result));
+        })
+        .catch((err) => {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err.message }));
+        });
+      return;
+    }
 
     // API: list sessions
     if (req.url === '/api/sessions' && req.method === 'GET') {
@@ -76,7 +103,13 @@ export function createRequestHandler({ publicDir }) {
           if (hasState && !ALLOWED_STATES.has(body.state)) {
             res.writeHead(400); res.end(`state must be one of: ${[...ALLOWED_STATES].join(', ')}`); return;
           }
-          const meta = await patchSession(id, body);
+          // If a runtime is active for this session, apply the patch through it
+          // so its in-memory meta stays in sync; otherwise fall back to the
+          // disk-only patcher.
+          const runtime = runtimes.get(id);
+          const meta = runtime?.session
+            ? await runtime.session.applyPatch(body)
+            : await patchSession(id, body);
           if (!meta) { res.writeHead(404); res.end('Not found'); return; }
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify(meta));

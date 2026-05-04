@@ -43,6 +43,10 @@ services:
       # DEV ONLY — logs structurés des sessions chat pour review/analyse.
       # RETIRER avant release production.
       - ./sessions:/chat-service/logs
+      # Runtime-generated tickets, reflections, learnings.
+      # DEV bind so the maintainer can inspect patterns.md / reflections / etc.
+      # directly from the host. Persists indefinitely on host until `rm -rf`.
+      - ./crm-docs:/app/docs
 
   # ── Full mode — local Supabase, requires Docker socket ─────
   crm-full:
@@ -60,6 +64,8 @@ services:
       - claude-auth:/home/developer/.claude
       - /var/run/docker.sock:/var/run/docker.sock # ⚠️ required
       - supabase-cache:/root/.docker              # cache pulled images
+      # Runtime-generated tickets, reflections, learnings (see demo profile comment).
+      - ./crm-docs:/app/docs
 
 volumes:
   crm-app:

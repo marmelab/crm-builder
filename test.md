@@ -34,3 +34,5 @@ V2 agentic team :
 * case 1 : 21k 0.288$ 2min21 
 * case 2 : 
 * case 4 : 
+
+* enlever silent-mode-check

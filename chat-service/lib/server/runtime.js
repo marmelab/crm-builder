@@ -30,10 +30,11 @@ export function createRuntime(session) {
     clients: new Set(),
     stats: {
       // tokensUsed = fresh input + cache_creation + output (cache_read excluded:
-      // it's re-hydrated cached context, not "burned" from the user's budget)
-      tokensUsed: 0,
+      // it's re-hydrated cached context, not "burned" from the user's budget).
+      // Seeded from the log digest so the ticker survives a runtime teardown.
+      tokensUsed: session.stats?.tokensUsed || 0,
       // costUsd = committed cost from finished spawns
-      costUsd: 0,
+      costUsd: session.stats?.costUsd || 0,
       // costUsdCurrentSpawn = cumulative total_cost_usd from the in-progress spawn
       // (Claude CLI emits this as cumulative-within-spawn, so we replace not add)
       costUsdCurrentSpawn: 0,

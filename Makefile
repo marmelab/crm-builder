@@ -1,6 +1,7 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help build up up-full down restart logs shell test test-smoke bench bench-update clean-sessions reset
+.PHONY: help build up up-full down restart logs shell test test-smoke bench bench-update clean-sessions reset \
+        start demo full stop kill image log tail bash exec tests smoke clean archive reload
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*##"; printf "Usage: make <target>\n\nTargets:\n"} /^[a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -52,3 +53,20 @@ clean-sessions: ## Archive ./sessions into ./old-sessions/<timestamp>/ (non-dest
 		find sessions -mindepth 1 -maxdepth 1 -exec mv -t "old-sessions/$$ts/" {} + && \
 		echo "sessions/ → old-sessions/$$ts/"; \
 	fi
+
+# --- Aliases (synonyms) ---
+start: up           ## Alias for `up`
+demo: up            ## Alias for `up`
+full: up-full       ## Alias for `up-full`
+stop: down          ## Alias for `down`
+kill: down          ## Alias for `down`
+reload: restart     ## Alias for `restart`
+image: build        ## Alias for `build`
+log: logs           ## Alias for `logs`
+tail: logs          ## Alias for `logs`
+bash: shell         ## Alias for `shell`
+exec: shell         ## Alias for `shell`
+tests: test         ## Alias for `test`
+smoke: test-smoke   ## Alias for `test-smoke`
+clean: clean-sessions   ## Alias for `clean-sessions`
+archive: clean-sessions ## Alias for `clean-sessions`

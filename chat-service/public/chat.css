@@ -1,38 +1,45 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
-body { height: 100vh; overflow: hidden; font-family: system-ui, sans-serif; background: #0f0f0f; }
+/* Layout widths are driven by these custom properties so the sidebar /
+   widget / iframe stack stays in sync (and animates together) regardless
+   of which panel is collapsed or closed. */
+body {
+  --sidebar-width: 300px;
+  --widget-width: 35vw;
+  height: 100vh; overflow: hidden;
+  font-family: system-ui, sans-serif; background: #0f0f0f;
+}
+body:has(#chat-history-panel.collapsed) { --sidebar-width: 48px; }
+body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
 
 #crm-frame {
-  position: fixed; inset: 0;
-  width: 100%; height: 100%;
+  position: fixed; top: 0;
+  left: var(--sidebar-width);
+  width: calc(100vw - var(--sidebar-width));
+  height: 100vh;
   border: none;
   background: white;
+  transition: left .2s, width .2s;
 }
 
-/* Floating action button (shown when chat is closed) */
-#chat-fab {
-  position: fixed; bottom: 28px; right: 28px; z-index: 100;
-  width: 56px; height: 56px; border-radius: 50%;
-  background: #3b82f6; color: white;
-  border: none; cursor: pointer; font-size: 24px;
-  box-shadow: 0 4px 20px rgba(59,130,246,.6);
-  display: none;
-  align-items: center; justify-content: center;
-  transition: background .15s, transform .15s;
-}
-#chat-fab:hover { background: #2563eb; transform: scale(1.05); }
-
-/* Chat widget */
+/* Chat widget — full-height panel docked immediately to the right of the
+   sessions sidebar (and to the left of the CRM iframe). */
 #chat-widget {
-  position: fixed; bottom: 28px; right: 28px; z-index: 200;
-  width: 420px; height: 620px;
-  background: #1c1c1e; border-radius: 20px;
+  position: fixed; top: 0; bottom: 0; z-index: 200;
+  left: var(--sidebar-width);
+  width: var(--widget-width);
+  background: #1c1c1e;
   box-shadow: 0 12px 60px rgba(0,0,0,.6);
   display: flex; flex-direction: column;
   overflow: hidden;
-  transition: opacity .2s, transform .2s;
+  transition: left .2s, width .2s, opacity .2s;
 }
-#chat-widget.chat-closed { display: none; }
+/* Width drops to 0 (via --widget-width) and the content fades out — the
+   width transition animates the collapse, opacity smooths the disappearance. */
+#chat-widget.chat-closed {
+  opacity: 0;
+  pointer-events: none;
+}
 
 #chat-header {
   display: flex; align-items: center; gap: 10px;
@@ -55,44 +62,81 @@ body { height: 100vh; overflow: hidden; font-family: system-ui, sans-serif; back
 }
 #chat-title:hover { background: rgba(255,255,255,.06); }
 
-#chat-debug, #chat-expand {
+#chat-debug {
+  display: inline-flex; align-items: center; justify-content: center;
   background: none; border: none; color: #636366;
-  cursor: pointer; font-size: 14px; padding: 2px 4px;
-  transition: color .15s; border-radius: 6px;
+  cursor: pointer; padding: 4px;
+  transition: color .15s, background .15s; border-radius: 6px;
 }
-#chat-debug:hover, #chat-expand:hover { color: #fff; }
+#chat-debug:hover { color: #fff; }
 #chat-debug.debug-active { color: #3b82f6; background: rgba(59,130,246,.15); }
+#chat-debug svg { display: block; }
 
-/* Global session toolbar — lives outside #chat-widget so the ✚/📂 actions
-   aren't visually tied to the currently-displayed session. */
-#chat-actions {
-  position: fixed; bottom: 28px; right: calc(28px + 420px + 10px); z-index: 200;
-  display: flex; flex-direction: column; gap: 6px;
-  background: #1c1c1e; border: 1px solid #2c2c2e;
-  border-radius: 14px; padding: 6px;
-  box-shadow: 0 8px 30px rgba(0,0,0,.5);
+/* Sessions panel — full-height sidebar pinned to the left edge of the
+   viewport, always visible while the widget is open. */
+#chat-history-panel {
+  position: fixed; top: 0; left: 0; bottom: 0; z-index: 200;
+  width: var(--sidebar-width);
+  background: #1c1c1e; border-right: 1px solid #3a3a3c;
+  box-shadow: 4px 0 30px rgba(0,0,0,.5);
+  display: flex; flex-direction: column;
+  overflow: hidden;
+  transition: width .2s;
 }
-#chat-actions button {
-  width: 38px; height: 38px;
-  background: none; border: none; color: #8e8e93;
-  cursor: pointer; font-size: 16px; border-radius: 8px;
-  display: flex; align-items: center; justify-content: center;
+#chat-history-panel.collapsed #chat-new .chat-new-label,
+#chat-history-panel.collapsed #history-list,
+#chat-history-panel.collapsed #history-empty,
+#chat-history-panel.collapsed .history-logo { display: none; }
+#chat-history-panel.collapsed #chat-new { justify-content: center; padding: 10px 0; }
+
+#history-recent-btn {
+  display: none;
+  align-items: center; justify-content: center;
+  width: 100%; padding: 10px 0;
+  background: none; border: none;
+  border-bottom: 1px solid #2c2c2e;
+  color: #8e8e93; cursor: pointer;
   transition: background .15s, color .15s;
 }
-#chat-actions button:hover { background: #2c2c2e; color: #fff; }
-/* Hide the toolbar when the widget is closed (FAB takes over). */
-#chat-widget.chat-closed ~ #chat-actions { display: none; }
-/* Expanded mode: the widget covers the right half of the screen. */
-#chat-widget.chat-expanded ~ #chat-actions {
-  right: calc(50vw + 10px); bottom: 16px;
-}
+#history-recent-btn:hover { background: #2c2c2e; color: #fff; }
+#history-recent-btn svg { display: block; }
+#chat-history-panel.collapsed #history-recent-btn { display: flex; }
 
-#chat-stop {
-  background: rgba(244,63,94,.15); border: none; color: #f43f5e;
-  cursor: pointer; font-size: 13px; padding: 3px 8px; border-radius: 6px;
-  font-weight: 600; transition: background .15s, opacity .15s;
+#history-recent-popup {
+  position: fixed; z-index: 300;
+  left: calc(var(--sidebar-width) + 6px);
+  width: 280px; max-height: 60vh;
+  background: #1c1c1e; border: 1px solid #3a3a3c; border-radius: 10px;
+  box-shadow: 0 10px 40px rgba(0,0,0,.6);
+  display: flex; flex-direction: column;
+  overflow: hidden;
 }
-#chat-stop:hover:not(:disabled) { background: rgba(244,63,94,.28); }
+#history-recent-popup[hidden] { display: none; }
+#history-recent-popup-header {
+  padding: 10px 14px; border-bottom: 1px solid #2c2c2e;
+  font-weight: 600; color: #f2f2f7; font-size: 13px;
+  flex-shrink: 0;
+}
+#history-recent-list {
+  list-style: none; overflow-y: auto; padding: 6px 0; margin: 0;
+  flex: 1;
+}
+#history-recent-empty {
+  padding: 18px; color: #636366; font-size: 12px; text-align: center;
+}
+#history-recent-empty[hidden] { display: none; }
+
+/* Stop button — same shape/footprint as #chat-send, takes its place inside
+   #chat-form whenever a Claude turn is in progress. */
+#chat-stop {
+  width: 38px; height: 38px; border-radius: 50%; flex-shrink: 0;
+  background: #f43f5e; color: white; border: none;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: background .15s, opacity .15s, transform .1s;
+}
+#chat-stop svg { display: block; }
+#chat-stop:hover:not(:disabled) { background: #e11d48; transform: scale(1.05); }
 #chat-stop:disabled { opacity: .5; cursor: default; }
 
 /* Session state badge (derived from claude activity; read-only) */
@@ -113,33 +157,39 @@ body { height: 100vh; overflow: hidden; font-family: system-ui, sans-serif; back
   margin-right: 2px;
 }
 
-/* History panel — popover anchored to the left of the #chat-actions toolbar.
-   Bottom-anchored so the list grows upward and stays within the viewport
-   regardless of how many sessions are loaded. */
-#chat-history-panel {
-  position: absolute; bottom: 0; right: calc(100% + 8px); z-index: 10;
-  width: 300px; max-height: 70vh;
-  background: #1c1c1e; border: 1px solid #3a3a3c; border-radius: 12px;
-  box-shadow: 0 8px 30px rgba(0,0,0,.6);
-  display: flex; flex-direction: column;
-  overflow: hidden;
-}
-/* Explicit `display: flex` above would otherwise override the [hidden] attribute. */
-#chat-history-panel[hidden] { display: none; }
 #history-panel-header {
   display: flex; align-items: center; justify-content: space-between;
   padding: 10px 14px; border-bottom: 1px solid #2c2c2e;
   font-weight: 600; color: #f2f2f7; font-size: 13px;
 }
-#history-panel-header button {
-  background: none; border: none; color: #636366;
-  cursor: pointer; font-size: 14px; padding: 2px 4px;
+.history-logo { display: block; }
+#history-collapse {
+  display: inline-flex; align-items: center; justify-content: center;
+  background: none; border: none; color: #8e8e93;
+  cursor: pointer; padding: 4px; border-radius: 6px;
+  transition: background .15s, color .15s;
 }
-#history-panel-header button:hover { color: #fff; }
+#history-collapse:hover { background: #2c2c2e; color: #fff; }
+#history-collapse svg { display: block; }
+#chat-new {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; padding: 10px 14px;
+  background: none; border: none;
+  border-bottom: 1px solid #2c2c2e;
+  color: #60a5fa; cursor: pointer;
+  font-family: inherit; font-size: 13px; font-weight: 500; text-align: left;
+  transition: background .15s;
+}
+#chat-new:hover { background: #2c2c2e; }
+.chat-new-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 16px; font-size: 14px; font-weight: 600;
+}
 #history-list {
   list-style: none; overflow-y: auto; padding: 6px 0; margin: 0;
   flex: 1;
 }
+#history-list:empty { flex: 0; padding: 0; }
 .history-item {
   padding: 10px 14px; cursor: pointer;
   border-bottom: 1px solid #2c2c2e;
@@ -156,16 +206,11 @@ body { height: 100vh; overflow: hidden; font-family: system-ui, sans-serif; back
   color: #636366; font-size: 11px; margin-top: 3px;
 }
 #history-empty {
+  flex: 1;
+  display: flex; align-items: center; justify-content: center;
   padding: 18px; color: #636366; font-size: 12px; text-align: center;
 }
-
-/* Expanded mode */
-#chat-widget.chat-expanded {
-  width: 50vw;
-  height: 100vh;
-  bottom: 0; right: 0;
-  border-radius: 0;
-}
+#history-empty[hidden] { display: none; }
 
 #chat-toggle {
   background: none; border: none; color: #636366;
@@ -177,6 +222,29 @@ body { height: 100vh; overflow: hidden; font-family: system-ui, sans-serif; back
 #chat-messages {
   flex: 1; overflow-y: auto; padding: 18px;
   display: flex; flex-direction: column; gap: 12px;
+}
+#chat-empty-state {
+  margin: auto; padding: 0 24px;
+  display: flex; flex-direction: row; align-items: center; gap: 8px;
+  color: #8e8e93; font-size: 13px;
+  white-space: nowrap;
+}
+.empty-hint { color: #8e8e93; }
+#chat-messages:has(.msg, .msg-working, .msg-choices) #chat-empty-state {
+  display: none;
+}
+.empty-link {
+  background: none; border: none; padding: 0;
+  font: inherit; font-weight: 500;
+  color: #d1d1d6;
+  text-decoration: underline; text-underline-offset: 3px;
+  text-decoration-color: rgba(209, 209, 214, .4);
+  cursor: pointer;
+  transition: color .15s ease, text-decoration-color .15s ease;
+}
+.empty-link:hover {
+  color: #fff;
+  text-decoration-color: #fff;
 }
 #chat-messages::-webkit-scrollbar { width: 4px; }
 #chat-messages::-webkit-scrollbar-thumb { background: #3a3a3c; border-radius: 2px; }
@@ -286,12 +354,16 @@ body { height: 100vh; overflow: hidden; font-family: system-ui, sans-serif; back
 #chat-send {
   width: 38px; height: 38px; border-radius: 50%; flex-shrink: 0;
   background: #3b82f6; color: white; border: none;
-  cursor: pointer; font-size: 17px; font-weight: bold;
+  cursor: pointer;
   transition: background .15s, transform .1s;
   display: flex; align-items: center; justify-content: center;
 }
+#chat-send svg { display: block; }
 #chat-send:disabled { background: #3a3a3c; cursor: default; transform: none; }
 #chat-send:not(:disabled):hover { background: #2563eb; transform: scale(1.05); }
+/* Restore the UA `display: none` from [hidden] — the id-level `display: flex`
+   above would otherwise win on specificity and keep both buttons rendered. */
+#chat-send[hidden], #chat-stop[hidden] { display: none; }
 
 #chat-stats {
   padding: 8px 16px 12px; font-size: 12px; color: #8e8e93;
@@ -302,23 +374,55 @@ body { height: 100vh; overflow: hidden; font-family: system-ui, sans-serif; back
 }
 
 #chat-stats-btn {
+  display: inline-flex; align-items: center; justify-content: center;
   background: none; border: none; color: #636366;
-  cursor: pointer; font-size: 14px; padding: 2px 4px;
+  cursor: pointer; padding: 4px;
   transition: color .15s, opacity .15s; border-radius: 6px;
 }
 #chat-stats-btn:hover:not(:disabled) { color: #fff; }
 #chat-stats-btn:disabled { opacity: .35; cursor: not-allowed; }
+#chat-stats-btn svg { display: block; }
 
-#chat-widget.chat-stats-mode #chat-messages,
-#chat-widget.chat-stats-mode #chat-form,
-#chat-widget.chat-stats-mode #chat-debug { display: none; }
-
+/* Stats panel — full-height overlay docked to the right of #chat-widget,
+   covering the iframe area. Discussion stays accessible underneath. */
 #chat-stats-panel {
+  position: fixed; top: 0; bottom: 0;
+  left: calc(var(--sidebar-width) + var(--widget-width));
+  width: calc(100vw - var(--sidebar-width) - var(--widget-width));
+  z-index: 200;
+  background: #1c1c1e; border-left: 1px solid #3a3a3c;
+  box-shadow: -4px 0 30px rgba(0,0,0,.5);
+  display: flex; flex-direction: column;
+  overflow: hidden;
+  transition: left .2s, width .2s, transform .25s ease, opacity .2s;
+}
+/* Override the UA default `display: none` for [hidden] so the panel can
+   transition. Slides off to the right and fades out instead. */
+#chat-stats-panel[hidden] {
+  display: flex;
+  transform: translateX(100%);
+  opacity: 0;
+  pointer-events: none;
+}
+#chat-stats-panel-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 16px; border-bottom: 1px solid #2c2c2e;
+  font-weight: 600; color: #f2f2f7; font-size: 13px;
+  flex-shrink: 0;
+}
+#chat-stats-close {
+  background: none; border: none; color: #8e8e93;
+  cursor: pointer; font-size: 16px; padding: 2px 6px; border-radius: 6px;
+  transition: background .15s, color .15s;
+}
+#chat-stats-close:hover { background: #2c2c2e; color: #fff; }
+#chat-stats-panel-body {
   flex: 1; overflow-y: auto; padding: 16px;
   font-size: 13px; color: #f2f2f7;
 }
-#chat-stats-panel::-webkit-scrollbar { width: 4px; }
-#chat-stats-panel::-webkit-scrollbar-thumb { background: #3a3a3c; border-radius: 2px; }
+#chat-stats-panel-body::-webkit-scrollbar { width: 4px; }
+#chat-stats-panel-body::-webkit-scrollbar-thumb { background: #3a3a3c; border-radius: 2px; }
+#chat-stats-btn.stats-active { color: #3b82f6; background: rgba(59,130,246,.15); }
 
 .stats-loading { padding: 24px; text-align: center; color: #8e8e93; }
 .stats-error {
@@ -334,10 +438,12 @@ body { height: 100vh; overflow: hidden; font-family: system-ui, sans-serif; back
 .stats-section { margin-bottom: 20px; }
 .stats-kpi-line {
   display: flex; flex-wrap: wrap; gap: 12px;
+  align-items: center;
   font-size: 12px; color: #d1d5db;
   padding: 10px 12px; background: #2c2c2e; border-radius: 10px;
   font-variant-numeric: tabular-nums;
 }
+.stats-kpi-line .kpi-spacer { margin-left: auto; }
 .stats-kpi-line .kpi-warn { color: #f59e0b; }
 
 .stats-team-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
@@ -437,24 +543,6 @@ body { height: 100vh; overflow: hidden; font-family: system-ui, sans-serif; back
 .child-stream_gap { opacity: 0.65; font-style: italic; }
 .child-stream_gap .child-label { color: #8e8e93; }
 
-.stats-top-grid {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 12px;
-}
-.stats-top-col { background: #2c2c2e; border-radius: 10px; padding: 10px 12px; }
-.stats-top-col h4 {
-  font-size: 11px; font-weight: 600; color: #8e8e93;
-  margin-bottom: 6px; text-transform: uppercase; letter-spacing: .04em;
-}
-.stats-top-list { list-style: decimal inside; padding: 0; margin: 0; }
-.stats-top-list li { padding: 4px 0; font-size: 11px; border-bottom: 1px solid #3a3a3c; }
-.stats-top-list li:last-child { border-bottom: none; }
-.stats-top-list li.slow .top-value { color: #f59e0b; font-weight: 600; }
-.top-main { color: #f2f2f7; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.top-meta { color: #636366; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.top-value { color: #8e8e93; font-variant-numeric: tabular-nums; }
-.top-empty { color: #636366; font-style: italic; list-style: none; }
-
 .stats-sub { margin-bottom: 16px; }
 .stats-sub h4 {
   font-size: 11px; font-weight: 600; color: #8e8e93;
@@ -504,4 +592,73 @@ body { height: 100vh; overflow: hidden; font-family: system-ui, sans-serif; back
   background: var(--accent, #38bdf8);
   margin: 0 1px;
   border-radius: 2px;
+}
+
+#chat-modal {
+  position: fixed; inset: 0; z-index: 1000;
+  display: flex; align-items: center; justify-content: center;
+}
+#chat-modal[hidden] { display: none; }
+#chat-modal-backdrop {
+  position: absolute; inset: 0;
+  background: rgba(0, 0, 0, .55);
+  backdrop-filter: blur(4px);
+  animation: modal-fade .15s ease-out;
+}
+#chat-modal-panel {
+  position: relative;
+  width: min(420px, calc(100vw - 32px));
+  background: linear-gradient(160deg, #2c2c2e 0%, #1c1c1e 100%);
+  border: 1px solid #3a3a3c;
+  border-radius: 16px;
+  padding: 28px 24px 20px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, .6);
+  text-align: center;
+  animation: modal-pop .18s ease-out;
+}
+#chat-modal-icon {
+  width: 48px; height: 48px; margin: 0 auto 14px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 22px; color: #fff;
+  box-shadow: 0 6px 20px rgba(59, 130, 246, .35);
+}
+#chat-modal-title {
+  font-size: 17px; font-weight: 600; color: #f2f2f7;
+  margin-bottom: 8px;
+}
+#chat-modal-body {
+  font-size: 13px; line-height: 1.5; color: #8e8e93;
+  margin-bottom: 22px;
+}
+#chat-modal-actions {
+  display: flex; gap: 10px; justify-content: center;
+}
+.modal-btn {
+  flex: 1; max-width: 160px;
+  padding: 10px 18px; border-radius: 10px;
+  font-size: 14px; font-weight: 600;
+  border: none; cursor: pointer;
+  transition: transform .1s, filter .15s, background .15s;
+}
+.modal-btn:active { transform: scale(.97); }
+.modal-btn-secondary {
+  background: #3a3a3c; color: #f2f2f7;
+}
+.modal-btn-secondary:hover { background: #48484a; }
+.modal-btn-primary {
+  background: linear-gradient(135deg, #3b82f6, #2563eb);
+  color: #fff;
+  box-shadow: 0 4px 14px rgba(59, 130, 246, .35);
+}
+.modal-btn-primary:hover { filter: brightness(1.1); }
+
+@keyframes modal-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes modal-pop {
+  from { opacity: 0; transform: translateY(8px) scale(.96); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
 }

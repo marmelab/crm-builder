@@ -5,11 +5,12 @@
     "mode": "quick_edit",
     "prompt": "change the 'Hot Contacts' label on the dashboard to 'My Friends'",
     "expect": {
-      "mustNotInvoke": [
-        "planner"
-      ],
+      "mustNotInvoke": ["planner"],
       "maxDurationMs": 150000,
-      "maxCostUsd": 0.60
+      "maxCostUsd": 0.60,
+      "mustModify": ["src/components/atomic-crm/dashboard/HotContacts.tsx"],
+      "mustNotModify": ["src/components/atomic-crm/contacts/**", "src/components/atomic-crm/deals/**"],
+      "expectedDiffStats": { "filesChanged": 1, "linesAdded": 1, "linesRemoved": 1 }
     }
   },
   {
@@ -18,11 +19,11 @@
     "mode": "quick_edit",
     "prompt": "change the primary color of the CRM to purple",
     "expect": {
-      "mustNotInvoke": [
-        "planner"
-      ],
+      "mustNotInvoke": ["planner"],
       "maxDurationMs": 180000,
-      "maxCostUsd": 0.80
+      "maxCostUsd": 0.80,
+      "mustModify": ["src/index.css"],
+      "expectedDiffStats": { "filesChanged": 1, "linesAdded": 2, "linesRemoved": 2 }
     }
   },
   {
@@ -31,11 +32,11 @@
     "mode": "quick_edit",
     "prompt": "hide the Refresh button in the CRM header",
     "expect": {
-      "mustNotInvoke": [
-        "planner"
-      ],
+      "mustNotInvoke": ["planner"],
       "maxDurationMs": 180000,
-      "maxCostUsd": 0.80
+      "maxCostUsd": 0.80,
+      "mustModify": ["src/components/atomic-crm/layout/Header.tsx"],
+      "expectedDiffStats": { "filesChanged": 1, "linesAdded": 0, "linesRemoved": 4 }
     }
   },
   {
@@ -58,12 +59,14 @@
     "mode": "quick_edit",
     "prompt": "add a 'priority' field (low/medium/high) to the deals entity, shown in the edit form and the deal card",
     "expect": {
-      "mustInvoke": [
-        "planner",
-        "developer"
-      ],
+      "mustInvoke": ["planner", "developer"],
       "maxDurationMs": 2700000,
-      "maxCostUsd": 6.00
+      "maxCostUsd": 6.00,
+      "mustModify": [
+        "src/components/atomic-crm/deals/DealEdit.tsx",
+        "src/components/atomic-crm/deals/DealCard.tsx"
+      ],
+      "expectedDiffStats": { "filesChanged": 4, "linesAdded": 30, "linesRemoved": 0 }
     }
   },
   {
@@ -72,10 +75,7 @@
     "mode": "quick_edit",
     "prompt": "make it better",
     "expect": {
-      "mustNotInvoke": [
-        "developer",
-        "planner"
-      ],
+      "mustNotInvoke": ["developer", "planner"],
       "maxDurationMs": 60000,
       "maxCostUsd": 0.30
     }
