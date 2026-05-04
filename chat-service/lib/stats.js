@@ -1,6 +1,8 @@
 import { createReadStream } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
 
 async function* readJsonl(path) {
   const rl = createInterface({ input: createReadStream(path), crlfDelay: Infinity });
@@ -76,7 +78,13 @@ function computeSummary(events) {
     if (ev.type === 'result') {
       const u = ev.usage || {};
       tokensTotal += (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.output_tokens || 0);
-      costUsd += ev.total_cost_usd || 0;
+      // total_cost_usd is cumulative WITHIN a Claude CLI spawn — every result
+      // reports the running total. With --resume, the same spawn issues many
+      // result events as the orchestrator processes user turns. Summing them
+      // double-counts each prior turn's cost (38 results in this session
+      // produced $265 instead of the real $14.69). Take the max instead —
+      // it's the comprehensive end-state for the spawn.
+      costUsd = Math.max(costUsd, ev.total_cost_usd || 0);
     }
   }
   return { opsCount, tokensTotal, costUsd };
@@ -116,16 +124,31 @@ function subagentTypeFromAgentToolUse(toolUseId, agentTypeByToolId) {
   return agentTypeByToolId.get(toolUseId);
 }
 
+// Both kinds of task_started events represent a real subagent we want to track:
+// - 'local_agent': dispatched without team_name (planner, simple-developer, ...).
+// - 'in_process_teammate': dispatched into a team (developer-TASK-XXX, reviewers,
+//   merger). Without this second case, COMPLEX runs only show orchestrator+planner.
+function isAgentTaskStart(ev) {
+  return ev.type === 'system'
+    && ev.subtype === 'task_started'
+    && (ev.task_type === 'local_agent' || ev.task_type === 'in_process_teammate');
+}
+
 function extractPhases(events, agentToolIdToTeam) {
   const byTaskId = new Map();
   const agentTypeByToolId = new Map();
+  const agentNameByToolId = new Map();
   const agentTypeByTaskId = new Map();
   // First pass: index Agent/Task tool_uses by their tool_use_id.
+  // Also capture the dispatch `name` (e.g. "developer-TASK-001") which is needed
+  // to map a phase to its per-activation subagent transcripts (N reveils via
+  // SendMessage = N files, all sharing the same name in their meta.agentType).
   for (const rec of events) {
     if (rec.type !== 'debug_raw' || rec.event?.type !== 'assistant') continue;
     for (const b of extractToolUsesFromAssistant(rec.event)) {
       if ((b.name === 'Agent' || b.name === 'Task') && b.input?.subagent_type) {
         agentTypeByToolId.set(b.id, b.input.subagent_type);
+        if (b.input.name) agentNameByToolId.set(b.id, b.input.name);
       }
     }
   }
@@ -135,7 +158,7 @@ function extractPhases(events, agentToolIdToTeam) {
   for (const rec of events) {
     if (rec.type !== 'debug_raw' || !rec.event) continue;
     const ev = rec.event;
-    if (ev.type === 'system' && ev.subtype === 'task_started' && ev.task_type === 'local_agent') {
+    if (isAgentTaskStart(ev)) {
       if (!agentTypeByTaskId.has(ev.task_id)) {
         const t = subagentTypeFromAgentToolUse(ev.tool_use_id, agentTypeByToolId);
         if (t) agentTypeByTaskId.set(ev.task_id, t);
@@ -145,7 +168,7 @@ function extractPhases(events, agentToolIdToTeam) {
   for (const rec of events) {
     if (rec.type !== 'debug_raw' || !rec.event) continue;
     const ev = rec.event;
-    if (ev.type === 'system' && ev.subtype === 'task_started' && ev.task_type === 'local_agent') {
+    if (isAgentTaskStart(ev)) {
       const existing = byTaskId.get(ev.task_id);
       if (existing) {
         // Resume case — append an activation, keep the phase.
@@ -161,6 +184,11 @@ function extractPhases(events, agentToolIdToTeam) {
             agentTypeByTaskId.get(ev.task_id) ??
             subagentTypeFromAgentToolUse(ev.tool_use_id, agentTypeByToolId) ??
             'unknown',
+          // Suffixed dispatch name (e.g. "developer-TASK-001"). Used to locate
+          // per-activation subagent transcripts whose meta.agentType matches.
+          // Falls back to undefined for local_agent dispatches without a name.
+          agentName: agentNameByToolId.get(ev.tool_use_id),
+          taskType: ev.task_type, // 'local_agent' | 'in_process_teammate' — distinguishes COMPLEX team members from planner/simple-developer
           description: ev.description || '',
           teamName: agentToolIdToTeam.get(ev.tool_use_id) ?? null,
           startTs: rec.ts,
@@ -223,9 +251,32 @@ function buildOrchestratorPhase(events, agentPhases, startTs, endTs) {
 }
 
 function buildTimeBreakdown(orchestrator, agentPhases) {
-  const byAgent = new Map([['orchestrator', orchestrator.durationMs]]);
-  for (const p of agentPhases) byAgent.set(p.agentType, (byAgent.get(p.agentType) || 0) + p.durationMs);
+  // workMs (sum of tool_use durations) is the actual time the agent did things;
+  // durationMs is wall-clock between dispatch and last activation, which for
+  // COMPLEX team members includes long idle periods waiting on SendMessages.
+  const byAgent = new Map([['orchestrator', orchestrator.workMs ?? orchestrator.durationMs]]);
+  for (const p of agentPhases) {
+    const ms = p.workMs ?? p.durationMs;
+    byAgent.set(p.agentType, (byAgent.get(p.agentType) || 0) + ms);
+  }
   return [...byAgent].map(([agent, ms]) => ({ agent, ms })).sort((a, b) => b.ms - a.ms);
+}
+
+// Sum every tool_use child's durationMs to derive the active-work time of a
+// phase. Skills are quick metadata reads (typically ≤100ms each) — included.
+//
+// SendMessage is excluded: its tool duration includes the validate-before-review
+// PreToolUse hook (typecheck + prettier + unit tests + e2e, often 60-150s) plus
+// the receiving agent's wake-up. None of that is the SENDER's active work —
+// counting it inflates dev workMs by ~10× on COMPLEX runs (observed: 615s vs
+// real ~50s of editing). Treat SendMessage as zero-cost communication for the
+// purposes of "what was this agent actually doing?".
+const COMM_TOOLS = new Set(['SendMessage']);
+function computePhaseWorkMs(phase) {
+  return (phase.children || [])
+    .filter((c) => c.kind === 'tool_use' || c.kind === 'skill')
+    .filter((c) => !(c.kind === 'tool_use' && COMM_TOOLS.has(c.tool)))
+    .reduce((s, c) => s + (c.durationMs || 0), 0);
 }
 
 function buildPhaseOwnerMap(events, agentPhases) {
@@ -279,7 +330,7 @@ function previewFromBuffer(buf) {
     : joined;
 }
 
-function populateChildrenAndCounts(events, phases, orchestrator) {
+async function populateChildrenAndCounts(events, phases, orchestrator, claudeSessionId) {
   const agentPhases = phases.filter((p) => p.kind === 'agent');
   const phaseByToolUseId = buildPhaseOwnerMap(events, agentPhases);
   const toolResultTsByToolUseId = buildToolResultMap(events);
@@ -368,12 +419,189 @@ function populateChildrenAndCounts(events, phases, orchestrator) {
     lastToolResultTsByPhase.set(owner.phaseId, maxToolResultTsThisMsg ?? rec.ts);
   }
 
+  // Enrich COMPLEX team members (task_type='in_process_teammate') with their
+  // tool calls — those live in `~/.claude/projects/-app/<claudeSessionId>/subagents/agent-<task_id>.jsonl`,
+  // never streamed into the orchestrator's main log. Without this, every
+  // COMPLEX agent phase shows up empty in the stats UI.
+  if (claudeSessionId) {
+    await enrichSubagentChildren(phases, claudeSessionId, toolCounts, allToolCalls);
+  }
+
   for (const c of allToolCalls) delete c._toolUseId;
 
   return {
     toolCounts: [...toolCounts.values()].sort((a, b) => b.count - a.count),
     allToolCalls,
   };
+}
+
+async function enrichSubagentChildren(phases, claudeSessionId, toolCounts, allToolCalls) {
+  // The Claude CLI stores per-subagent transcripts under ~/.claude/projects/
+  // The project dir is derived from cwd ('/app' → '-app'). Hardcoding '-app'
+  // matches our container layout (chat-service spawns claude with cwd=/app).
+  const baseDir = join(homedir(), '.claude', 'projects', '-app', claudeSessionId, 'subagents');
+
+  // Only target COMPLEX team members. Local agents (planner, simple-developer)
+  // already have their tool_uses in the main stream via parent_tool_use_id —
+  // loading their subagent files would double-count.
+  const targets = phases.filter((p) =>
+    p.kind === 'agent' && p.taskType === 'in_process_teammate' && p.agentName
+  );
+  if (targets.length === 0) return;
+
+  let dirEntries;
+  try {
+    const { readdir } = await import('node:fs/promises');
+    dirEntries = await readdir(baseDir);
+  } catch {
+    return; // dir absent (no team ran yet, or different layout)
+  }
+  const { stat } = await import('node:fs/promises');
+
+  // Each agent activation (initial dispatch + every SendMessage wake-up) writes
+  // a NEW agent-<taskId>.jsonl, but each one is a CUMULATIVE transcript of the
+  // entire team session up to that point — sharing the same first-message uuid.
+  // Loading every file would replay every tool_use N times. Strategy:
+  //
+  // 1. Read each .meta.json + the first JSONL line to get firstUuid + size.
+  // 2. Group files by (agentName, firstUuid) — that identifies one team session
+  //    activation. Keep only the LARGEST file per group (the latest snapshot
+  //    contains every prior event).
+  // 3. Sort the surviving files by mtime ASC, then align them with the phases
+  //    sorted by startTs ASC (same agentName can appear in multiple waves —
+  //    e.g. shared "merger" across two TeamCreate cycles).
+  const fileMeta = [];
+  for (const entry of dirEntries) {
+    if (!entry.endsWith('.meta.json')) continue;
+    const baseName = entry.slice(0, -'.meta.json'.length);
+    const metaPath = join(baseDir, entry);
+    const jsonlPath = join(baseDir, baseName + '.jsonl');
+    let meta;
+    try { meta = JSON.parse(await readFile(metaPath, 'utf8')); } catch { continue; }
+    if (!meta.agentType) continue;
+    let st;
+    try { st = await stat(jsonlPath); } catch { continue; }
+    const firstUuid = await readFirstUuid(jsonlPath);
+    if (!firstUuid) continue;
+    fileMeta.push({
+      path: jsonlPath, agentName: meta.agentType,
+      firstUuid, size: st.size, mtimeMs: st.mtimeMs,
+    });
+  }
+
+  // Group by (agentName, firstUuid), pick largest per group.
+  const winnersByName = new Map(); // agentName → [{path, mtimeMs}, …]
+  const groups = new Map(); // key=name|firstUuid → best
+  for (const f of fileMeta) {
+    const k = f.agentName + '|' + f.firstUuid;
+    const cur = groups.get(k);
+    if (!cur || cur.size < f.size) groups.set(k, f);
+  }
+  for (const f of groups.values()) {
+    const list = winnersByName.get(f.agentName) || [];
+    list.push(f);
+    winnersByName.set(f.agentName, list);
+  }
+
+  const phasesByName = new Map();
+  for (const p of targets) {
+    const list = phasesByName.get(p.agentName) || [];
+    list.push(p);
+    phasesByName.set(p.agentName, list);
+  }
+
+  for (const [name, phasesForName] of phasesByName) {
+    const winners = (winnersByName.get(name) || []).sort((a, b) => a.mtimeMs - b.mtimeMs);
+    const phasesSorted = [...phasesForName].sort((a, b) => a.startTs.localeCompare(b.startTs));
+    const n = Math.min(winners.length, phasesSorted.length);
+    for (let i = 0; i < n; i++) {
+      await appendSubagentToolUses(winners[i].path, phasesSorted[i], toolCounts, allToolCalls);
+    }
+  }
+}
+
+async function readFirstUuid(jsonlPath) {
+  // Read just the first line to extract its uuid — used as a stable identity
+  // for "this team-session activation" across cumulative resume snapshots.
+  try {
+    for await (const ev of readJsonl(jsonlPath)) {
+      return ev?.uuid ?? null;
+    }
+  } catch { /* empty or unreadable */ }
+  return null;
+}
+
+async function appendSubagentToolUses(file, phase, toolCounts, allToolCalls) {
+  const events = [];
+  try {
+    for await (const ev of readJsonl(file)) events.push(ev);
+  } catch { return; }
+
+  // tool_result timestamps for duration computation
+  const toolResultTsById = new Map();
+  for (const e of events) {
+    if (e.type !== 'user' || !Array.isArray(e.message?.content)) continue;
+    for (const c of e.message.content) {
+      if (c.type === 'tool_result' && c.tool_use_id) {
+        toolResultTsById.set(c.tool_use_id, e.timestamp);
+      }
+    }
+  }
+
+  // Per-message dedup for tokens: each tool_use generates two assistant events
+  // sharing the same `message.id` — once we decide to use a tool, then again
+  // after streaming. Only the second carries the final usage; both can have
+  // partial usage. Sum tokens only from the FIRST occurrence per message id
+  // to avoid double-count.
+  const tokensByMessageId = new Set();
+
+  for (const e of events) {
+    if (e.type !== 'assistant' || !Array.isArray(e.message?.content)) continue;
+    const u = e.message?.usage;
+    const msgId = e.message?.id;
+    if (u && msgId && !tokensByMessageId.has(msgId)) {
+      tokensByMessageId.add(msgId);
+      // Same formula as chat-service stats: input + cache_creation + output.
+      // cache_read is intentionally excluded — cheap rehydration, not billed
+      // against the user's working set.
+      const t = (u.input_tokens || 0)
+        + (u.cache_creation_input_tokens || 0)
+        + (u.output_tokens || 0);
+      phase.tokensTotal = (phase.tokensTotal || 0) + t;
+    }
+
+    for (const b of e.message.content) {
+      if (b.type !== 'tool_use' || SKIP_CHILD.has(b.name)) continue;
+      phase.opsCount = (phase.opsCount || 0) + 1;
+
+      const trTs = toolResultTsById.get(b.id) ?? null;
+      const durationMs = trTs ? Math.max(0, msBetween(e.timestamp, trTs)) : 0;
+      const isApprox = !trTs;
+      if (b.name === 'Skill') {
+        phase.children.push({
+          kind: 'skill', skill: b.input?.skill || 'unknown',
+          ts: e.timestamp, durationMs, isApprox,
+        });
+      } else {
+        phase.children.push({
+          kind: 'tool_use',
+          tool: b.name, detail: toolDetail(b.name, b.input),
+          ts: e.timestamp, durationMs, isApprox,
+          agentType: phase.agentType,
+        });
+        const tc = toolCounts.get(b.name) || { tool: b.name, count: 0, totalDurationMs: 0 };
+        tc.count++; tc.totalDurationMs += durationMs;
+        toolCounts.set(b.name, tc);
+        allToolCalls.push({
+          phaseId: phase.phaseId, tool: b.name, detail: toolDetail(b.name, b.input),
+          durationMs, isApprox,
+          teamName: phase.teamName ?? null,
+          flaggedSlow: durationMs > 30000,
+          ts: e.timestamp,
+        });
+      }
+    }
+  }
 }
 
 function buildTopAgents(agentPhases) {
@@ -660,6 +888,14 @@ export async function aggregateSession({ sessionLogPath, hooksLogPath, sessionId
   const endTs = events[events.length - 1]?.ts ?? null;
   const durationMs = startTs && endTs ? msBetween(startTs, endTs) : 0;
 
+  // Read claudeSessionId from meta.json (sibling of log.jsonl) — needed to
+  // locate per-subagent transcripts under ~/.claude/projects/-app/<id>/subagents/.
+  let claudeSessionId = null;
+  try {
+    const meta = JSON.parse(await readFile(join(dirname(sessionLogPath), 'meta.json'), 'utf8'));
+    claudeSessionId = meta.claudeSessionId ?? null;
+  } catch { /* meta missing or unreadable — subagent enrichment will be skipped */ }
+
   const s = computeSummary(events);
 
   const { teams, agentToolIdToTeam } = extractTeams(events);
@@ -675,10 +911,31 @@ export async function aggregateSession({ sessionLogPath, hooksLogPath, sessionId
 
   const orchestrator = buildOrchestratorPhase(events, agentPhases, startTs, endTs);
   const phases = [orchestrator, ...agentPhases].sort((a, b) => a.startTs.localeCompare(b.startTs));
+
+  // Build phase children, tool counts, and leaderboards.
+  // Must run before workMs/timeBreakdown so children are populated.
+  const { toolCounts, allToolCalls } = await populateChildrenAndCounts(events, phases, orchestrator, claudeSessionId);
+
+  // Derive workMs (active-work time) per phase from the tool_use children.
+  // For COMPLEX team members, durationMs includes long idle waits — workMs
+  // is the actual hands-on-keyboard time.
+  for (const p of phases) p.workMs = computePhaseWorkMs(p);
+
   const timeBreakdown = agentPhases.length > 0 ? buildTimeBreakdown(orchestrator, agentPhases) : [];
 
-  // Build phase children, tool counts, and leaderboards
-  const { toolCounts, allToolCalls } = populateChildrenAndCounts(events, phases, orchestrator);
+  // Add the COMPLEX subagents' tokens/ops to the session-level summary.
+  // computeSummary only sees the orchestrator's main log; subagent transcripts
+  // (loaded by enrichSubagentChildren) carry the bulk of the work for COMPLEX
+  // runs and must be added so the dashboard totals match reality.
+  let extraOps = 0, extraTokens = 0;
+  for (const p of agentPhases) {
+    if (p.taskType === 'in_process_teammate') {
+      extraOps += p.opsCount || 0;
+      extraTokens += p.tokensTotal || 0;
+    }
+  }
+  s.opsCount += extraOps;
+  s.tokensTotal += extraTokens;
 
   // Only keep phases if orchestrator has children or if there are agent phases
   const hasOrchestratorWork = orchestrator.children.length > 0;

@@ -67,9 +67,12 @@ test('aggregateSession: extracts agent phases and links to team via Agent tool_u
   assert.equal(dev.agentType, 'developer');
   assert.equal(dev.teamName, 'ticket-TASK-100');
   assert.equal(dev.durationMs, 6900);
+  // timeBreakdown now reports workMs (sum of child tool_use durations), not
+  // wall-clock durationMs. The fixture has no tool_uses so workMs == 0; we
+  // assert only that the entries exist in the breakdown.
   const tb = out.summary.timeBreakdown;
   assert.ok(tb.find((r) => r.agent === 'orchestrator'));
-  assert.ok(tb.find((r) => r.agent === 'developer' && r.ms === 6900));
+  assert.ok(tb.find((r) => r.agent === 'developer'));
 });
 
 test('aggregateSession: parallel-two-teams fixture has correct team assignments', async () => {

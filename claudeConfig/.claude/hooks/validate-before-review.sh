@@ -1,17 +1,21 @@
 #!/bin/bash
 # PreToolUse hook for SendMessage tool.
-# When the developer is about to SendMessage a reviewer or merger,
-# run the project validation chain. If any step fails, exit 2 to block
-# the SendMessage; the dev sees the stderr as a tool_use_error.
+# When the developer is about to SendMessage the merger, run the project
+# validation chain. If any step fails, exit 2 to block the SendMessage;
+# the dev sees the stderr as a tool_use_error.
 #
 # Behavior:
 # - Reads the tool input JSON from stdin.
-# - If tool_input.to does not match a reviewer/merger recipient, exit 0 (skip).
-#   Recognised forms (post agent-team v3 single-team layout, single-merger):
-#     - per-ticket suffixed:  quality-reviewer-TASK-XXX, test-validator-TASK-XXX
-#     - shared singleton:     merger  (bare, no suffix — one merger per wave)
-#     - merger-* form is also accepted for back-compat (per-ticket merger v3.0)
-#     - legacy @-form:        quality-reviewer@*, test-validator@*, merger@*  (kept for safety)
+# - Validation runs ONLY for `to=merger` (or merger-*/merger@* legacy forms).
+#   Reviewers (quality-reviewer-*, test-validator-*) are intentionally skipped:
+#   their job is semantic review, not catching typecheck/test failures (the
+#   merger gate catches those). Running validation on every dev↔reviewer round
+#   added ~60s per cycle — for one TASK with 4-5 cycles, that was ~5 minutes
+#   of dead time per ticket. The merger gate is sufficient since the dev cannot
+#   merge until validation passes there.
+# - For `to=merger`: cache by worktree HEAD sha. If a previous run on the same
+#   sha succeeded, skip the chain (instant). The cache is invalidated by every
+#   new commit (new sha) and is per-worktree (kept in /tmp).
 # - Otherwise runs (in order): typecheck, prettier, unit-app, unit-functions, e2e.
 # - First failure → exit 2 with the failing script's stderr passed through.
 #
@@ -42,8 +46,14 @@ else
 fi
 
 case "$TO" in
-  quality-reviewer-*|test-validator-*|merger-*|merger|quality-reviewer@*|test-validator@*|merger@*)
-    : # gate enabled
+  merger-*|merger|merger@*)
+    : # gate enabled — only for merger
+    ;;
+  quality-reviewer-*|test-validator-*|quality-reviewer@*|test-validator@*)
+    # Reviewer SendMessages are NOT gated. The merger gate is sufficient and
+    # this used to add ~60s × 4-5 cycles per ticket of dead time.
+    echo "[$(date -Iseconds)] validate-before-review SKIP to=$TO (reviewer — gate only on merger)" >> "$LOG" 2>/dev/null || true
+    exit 0
     ;;
   *)
     exit 0
@@ -51,6 +61,29 @@ case "$TO" in
 esac
 
 echo "[$(date -Iseconds)] validate-before-review START to=$TO" >> "$LOG" 2>/dev/null || true
+
+# SHA cache: skip the validation chain if HEAD of any active worktree matches
+# the SHA we last validated successfully. The cache invalidates as soon as the
+# dev makes a new commit. One file per worktree under /tmp (overlay, ephemeral,
+# perfect for a per-container cache).
+ACTIVE_WORKTREES=$(git -C /app worktree list --porcelain 2>/dev/null \
+  | awk '/^worktree /{print $2}' \
+  | grep "^/app/worktrees/" || true)
+
+if [ -n "$ACTIVE_WORKTREES" ]; then
+  ALL_CACHED=1
+  for WT in $ACTIVE_WORKTREES; do
+    HEAD_SHA=$(git -C "$WT" rev-parse HEAD 2>/dev/null || echo "")
+    if [ -z "$HEAD_SHA" ]; then ALL_CACHED=0; break; fi
+    CACHE_FILE="/tmp/validate-cache-$(echo "$WT" | tr '/' '_').sha"
+    LAST_SHA=$(cat "$CACHE_FILE" 2>/dev/null || echo "")
+    if [ "$HEAD_SHA" != "$LAST_SHA" ]; then ALL_CACHED=0; break; fi
+  done
+  if [ "$ALL_CACHED" = "1" ]; then
+    echo "[$(date -Iseconds)] validate-before-review CACHE HIT to=$TO (all worktrees at last-validated SHA)" >> "$LOG" 2>/dev/null || true
+    exit 0
+  fi
+fi
 
 # Dry-run hooks (test-only)
 case "${VALIDATE_DRY_RUN:-}" in
@@ -97,4 +130,17 @@ for script in "${SCRIPTS[@]}"; do
 done
 
 echo "[$(date -Iseconds)] validate-before-review ALL OK to=$TO" >> "$LOG" 2>/dev/null || true
+
+# Cache the SHA(s) we just validated so subsequent SendMessages on the same
+# commit can short-circuit instantly.
+if [ -n "$ACTIVE_WORKTREES" ]; then
+  for WT in $ACTIVE_WORKTREES; do
+    HEAD_SHA=$(git -C "$WT" rev-parse HEAD 2>/dev/null || echo "")
+    if [ -n "$HEAD_SHA" ]; then
+      CACHE_FILE="/tmp/validate-cache-$(echo "$WT" | tr '/' '_').sha"
+      printf '%s' "$HEAD_SHA" > "$CACHE_FILE"
+    fi
+  done
+fi
+
 exit 0
