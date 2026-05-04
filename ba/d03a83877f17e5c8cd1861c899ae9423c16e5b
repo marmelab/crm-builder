@@ -1,0 +1,57 @@
+chat-service/lib/stats/children.js
+  1e40ba541e360698 1-121
+chat-service/lib/stats.js
+  1e40ba541e360698 1-4,6-7,9-10,12-20
+CHANGELOG.md
+  1e40ba541e360698 952-1084,1098
+chat-service/lib/stats/tools.js
+  1e40ba541e360698 1-59
+chat-service/lib/stats/io.js
+  1e40ba541e360698 1-55
+chat-service/lib/stats/subagents.js
+  1e40ba541e360698 1-185
+.devcontainer/README.md
+  1e40ba541e360698 31,41,43-46,48,51,53-55
+chat-service/lib/stats/teams.js
+  1e40ba541e360698 1-35
+chat-service/lib/stats/events.js
+  1e40ba541e360698 1-73
+.devcontainer/devcontainer.json
+  1e40ba541e360698 38
+chat-service/lib/stats/tickets.js
+  1e40ba541e360698 1-49
+chat-service/lib/stats/insights.js
+  1e40ba541e360698 1-129
+chat-service/public/chat.css
+  1e40ba541e360698 528
+chat-service/public/lib/stats/waves.js
+  1e40ba541e360698 1-31,36-38,45,57,78-95
+Makefile
+  1e40ba541e360698 3,29,31-39
+chat-service/lib/stats/phases.js
+  1e40ba541e360698 1-204
+chat-service/lib/stats/hooks.js
+  1e40ba541e360698 1-156
+chat-service/public/lib/stats/summary.js
+  1e40ba541e360698 3-5,29
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "bad03a83877f17e5c8cd1861c899ae9423c16e5b",
+  "prompts": {
+    "1e40ba541e360698": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b5573e3e-0660-4039-bb92-0b0e4d233a8c",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Jerome",
+      "messages": [],
+      "total_additions": 2539,
+      "total_deletions": 1269,
+      "accepted_lines": 1300,
+      "overriden_lines": 0
+    }
+  }
+}
