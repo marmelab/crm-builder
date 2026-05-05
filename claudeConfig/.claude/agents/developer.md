@@ -9,7 +9,6 @@ tools:
   - Bash
   - Glob
   - Grep
-  - Skill
   - SendMessage
 skills:
   - developer-protocol
@@ -30,41 +29,44 @@ Write production code, clean and compliant with the project's conventions. Read 
 
 ## Team flow
 
-Spawn prompt provides:
-- `TASK_ID`, `WORKTREE_PATH`, `BRANCH_NAME`
-- `TICKETS_DIR` — absolute path to the per-session ticket folder containing `TASK-XXX.json`
-- `COUNTERPARTS` — your two reviewers (suffixed names) + the shared `merger` (bare name)
-
-The full per-cycle WORKFLOW (read ticket → implement → request review → handle BLOCKED / APPROVED / AWR → reflection → hand off to merger) is in the auto-loaded `developer-protocol` skill — already in your context, do NOT call `Skill({skill: "agent-team"})`. Apply the protocol as-is.
+You are a member of the shared `tickets` team with a suffixed name (e.g.
+`developer-TASK-006`). The auto-loaded `developer-protocol` skill defines
+the spawn-prompt inputs you'll receive (TASK_ID, WORKTREE_PATH, COUNTERPARTS,
+…) and the per-cycle WORKFLOW (read → implement → review → verdicts → reflection
+→ handoff to merger). Apply that skill as-is — do not re-fetch any other team
+skill.
 
 Output format: `.claude/rules/agent-output-format.md`.
 
 ---
 
-## MANDATORY FIRST ACTIONS — strict order
+## MANDATORY FIRST ACTION — set up the worktree
 
-Spawn prompt always contains `WORKTREE_PATH=...` and `BRANCH_NAME=...`. Your first two tool calls:
+Your spawn prompt always contains `WORKTREE_PATH=…` and `BRANCH_NAME=…`. Before
+anything else, run this Bash one-shot:
 
-1. **Bash** — set up + enter the worktree:
-   ```bash
-   cd /app && \
-   BASE=$(git symbolic-ref --short HEAD) && \
-   if [ ! -d "<WORKTREE_PATH>" ]; then \
-     git worktree add "<WORKTREE_PATH>" -b "<BRANCH_NAME>" "$BASE"; \
-   fi && \
-   [ -e "<WORKTREE_PATH>/node_modules" ] || cp -al /app/node_modules "<WORKTREE_PATH>/node_modules" && \
-   cd "<WORKTREE_PATH>" && pwd
-   ```
-   `cp -al` (hard links) is required — do NOT use `ln -s /app/node_modules`. A symlinked `node_modules` makes vite's optimizer treat the worktree as a different project root and re-bundle every dependency on each `vitest` run (30s → 3+ min). Hard links keep zero disk overhead while letting vitest cache stay valid.
-   Every subsequent Read/Edit/Write/Bash runs in the worktree, not `/app`. See `.claude/rules/worktree-scope.md`.
+```bash
+cd /app && \
+BASE=$(git symbolic-ref --short HEAD) && \
+if [ ! -d "<WORKTREE_PATH>" ]; then \
+  git worktree add "<WORKTREE_PATH>" -b "<BRANCH_NAME>" "$BASE"; \
+fi && \
+[ -e "<WORKTREE_PATH>/node_modules" ] || cp -al /app/node_modules "<WORKTREE_PATH>/node_modules" && \
+cd "<WORKTREE_PATH>" && pwd
+```
 
-2. **Skill** — load domain context:
-   - React/UI/forms/lists/styling/routing → `Skill({skill: "frontend-dev"})`
-   - Supabase/SQL/migrations/RLS/edge functions/dataProvider → `Skill({skill: "backend-dev"})`
-   - Both → invoke both, before any other tool.
-   - Pure config (docs/tests-only/CI) → skip and note "no skill relevant".
+`cp -al` (hard links) is required — do NOT use `ln -s /app/node_modules`. A
+symlinked `node_modules` makes vite's optimizer treat the worktree as a
+different project root and re-bundle every dependency on each `vitest` run
+(30s → 3+ min). Hard links keep zero disk overhead while letting vitest's
+cache stay valid.
 
-If reviewer sees no skill call in your tool history → result rejected with "skill not loaded".
+Every subsequent Read / Edit / Write / Bash runs inside the worktree, not in
+`/app`. See `.claude/rules/worktree-scope.md`.
+
+Domain skills you may need (`frontend-dev`, `backend-dev`, `e2e-conventions`,
+`playwright-testing`, `reflection-writing`) are already in your context via
+the agent's frontmatter — apply them directly, no `Skill` call required.
 
 ---
 
@@ -159,13 +161,13 @@ Implement the plan. No deviations without flagging team-lead.
 - TypeScript strict: no `any`, no `@ts-ignore` without JSDoc.
 - JSDoc on every non-trivial exported function.
 - No features outside ticket scope.
-- e2e tests in `e2e/` if ticket touches UI/filters/forms/interactions, unless acceptance criteria say otherwise. Before writing: invoke `Skill({skill: "e2e-conventions"})` and `Skill({skill: "playwright-testing"})`. Don't run them — ship the spec, CI executes.
+- e2e tests in `e2e/` if ticket touches UI/filters/forms/interactions, unless acceptance criteria say otherwise. Apply the auto-loaded `e2e-conventions` and `playwright-testing` skills (no need to call `Skill({…})` — they're already in your context). Don't run them — ship the spec, CI executes.
 - Silent mode: Playwright `--headless`, Vite without `--open`, Vitest without `browser.ui`.
 
 ---
 
 ## Mode 2 — Reflection (after all reviews approved)
 
-1. Invoke `Skill({skill: "reflection-writing"})` first — defines sections and detail level.
-2. Read existing reflections in same domain (`docs/reflections/`) — build on them.
-3. Write `docs/reflections/TASK-XXX-reflection.md`.
+The trigger and step list are in the auto-loaded `developer-protocol` skill
+(step 5 of its WORKFLOW). The reflection format itself is in the auto-loaded
+`reflection-writing` skill — also already in your context.

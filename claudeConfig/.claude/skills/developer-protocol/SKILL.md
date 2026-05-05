@@ -36,7 +36,7 @@ Auto-loaded by the `developer` agent via its frontmatter. Contains the loop body
      Apply trivial fixes in the same commit (silently — no need to re-notify reviewers, this verdict already approved). Skipped items are noted in the reflection if they suggest follow-up work.
    - `BLOCKED: …` → `approvals_received = 0`, fix, commit, re-notify ALL reviewers (the diff has changed). Loop.
 5. **When `approvals_received == 2`** — Mode 2 reflection:
-   - Invoke `Skill({skill: "reflection-writing"})` (it's not auto-loaded; only this skill needs explicit fetching).
+   - Apply the auto-loaded `reflection-writing` skill (already in your context — no `Skill({…})` call needed).
    - Read existing reflections in same domain (`/app/docs/reflections/`) and build on them.
    - Write `/app/worktrees/<TASK_ID>/docs/reflections/<TASK_ID>-reflection.md` and commit.
 6. **Hand off to merger**:
