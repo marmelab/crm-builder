@@ -10,7 +10,13 @@ echo "[$(date -Iseconds)] unit-app START pwd=$(pwd) CLAUDE_PROJECT_DIR=$CLAUDE_P
 REPO="${CLAUDE_PROJECT_DIR:-/app}"
 cd "$REPO" || { echo "[$(date -Iseconds)] unit-app EXIT=0 cd_failed" >> "$LOG"; exit 0; }
 
-WORKTREES=$(git worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2}' | grep "^/worktrees/" || true)
+# VALIDATE_WORKTREE narrows to one worktree (set by validate-before-review.sh).
+# See typecheck hook header for rationale.
+if [ -n "${VALIDATE_WORKTREE:-}" ] && [ -d "$VALIDATE_WORKTREE" ]; then
+  WORKTREES="$VALIDATE_WORKTREE"
+else
+  WORKTREES=$(git worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2}' | grep "^/app/worktrees/" || true)
+fi
 
 if [ -z "$WORKTREES" ]; then
   echo "[$(date -Iseconds)] unit-app EXIT=0 no_active_worktree" >> "$LOG"
@@ -36,11 +42,16 @@ for WT in $WORKTREES; do
     continue
   fi
 
-  OUTPUT=$(CI=true npm run test:unit:app 2>&1)
+  # Call vitest directly with `run` subcommand (not `npm run test:unit:app`)
+  # because the package.json script invokes `vitest --config ...` without `run`,
+  # which puts vitest into watch mode. In a non-TTY agent context, watch mode
+  # hangs at startup instead of running tests once and exiting.
+  OUTPUT=$(CI=true npx vitest run --config vitest.config.ts 2>&1)
   EXIT_CODE=$?
   if [ $EXIT_CODE -ne 0 ]; then
     FAILED=1
     AGGREGATED_ERR+="=== unit-app failed in $WT ===\n$(echo "$OUTPUT" | tail -40)\n\n"
+    echo "[$(date -Iseconds)] unit-app FAIL wt=$WT EXIT=$EXIT_CODE" >> "$LOG"
   else
     echo "[$(date -Iseconds)] unit-app OK wt=$WT" >> "$LOG"
   fi

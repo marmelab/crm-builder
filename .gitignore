@@ -1,6 +1,16 @@
 .env
-/sessions/
+/sessions*/
 /old-sessions/
-/crm-docs/
+/crm-docs*/
 test.md
 chat-service/tests/results/run-*.json
+
+# Personal Claude seed for the devcontainer (per-user data)
+/.devcontainer/claude-seed/settings.json
+/.devcontainer/claude-seed/memory/
+
+# Local Claude Code permissions (per-user)
+/.claude/settings.local.json
+
+# Host-side git worktrees (separate from /worktrees inside docker)
+/.worktrees/

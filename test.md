@@ -5,19 +5,9 @@
 
 * mettre en place outupStyle ? https://code.claude.com/docs/en/output-styles
 
-* ajouter résultats attendus dans les cas de tests. Faire un diff pour baseline, puis pour chaque test un diff et faire un diff de diff à interpreter par un agent
-
 * clean logs hooks
 
-* refactor agents & skills (trop verbeux)
-
 * faire des bashs pour création/clean worktree, branche
-
-* refactor chat.js
-
-* refactor server.js
-
-* tests/ et test/ -> à renommer
 
 * to discuss with françois
 * -  stop -> clean worktrees / sessions / etc.
@@ -27,7 +17,22 @@
 
 * impossibilité de merge si la CI est KO
 
-* lors ce qu'on quitte une session vides (vide = sans message utilisateur ou uniquement le message "quick modif"/"full setup") on doit la supprimer
+* lorsqu'on quitte une session vides (vide = sans message utilisateur ou uniquement le message "quick modif"/"full setup") on doit la supprimer
 * on unMount on supprime la NouvelleDiscussion ? Est ce que ça fonctionne au refresh aussi ?
+
+* gestion des tests e2e lors des devs. Comme on est en mode démo, ils ont tendance à être laxiste dessus alors que reviewer en veut.
+
+* deux tendances sur équipe d'agents : spawn tout au démarrage mais reviewers et merger invalident leur cache car attendent leur tour (au bout de 5min d'inactivité, invalidité cache) ou les spawn au moment ou on en a besoin.
+
+
+* case 1 : 54k in 3k out 0.445$ 3min englishCrmMessages 1line
+* case 2 : 260k in 8k out 1.133$ 4min index.css 7lines
+* case 4 : 299k in 16k out 1.905$ 6min
+
+
+V2 agentic team :
+* case 1 : 21k 0.288$ 2min21 
+* case 2 : 
+* case 4 : 
 
 * enlever silent-mode-check

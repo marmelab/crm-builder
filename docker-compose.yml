@@ -9,8 +9,11 @@ x-base: &base
   environment:
     - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
   volumes:
-    - crm-source:/app/src      # persisted code changes
-    - crm-worktrees:/worktrees
+    # Single volume covers the entire atomic-crm repo:
+    #   src/, .git/, supabase/, e2e/, scripts/, configs at root, node_modules/, …
+    # Worktrees live at /app/worktrees (gitignored) so cp -al hard-links
+    # against /app/node_modules stay on the same device.
+    - crm-app:/app
 
 services:
 
@@ -27,8 +30,7 @@ services:
       - "7681:7681" # Claude terminal
       - "8080:8080" # Chat assistant
     volumes:
-      - crm-source:/app/src
-      - crm-worktrees:/worktrees
+      - crm-app:/app
       - claude-auth:/home/developer/.claude
       # DEV ONLY — bind mounts pour itérer sur la config sans rebuild.
       # Entrypoint sync ces fichiers vers /home/developer/.claude au boot.
@@ -58,8 +60,7 @@ services:
       - MODE=full
     # No ports: with network_mode: host, host ports are directly exposed
     volumes:
-      - crm-source:/app/src
-      - crm-worktrees:/worktrees
+      - crm-app:/app
       - claude-auth:/home/developer/.claude
       - /var/run/docker.sock:/var/run/docker.sock # ⚠️ required
       - supabase-cache:/root/.docker              # cache pulled images
@@ -67,7 +68,6 @@ services:
       - ./crm-docs:/app/docs
 
 volumes:
-  crm-source:
-  crm-worktrees:
+  crm-app:
   supabase-cache:
   claude-auth:

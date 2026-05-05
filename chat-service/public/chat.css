@@ -446,12 +446,6 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
 .stats-kpi-line .kpi-spacer { margin-left: auto; }
 .stats-kpi-line .kpi-warn { color: #f59e0b; }
 
-.stats-team-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
-.stats-team-pill {
-  border: 1px solid; padding: 4px 10px; border-radius: 999px;
-  font-size: 11px; font-weight: 500;
-}
-
 .stats-breakdown {
   display: flex; margin-top: 12px; height: 22px;
   border-radius: 6px; overflow: hidden; background: #2c2c2e;
@@ -497,7 +491,50 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
 .child-detail { color: #8e8e93; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .child-dur { color: #636366; font-variant-numeric: tabular-nums; }
 .child-hook .child-label { color: #a78bfa; }
+.child-hook-fail .child-label { color: #f87171; font-weight: 600; }
+.child-hook-fail .child-detail { color: #fca5a5; }
 .child-skill .child-label { color: #34d399; }
+/* SendMessage verdict colouring — matches the icon prefix in the detail. */
+.child-verdict-blocked .child-label,
+.child-verdict-blocked .child-detail { color: #f87171; font-weight: 600; }
+.child-verdict-awr .child-label,
+.child-verdict-awr .child-detail { color: #fbbf24; }
+.child-verdict-approved .child-label,
+.child-verdict-approved .child-detail { color: #34d399; }
+.child-verdict-shutdown .child-detail { color: #94a3b8; opacity: 0.85; }
+.child-verdict-merger-report .child-label,
+.child-verdict-merger-report .child-detail { color: #60a5fa; font-weight: 600; }
+
+/* Dependency waves — left-to-right flow at the top of the stats panel. */
+.wave-verdict { color: #94a3b8; font-size: 12px; margin-bottom: 8px; }
+.wave-flow {
+  display: flex; align-items: stretch; gap: 8px; overflow-x: auto;
+  padding-bottom: 4px;
+}
+.wave-col { display: flex; flex-direction: column; gap: 4px; min-width: 140px; }
+.wave-col-label {
+  font-size: 11px; color: #636366; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.05em;
+}
+.wave-col-tickets { display: flex; flex-direction: column; gap: 6px; }
+.wave-ticket {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 6px 8px; border-radius: 6px;
+  background: #1c1c1e; border: 1px solid #2c2c2e;
+  font-size: 11px;
+}
+.wave-ticket-id { color: #f2f2f7; font-weight: 600; font-family: monospace; }
+.wave-ticket-title { color: #8e8e93; font-size: 10px; }
+.wave-ticket-stats { color: #94a3b8; font-size: 10px; font-variant-numeric: tabular-nums; }
+.wave-status-merged { border-color: #34d399; background: #064e3b; }
+.wave-status-merged .wave-ticket-id { color: #6ee7b7; }
+.wave-status-failed,
+.wave-status-blocked { border-color: #f87171; background: #4c0519; }
+.wave-status-in_progress { border-color: #fbbf24; }
+.wave-arrow {
+  display: flex; align-items: center; color: #636366; font-size: 18px;
+  padding: 0 2px;
+}
 .child-stream_gap { opacity: 0.65; font-style: italic; }
 .child-stream_gap .child-label { color: #8e8e93; }
 
@@ -539,6 +576,17 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
   background: #1c1c1e; font-size: 10px; color: #8e8e93;
   overflow-x: auto; max-height: 240px; overflow-y: auto;
   border-top: 1px solid #3a3a3c;
+}
+
+/* Activation bands — one per task_started for the same task_id (SendMessage resume) */
+.phase-activations { display: inline-flex; align-items: center; gap: 1px; margin-left: 6px; }
+.stats-activation-band {
+  display: inline-block;
+  width: 8px;
+  height: 10px;
+  background: var(--accent, #38bdf8);
+  margin: 0 1px;
+  border-radius: 2px;
 }
 
 #chat-modal {

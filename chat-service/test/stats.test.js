@@ -39,10 +39,13 @@ test('aggregateSession: computes summary totals from simple session', async () =
     hooksLogPath: null,
     sessionId: '00000000-0000-0000-0000-000000000002',
   });
+  // endTs takes the last substantive event (debug_raw with the result),
+  // ignoring the trailing client-noise `status` event at 03.100 — fixes a
+  // bug where reconnect-time noise inflated session duration by 30+ min.
   assert.equal(out.startTs, '2026-04-23T12:00:00.000Z');
-  assert.equal(out.endTs, '2026-04-23T12:00:03.100Z');
-  assert.equal(out.durationMs, 3100);
-  assert.equal(out.summary.totalMs, 3100);
+  assert.equal(out.endTs, '2026-04-23T12:00:03.000Z');
+  assert.equal(out.durationMs, 3000);
+  assert.equal(out.summary.totalMs, 3000);
   assert.equal(out.summary.opsCount, 2);
   assert.equal(out.summary.tokensTotal, 100 + 200 + 50);
   assert.equal(out.summary.costUsd, 0.01);
@@ -67,9 +70,12 @@ test('aggregateSession: extracts agent phases and links to team via Agent tool_u
   assert.equal(dev.agentType, 'developer');
   assert.equal(dev.teamName, 'ticket-TASK-100');
   assert.equal(dev.durationMs, 6900);
+  // timeBreakdown now reports workMs (sum of child tool_use durations), not
+  // wall-clock durationMs. The fixture has no tool_uses so workMs == 0; we
+  // assert only that the entries exist in the breakdown.
   const tb = out.summary.timeBreakdown;
   assert.ok(tb.find((r) => r.agent === 'orchestrator'));
-  assert.ok(tb.find((r) => r.agent === 'developer' && r.ms === 6900));
+  assert.ok(tb.find((r) => r.agent === 'developer'));
 });
 
 test('aggregateSession: parallel-two-teams fixture has correct team assignments', async () => {
@@ -87,14 +93,22 @@ test('aggregateSession: parallel-two-teams fixture has correct team assignments'
   assert.equal(bootstrap.teamName, null);
 });
 
-test('aggregateSession: orchestrator phase children exclude Agent/Task/Team* dispatches', async () => {
+test('aggregateSession: orchestrator phase children include Agent/Task/Team* dispatches', async () => {
+  // Dispatch-control tool calls (Agent, TeamCreate, TeamDelete) are now kept
+  // in the orchestrator timeline so the gap between planner reply and first
+  // GO is explained — they used to be skipped, leaving an unexplained ~2 min
+  // dead zone in the chronology.
   const out = await aggregateSession({
     sessionLogPath: fx('single-team-single-ticket.jsonl'),
     hooksLogPath: null,
     sessionId: 'sess-single',
   });
   const orch = out.phases.find((p) => p.kind === 'orchestrator');
-  assert.equal(orch.children.filter((c) => c.kind === 'tool_use').length, 0);
+  const toolNames = orch.children.filter((c) => c.kind === 'tool_use').map((c) => c.tool);
+  assert.ok(toolNames.includes('Agent') || toolNames.includes('Task'),
+    `expected Agent/Task in orchestrator children, got: ${toolNames.join(', ')}`);
+  assert.ok(toolNames.includes('TeamCreate'),
+    `expected TeamCreate in orchestrator children, got: ${toolNames.join(', ')}`);
 });
 
 test('aggregateSession: toolCounts ordered by count desc', async () => {
@@ -288,4 +302,18 @@ test('aggregateSession: blocking hooks EXIT=2 are NOT errors', async () => {
     if (e.kind !== 'hook_failed') continue;
     assert.ok(!blocked.includes(e.payload?.hookName));
   }
+});
+
+test('phases group multiple task_started for the same task_id (SendMessage resume)', async () => {
+  const result = await aggregateSession({
+    sessionLogPath: fx('sendmessage-resume.jsonl'),
+    hooksLogPath: '/dev/null',
+    sessionId: 'fixture-resume',
+  });
+  const agentPhases = result.phases.filter((p) => p.kind === 'agent');
+  const devPhases = agentPhases.filter((p) => p.agentType === 'developer');
+  assert.equal(devPhases.length, 1, 'should have a single developer phase');
+  const unknown = agentPhases.filter((p) => p.agentType === 'unknown');
+  assert.equal(unknown.length, 0, 'no unknown phases');
+  assert.ok((devPhases[0].activations || []).length >= 2, 'developer should have >=2 activations');
 });

@@ -1,5 +1,8 @@
 import { el, formatDuration, formatTokens } from '../dom.js';
 
+// Per-task figures (agents / duration / errors) used to live here as a flat
+// pill row. They now live alongside each ticket card in the dependency-waves
+// section, so this file is back to KPI line + time breakdown only.
 export function renderSummarySection(data) {
   const kpi = el('div', { className: 'stats-kpi-line' },
     el('span', null, `⏱️ ${formatDuration(data.summary.totalMs)} total`),
@@ -9,15 +12,6 @@ export function renderSummarySection(data) {
     el('span', { className: `kpi-spacer${data.summary.errorsCount ? ' kpi-warn' : ''}` }, `⚠️ ${data.summary.errorsCount} errors`),
     el('span', data.summary.retriesCount ? { className: 'kpi-warn' } : null, `🔁 ${data.summary.retriesCount} retries`),
   );
-
-  const teamRow = data.teams.length
-    ? el('div', { className: 'stats-team-row' },
-        ...data.teams.map((t) => {
-          const pill = el('span', { className: 'stats-team-pill', style: { borderColor: t.color, color: t.color } });
-          pill.textContent = `👥 ${t.team_name.replace(/^ticket-/, '')} · ${formatDuration(t.durationMs)} · ${t.agentsCount} agents${t.errorsCount ? ' · ⚠️ ' + t.errorsCount : ''}`;
-          return pill;
-        }))
-    : null;
 
   const totalMs = data.summary.totalMs || 1;
   const breakdown = el('div', { className: 'stats-breakdown' },
@@ -32,5 +26,5 @@ export function renderSummarySection(data) {
       return seg;
     }));
 
-  return el('section', { className: 'stats-section stats-summary' }, kpi, teamRow, breakdown);
+  return el('section', { className: 'stats-section stats-summary' }, kpi, breakdown);
 }
