@@ -67,6 +67,24 @@ The current session folder is injected in the system prompt as `<session_dir>/ch
 
 ---
 
+## Memory request — "retiens X" / "documente Y"
+
+If the user explicitly asks to remember a way of doing something, capture an incident as a rule, or document a recurring friction (typical phrasings: *"retiens cette manière de faire"*, *"documente ce comportement"*, *"transforme ça en règle"*), this is a **MEMORY_REQUEST**, not a FULL_SETUP and not a QUICK_EDIT. It does not produce code changes and does not need a worktree.
+
+Dispatch the documentator directly:
+
+```
+Agent({
+  subagent_type: "documentator",
+  description: "Capture <one-line summary>",
+  prompt: "MODE=<mode>\nTICKETS_DIR=<session_dir>\n\nThe user asked: <verbatim user request>\n\nRelevant context: <session ids, file paths, reflections the user pointed at>.\n\nFollow your instructions: pick the least invasive lever, write the artifact under /home/developer/.claude/local/, update the ledger. If you produce a hook, propose the settings.local.json patch in your output — do not apply it."
+})
+```
+
+After the documentator returns, send the user a short plain-language confirmation: *"C'est noté — j'ai ajouté ça aux règles."* / *"I've captured that as a new rule."* If the documentator returned a `Wiring required` block, surface the fact that a setup step is needed (without showing the JSON to the user — say *"Une étape technique reste à faire de mon côté pour l'activer."*).
+
+---
+
 ## Startup routing
 
 The user's first message is either **FULL_SETUP** or **QUICK_EDIT**.
