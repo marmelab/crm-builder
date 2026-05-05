@@ -115,6 +115,58 @@ if [ -n "$LOCK_HASH" ] && [ "$LOCK_HASH" != "$PREV_HASH" ]; then
   chown developer:developer /app/.npm-ci-hash
 fi
 
+# Write /app/CLAUDE.md orientation header. The upstream atomic-crm CLAUDE.md
+# is essentially empty (just `@AGENTS.md`) — we prepend a short pointer to
+# project-context.json so every Claude Code spawn auto-loads the right
+# guidance. Idempotent: regenerated on every boot from this template.
+APP_AGENTS_REF=""
+if [ -f /app/AGENTS.md ]; then
+  APP_AGENTS_REF=$'\n@AGENTS.md\n'
+fi
+cat > /app/CLAUDE.md <<CLAUDEMD
+# Project context
+
+This CRM is configured for the user's specific business. The single source
+of truth for entities, fields, pipeline stages, user roles, and integrations
+is:
+
+  docs/project-context.json
+
+Read it before adding/modifying any entity or field. The structured spec is
+maintained by the \`project-manager\` agent (interview flow). Do not edit it
+manually — request a setup via the chat UI's "Define your business" flow.
+
+If the file is missing or has \`validated: false\`, the project has not yet
+been cadred — propose the user to run "Define your business" from the chat
+UI before implementing entity/field changes.
+${APP_AGENTS_REF}
+CLAUDEMD
+chown developer:developer /app/CLAUDE.md 2>/dev/null || true
+
+# Commit the orientation file on main if it differs from HEAD. Without this
+# commit, the merger's `git reset --hard HEAD` (in /app between merges) would
+# silently restore the upstream stub. Idempotent: no-op if content matches.
+#
+# Everything runs as `developer` because `/app` is chown'd to developer above —
+# git refuses with "dubious ownership" when run as root.
+if [ -d /app/.git ]; then
+  su developer -c '
+    set -e
+    cd /app
+    BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null || true)
+    if [ -z "$BRANCH" ]; then
+      exit 0  # detached HEAD or mid-rebase — skip
+    fi
+    if git diff --quiet HEAD -- CLAUDE.md 2>/dev/null; then
+      exit 0  # already up to date
+    fi
+    git add CLAUDE.md
+    git -c user.name="Atomic CRM Builder" \
+        -c user.email="builder@atomic-crm.local" \
+        commit -m "chore: refresh CLAUDE.md orientation header" --quiet
+  ' || echo -e "${YELLOW}Could not commit CLAUDE.md (non-fatal)${NC}"
+fi
+
 # Disable atomic-crm project's PostToolUse format-file.sh hook — replaced by a
 # SubagentStop prettier hook in our crm-builder config. The PostToolUse variant
 # caused an edit/prettier loop (developer edits → hook reformats → developer
