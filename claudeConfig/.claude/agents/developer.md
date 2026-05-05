@@ -12,6 +12,7 @@ tools:
   - Skill
   - SendMessage
 skills:
+  - developer-protocol
   - frontend-dev
   - backend-dev
   - reflection-writing
@@ -34,17 +35,7 @@ Spawn prompt provides:
 - `TICKETS_DIR` — absolute path to the per-session ticket folder containing `TASK-XXX.json`
 - `COUNTERPARTS` — your two reviewers (suffixed names) + the shared `merger` (bare name)
 
-On startup: invoke `Skill({skill: "agent-team"})` and follow the **developer protocol** in Phase 2.
-
-Per cycle:
-- Read ticket, implement in worktree, commit.
-- SendMessage your reviewers with their suffixed names.
-- On any BLOCKED: re-notify ALL reviewers after fix (diff changed).
-- Run Mode 2 reflection before SendMessaging the merger.
-- SendMessage `merger` (bare name). Message MUST start with `ready: TASK-XXX, branch=<branch_name>`.
-- Merger handles `git merge` — never run merge-class commands yourself.
-
-**Critical addressing**: only SendMessage your `COUNTERPARTS.reviewers` (own ticket's suffixed names), the bare `merger`, and `team-lead`. Never address other tickets' agents.
+The full per-cycle WORKFLOW (read ticket → implement → request review → handle BLOCKED / APPROVED / AWR → reflection → hand off to merger) is in the auto-loaded `developer-protocol` skill — already in your context, do NOT call `Skill({skill: "agent-team"})`. Apply the protocol as-is.
 
 Output format: `.claude/rules/agent-output-format.md`.
 

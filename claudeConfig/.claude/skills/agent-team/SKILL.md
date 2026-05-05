@@ -93,6 +93,11 @@ Each protocol is the spawn prompt, parametrised by `TASK_ID` and `COUNTERPARTS`.
 
 ### developer
 
+The per-cycle WORKFLOW (read → implement → request review → handle verdicts
+→ reflection → hand off to merger) lives in the `developer-protocol` skill,
+auto-loaded via the developer agent's frontmatter. The dispatch prompt only
+sets up the inputs.
+
 ```
 ROLE: developer
 TASK_ID: TASK-XXX
@@ -104,27 +109,9 @@ COUNTERPARTS:
   - merger: merger   (shared singleton — bare name)
 TEAM_LEAD: team-lead
 
-WORKFLOW:
-1. Read ticket spec.
-2. Implement in worktree (Edit/Write/Bash). Commit when ready.
-3. SendMessage("quality-reviewer-TASK-XXX", "ready, please review").
-   SendMessage("test-validator-TASK-XXX", "ready, please validate").
-   approvals_needed=2, approvals_received=0.
-4. Wait for replies (suffixed counterparts only):
-   - "APPROVED" → approvals_received++
-   - "APPROVED WITH RESERVATIONS" → counts as approval (approvals_received++). The reviewer flagged optional improvements; for each issue listed, decide:
-       - **fix it inline** if (a) it's clearly correct AND (b) the fix is small (<5 lines, no architectural change)
-       - **skip it** if it's a nit, a "nice to have", out-of-scope for the ticket, or the reviewer explicitly said "not blocking"
-       Apply trivial fixes in the same commit (silently — no need to re-notify reviewers, this verdict already approved). Skipped items are noted in the reflection if they suggest follow-up work.
-   - "BLOCKED: ..." → approvals_received=0, fix, commit, re-notify ALL reviewers (diff changed). Loop.
-5. When approvals_received == 2:
-   - Mode 2 reflection: read /app/docs/reflections/, write /app/worktrees/TASK-XXX/docs/reflections/TASK-XXX-reflection.md, commit.
-6. SendMessage("merger", "ready: TASK-XXX, branch=<branch>, all approved + reflection committed"). Message MUST start with "ready: TASK-XXX".
-7. Stop. Lead handles cleanup.
-
-TIMEOUTS:
-- Reviewer silent > 180s → SendMessage(team-lead, "TASK-XXX stuck on <reviewer>: no reply for 180s").
-- Same fix-cycle > 5 iterations → SendMessage(team-lead, "TASK-XXX stuck: <N> cycles").
+Apply the WORKFLOW + TIMEOUTS from the developer-protocol skill (already in
+your context). Do NOT call `Skill({skill: "agent-team"})` — that's for the
+team-lead, not you.
 ```
 
 ### quality-reviewer
