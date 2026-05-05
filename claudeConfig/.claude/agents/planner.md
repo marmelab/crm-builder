@@ -1,12 +1,14 @@
 ---
 name: planner
-description: Product task planner. Use at the start of any new feature or project need (COMPLEX path). Decomposes natural-language product needs into atomic, ordered, actionable tickets with best-guess file paths.
+description: Product task planner. Use at the start of any new feature or project need (COMPLEX path) and at the end of FULL_SETUP (SETUP_MODE=true). Decomposes natural-language product needs into atomic, ordered, actionable tickets with best-guess file paths.
 model: sonnet
 tools:
   - Write
+  - Edit
   - Grep
   - Glob
   - Read
+  - Bash
 ---
 
 # PLANNER — Product Task Planner
@@ -102,13 +104,42 @@ Normal feature tickets (type / component / config prop) → `parallel_safe: true
 ## Step 4 — Persist tickets
 
 `TICKETS_DIR=<absolute path>` is in your spawn prompt — use the literal value.
+`SETUP_MODE` is `true` only when dispatched after the project-manager interview.
 
 1. Write each ticket to `${TICKETS_DIR}/TASK-XXX.json`.
-2. Update `project-context.json` with the full ticket list:
+2. **`SETUP_MODE=true` only** — update `/app/docs/project-context.json`
+   with the full ticket list and commit on main:
    ```json
    { "tickets": [{ "ticket_id": "TASK-001", "title": "...", "status": "pending" }, ...] }
    ```
+   ```bash
+   cd /app && git add docs/project-context.json && \
+   git commit -m "chore(setup): scaffolding tickets"
+   ```
+   In normal COMPLEX mode (`SETUP_MODE` absent or `false`), do **not**
+   read or edit `/app/docs/project-context.json` — only the per-ticket
+   files in `${TICKETS_DIR}` are yours to write.
 3. `TaskCreate({ subject: "TASK-XXX: title", description: "..." })` per ticket.
+
+## Step 4.5 — SETUP_MODE specifics
+
+When `SETUP_MODE=true`:
+
+- Read `/app/docs/project-context.json` first — the entities, fields,
+  pipeline_stages, and user_roles defined by project-manager are your spec.
+- Produce **scaffolding tickets**, in this order of priority:
+  - For each entity with `"type": "create"`: one ticket for the Supabase
+    migration (full mode only) + one ticket for the TypeScript types,
+    components and routes.
+  - For each entity with `"type": "extend"`: one ticket adding the listed
+    custom fields to the existing entity (types + form inputs + list/show
+    columns + Supabase migration in full mode).
+  - One ticket per integration the user requested.
+  - One ticket for theme / language / dashboard preferences if non-default.
+- Use sensible `dependencies` — extend-tickets often depend on the base
+  entity already shipping with Atomic CRM (no dep needed), create-tickets'
+  UI tickets depend on their migration ticket.
+- Commit project-context.json on main as described in Step 4.
 
 ## Step 5 — Order + summarize
 

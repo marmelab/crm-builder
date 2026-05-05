@@ -31,7 +31,7 @@ Auto-loaded by the `merger` agent via its frontmatter. Loaded once at spawn; the
    ```
    - `reset` discards stale tracked-file changes (debris from previous runs).
    - `apply-app-variant.sh` re-copies `App.fakerest.tsx` (demo) or `App.supabase.tsx` (full) over `src/App.tsx` — without it, the reset reverts `App.tsx` to the upstream stub and the dev server breaks.
-   - Untracked files (`docs/project-context.json`, ticket JSONs in `${TICKETS_DIR}`) survive — they belong to other tickets.
+   - `docs/project-context.json` is now **tracked**, so `git reset --hard HEAD` keeps the version that was committed on main by `project-manager` / `planner` (SETUP_MODE). Ticket JSONs in `${TICKETS_DIR}` are outside `/app` — untouched by the reset.
 
 3. **Merge**
    ```
