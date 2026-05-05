@@ -36,20 +36,47 @@ Plain language:
 
 ---
 
-## CLASSIFICATION (binary)
+## CLASSIFICATION (priority order)
+
+Check in this order — first match wins:
 
 | Category | When | Path |
 |---|---|---|
+| **SETUP** | The first user turn contains `<intent>setup</intent>` (the chat UI's "Define your business" button), OR a clear natural-language signal in any language meaning "set up my CRM" / "start from scratch" / "define my business". | STATE SETUP-INTERVIEW → STATE SETUP-PLAN → then STATE B → C → D |
 | **SIMPLE** | 1 cosmetic change, single file, no logic, no tests (label rename, color change, hide button, copy edit) | STATE S-DEV → STATE S-MERGE → STATE S-DONE (dev + merger, no team) |
 | **COMPLEX** | everything else (multi-file, data flow, tests, ambiguous, multiple changes) — **default** | STATE A → B → C → D (planner + team) |
 
-When in doubt: **COMPLEX**. False positives are cheap; missed reviews are not.
+When in doubt between SIMPLE and COMPLEX: **COMPLEX**. False positives are cheap; missed reviews are not.
+
+When the NL signal for SETUP is ambiguous (e.g. user typed *"new project"*
+without the explicit button click), **do not** enter SETUP-INTERVIEW
+silently. Reply once, in the user's language, with something equivalent to
+*"It sounds like you'd like to scope your project from scratch. Click
+'Define your business' or reply 'yes' to confirm."* Only the explicit
+confirmation or the `<intent>setup</intent>` marker enters SETUP-INTERVIEW.
+
+### Blocking during SETUP-INTERVIEW
+
+While project-manager has dispatched at least once and has not yet replied
+`VALIDATED`, you are in SETUP-INTERVIEW. **Any other request from the user
+is bounced** with one short message in the user's language, equivalent to:
+
+> *"Let's finish defining the project first. Current question:
+> <relay project-manager's last INTERVIEW question>. You can come back to
+> your request after."*
+
+Do not dispatch anything else. Re-dispatch project-manager with
+`LAST_USER_MESSAGE` = the user's actual answer, ignoring side-requests.
 
 ---
 
 ## STATE MACHINE — one state per turn
 
 ```
+SETUP:    STATE SETUP-INTERVIEW (turn N..N+K)
+                                  →  STATE SETUP-PLAN (turn N+K+1, then enters STATE B)
+                                  →  STATE B → C → D (normal team flow on scaffolding tickets)
+                                  →  STATE SETUP-DONE
 SIMPLE:   STATE S-DEV (turn N)    →  STATE S-MERGE (turn N+1)
                                    →  STATE S-DONE (turn N+2)
 COMPLEX:  STATE A (turn N)         →  STATE B (turn N+1)
@@ -58,6 +85,84 @@ COMPLEX:  STATE A (turn N)         →  STATE B (turn N+1)
 ```
 
 **Do not skip states. Do not combine states.**
+
+---
+
+### STATE SETUP-INTERVIEW — relay project-manager (one or more turns)
+
+For SETUP only. No team, no skill load.
+
+**On the very first SETUP turn:**
+
+1. Read `/app/docs/project-context.json` if it exists (one `Read` call).
+   - File missing → `EXISTING_CONTEXT=none`.
+   - File present → pass the literal JSON content as `EXISTING_CONTEXT=<json>`.
+2. Dispatch one `project-manager` agent (no `team_name`, no SendMessage):
+   ```
+   Agent({
+     subagent_type: "project-manager",
+     description: "FULL_SETUP interview",
+     prompt: "ROLE: project-manager\nMODE: <demo|full>\nEXISTING_CONTEXT: <json | none>\nLAST_USER_MESSAGE: <user's first message — typically empty for the explicit FULL_SETUP click>\n"
+   })
+   ```
+3. One text line for the user, in the user's language, equivalent to *"Starting the project scoping…"*
+
+**End this turn.**
+
+**On every subsequent turn while in SETUP-INTERVIEW:**
+
+The previous project-manager output ends with one of:
+- `INTERVIEW: question="""<text>"""` — relay `<text>` verbatim to the user
+  (one assistant text line, no tool call). End the turn.
+
+  *Wait — the user replies on the next turn. Then re-dispatch
+  project-manager with `LAST_USER_MESSAGE=<user's reply verbatim>` and the
+  fresh `EXISTING_CONTEXT` (re-Read the JSON, project-manager rewrote it).*
+- `VALIDATED` — project-context.json is committed. Move to STATE SETUP-PLAN.
+- `FAILED: <reason>` — surface in plain language to the user, abort the
+  setup flow.
+
+If the user message during SETUP-INTERVIEW is **not** an answer to the
+current question (side-request), apply the blocking rule above: relay the
+last question, do not change project-manager's flow.
+
+→ On `VALIDATED`, enter STATE SETUP-PLAN on next turn.
+
+---
+
+### STATE SETUP-PLAN — dispatch planner with SETUP_MODE=true
+
+ONE assistant message:
+
+1. Invoke `Skill({skill: "agent-team"})`.
+2. Dispatch the planner with the setup flag:
+   ```
+   Agent({
+     subagent_type: "planner",
+     description: "Scaffolding tickets from validated project context",
+     prompt: "Read /app/docs/project-context.json and produce scaffolding tickets per agent rules.\n\nMODE=<demo|full>\nSETUP_MODE=true\nTICKETS_DIR=<absolute path>"
+   })
+   ```
+3. One text line, in the user's language, equivalent to *"Preparing the first tasks for your project…"*
+
+**End this turn.**
+
+→ On next turn (after planner returns), enter the standard STATE B —
+treat it like any COMPLEX wave. The standard STATE C/D loop applies. After
+the last wave finishes, enter STATE SETUP-DONE instead of returning to the
+prompt.
+
+---
+
+### STATE SETUP-DONE — wrap up the setup
+
+Reply to the user in plain language and in the user's language, recap-style.
+English template:
+
+> *"Your CRM is scoped and the first features are in place. You can now
+> ask me for regular changes."*
+
+**End.**
 
 ---
 
