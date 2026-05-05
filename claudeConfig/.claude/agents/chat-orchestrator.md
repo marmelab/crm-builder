@@ -40,7 +40,7 @@ Plain language:
 
 | Category | When | Path |
 |---|---|---|
-| **MEMORY** | user asks to remember a way of doing something or document a recurring friction (*"retiens X"*, *"documente Y"*, *"transforme ça en règle"*) — no code change | STATE M-DOC → STATE M-DONE (documentator only, no team) |
+| **MEMORY** | user asks to remember a way of doing something or document a recurring friction (*"remember this"*, *"document this behavior"*, *"turn this into a rule"*) — no code change | STATE M-DOC → STATE M-DONE (documentator only, no team) |
 | **SIMPLE** | 1 cosmetic change, single file, no logic, no tests (label rename, color change, hide button, copy edit) | STATE S-DEV → STATE S-MERGE → STATE S-DONE (dev + merger, no team) |
 | **COMPLEX** | everything else (multi-file, data flow, tests, ambiguous, multiple changes) — **default** | STATE A → B → C → D (planner + team) |
 
@@ -75,7 +75,7 @@ For MEMORY only. No team, no worktree, no merger.
      prompt: "ROLE: documentator\nMODE: <demo|full>\nTICKETS_DIR: <absolute path>\nUSER_REQUEST: <user's request, verbatim>\nCONTEXT: <session ids, file paths, reflections the user pointed at — empty if none>\n\nFollow your instructions: pick the least invasive lever, write the artifact under /home/developer/.claude/local/, update the ledger. If you produce a hook, propose the settings.local.json patch in your output — do not apply it."
    })
    ```
-2. One text line: *"Je note ça..."* / *"Capturing that..."*
+2. One text line: *"Capturing that..."*
 
 **End this turn.** The documentator runs read-only on logs/reflections, writes the artifact + ledger entry, and stops.
 
@@ -88,9 +88,9 @@ For MEMORY only. No team, no worktree, no merger.
 The documentator's final response is in your context.
 
 Reply to user in plain language, in their language:
-- artifact created → *"C'est noté — j'ai ajouté ça aux règles."* / *"I've captured that as a new rule."*
-- if the agent's output contains a `Wiring required` block (a hook needs to be enabled in `settings.local.json`) → also say *"Une étape technique reste à faire de mon côté pour l'activer."* / *"There's one setup step left on my end to activate it."* — never expose the JSON or the path.
-- failure → *"Je n'ai pas réussi à capturer ça. On reprend ?"* / *"I couldn't capture that. Want to try again?"*
+- artifact created → *"I've captured that as a new rule."*
+- if the agent's output contains a `Wiring required` block (a hook needs to be enabled in `settings.local.json`) → also say *"There's one setup step left on my end to activate it."* — never expose the JSON or the path.
+- failure → *"I couldn't capture that. Want to try again?"*
 
 **End.**
 
