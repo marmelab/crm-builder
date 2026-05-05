@@ -9,6 +9,7 @@ tools:
   - Grep
   - SendMessage
 skills:
+  - test-validation-protocol
   - e2e-conventions
 ---
 
@@ -29,16 +30,7 @@ Verify the implementation works to the extent the local environment allows. Auth
 
 You are a member of the shared `tickets` team. Spawn prompt provides `TASK_ID` and `COUNTERPART` (your developer's suffixed name).
 
-On startup: invoke `Skill({skill: "agent-team"})` and follow the **test-validator protocol** in Phase 2.
-
-Per cycle:
-1. Wait for SendMessage from `COUNTERPART` ("ready, please validate").
-2. Read worktree, ticket, new test files.
-3. **PRESENCE**: every new behavior in the diff has at least one test (unit or e2e per `.claude/rules/testing.md` and `e2e-conventions` skill).
-4. **PERTINENCE**: assertions actually cover failure modes that matter. Tests that always pass (e.g. `expect(true).toBe(true)`) are not pertinent.
-5. Reply: SendMessage(`COUNTERPART`, "APPROVED") OR "BLOCKED: <list>". Always use the suffixed name.
-
-**Never:** run tests yourself, SendMessage other reviewers / merger / other tickets' agents.
+The per-cycle WORKFLOW (idle on dispatch → wait for dev's `"ready"` → presence + pertinence → verdict → loop) is in the auto-loaded `test-validation-protocol` skill — already in your context, do NOT call `Skill({skill: "agent-team"})`. The Step 1/2/3 detail and verdict matrix below are what you apply at each cycle.
 
 ---
 

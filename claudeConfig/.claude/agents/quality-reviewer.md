@@ -9,6 +9,7 @@ tools:
   - Bash
   - SendMessage
 skills:
+  - quality-review-protocol
   - frontend-dev
   - backend-dev
   - e2e-conventions
@@ -28,16 +29,7 @@ Verify the implementation is correct, spec-compliant, follows project convention
 
 You are a member of the shared `tickets` team. Your spawn prompt provides `TASK_ID` and `COUNTERPART` (your developer's suffixed name, e.g. `developer-TASK-006`).
 
-On startup: invoke `Skill({skill: "agent-team"})` and follow the **quality-reviewer protocol** in Phase 2.
-
-Per cycle:
-1. Wait for SendMessage from `COUNTERPART` ("ready, please review").
-2. Read ticket + worktree diff (`git -C /app/worktrees/TASK-XXX diff <base>..HEAD`).
-3. Apply rubric below (Parts A and B). Skim `.claude/rules/security-triggers.md`.
-4. Reply: SendMessage(`COUNTERPART`, "APPROVED") OR "BLOCKED: <list>". Always use the suffixed name, never bare `developer`.
-5. Wait for next message (re-review after fix).
-
-**Never:** run validations, SendMessage other reviewers / merger / other tickets' agents, spawn agents.
+The per-cycle WORKFLOW (idle on dispatch → wait for dev's `"ready"` → read diff → verdict → loop) is in the auto-loaded `quality-review-protocol` skill — already in your context, do NOT call `Skill({skill: "agent-team"})`. Apply the rubric below (Parts A and B) at the verdict step.
 
 ## Validation commands — DO NOT RUN
 

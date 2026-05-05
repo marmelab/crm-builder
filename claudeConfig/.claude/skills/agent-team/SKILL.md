@@ -116,6 +116,10 @@ team-lead, not you.
 
 ### quality-reviewer
 
+The per-cycle workflow (idle on dispatch → wait for dev's `"ready"` → review →
+verdict → loop) lives in the `quality-review-protocol` skill, auto-loaded via
+the agent's frontmatter. The dispatch prompt only sets up the inputs.
+
 ```
 ROLE: quality-reviewer
 TASK_ID: TASK-XXX
@@ -125,37 +129,16 @@ TICKET_FILE: <session_dir>/TASK-XXX.json
 COUNTERPART: developer-TASK-XXX
 TEAM_LEAD: team-lead
 
-INITIAL ACTION ON DISPATCH:
-**Stop immediately. Do NOT call any tool — including Skill. Idle until you
-receive your first SendMessage from `developer-TASK-XXX` (NOT from team-lead —
-team-lead's GO message goes to the developer; you wait for the dev's "ready,
-please review" specifically).**
-
-Rationale: dispatching the reviewer puts a prompt in its context but the
-diff doesn't exist yet. Reading the worktree, loading agent-team skill,
-running git diff — all wasted work, the developer hasn't committed. This
-prompt is self-contained; the agent-team skill is for the team-lead, not you.
-
-WORKFLOW (only after the developer's first SendMessage arrives):
-1. Read ticket and worktree diff (`git -C /app/worktrees/TASK-XXX diff <base>..HEAD`).
-2. Apply rules: coding-style.md, agent-output-format.md. Skim security-triggers.md.
-3. Verdict:
-   - All clear → SendMessage(developer-TASK-XXX, "APPROVED")
-   - Issues → SendMessage(developer-TASK-XXX, "BLOCKED:\n- file: ...\n  line: ...\n  description: ...\n  fix: ...\n- ...\nSummary: N blocking issues.")
-4. Stop. Wait for next message from developer-TASK-XXX (re-review after fix).
-
-DO NOT:
-- Invoke `Skill({skill: "agent-team"})` — it's for the team-lead. This prompt
-  has everything you need.
-- Act on dispatch — wait for the developer's message first.
-- React to any other sender than developer-TASK-XXX (ignore team-lead
-  except for shutdown_request).
-- Run validations (typecheck, e2e — handled by PreToolUse hook on dev side).
-- SendMessage anyone other than developer-TASK-XXX.
-- Re-spawn agents or call TeamCreate/TeamDelete.
+Apply the WORKFLOW from the quality-review-protocol skill (already in your
+context). The detailed review rubric (Parts A and B) is in your agent's own
+prompt. Do NOT call `Skill({skill: "agent-team"})` — that's for the team-lead.
 ```
 
 ### test-validator
+
+The per-cycle workflow (idle on dispatch → wait for dev's `"ready"` → validate
+→ verdict → loop) lives in the `test-validation-protocol` skill, auto-loaded
+via the agent's frontmatter. The dispatch prompt only sets up the inputs.
 
 ```
 ROLE: test-validator
@@ -166,32 +149,9 @@ TICKET_FILE: <session_dir>/TASK-XXX.json
 COUNTERPART: developer-TASK-XXX
 TEAM_LEAD: team-lead
 
-INITIAL ACTION ON DISPATCH:
-**Stop immediately. Do NOT call any tool — including Skill. Idle until you
-receive your first SendMessage from `developer-TASK-XXX` (NOT from team-lead —
-team-lead's GO message goes to the developer; you wait for the dev's "ready,
-please validate" specifically).**
-
-Rationale: same as quality-reviewer — exploring an empty worktree or loading
-the agent-team skill (which is for the team-lead, not you) before the dev
-commits wastes tokens and produces stale verdicts.
-
-WORKFLOW (only after the developer's first SendMessage arrives):
-1. Read ticket and worktree.
-2. PRESENCE: every new behavior in the diff has at least one test (unit or e2e per testing.md).
-3. PERTINENCE: assertions actually cover the failure modes that matter. A test that always passes is not pertinent.
-4. (UI changes only) Cross-check against e2e-conventions — that skill is already auto-loaded via your agent's frontmatter, so do NOT call `Skill({…})`. Just apply what's there.
-5. Verdict (same format as quality-reviewer):
-   - SendMessage(developer-TASK-XXX, "APPROVED") if presence + pertinence both OK.
-   - SendMessage(developer-TASK-XXX, "BLOCKED:\n- ...") otherwise.
-
-DO NOT:
-- Invoke `Skill({skill: "agent-team"})` — it's for the team-lead.
-- Act on dispatch — wait for the developer's message first.
-- React to any other sender than developer-TASK-XXX (ignore team-lead
-  except for shutdown_request).
-- Run tests (PreToolUse hook does that).
-- SendMessage other reviewers, merger, or other tickets' agents.
+Apply the WORKFLOW from the test-validation-protocol skill (already in your
+context). Step 1/2/3 detail and the verdict matrix are in your agent's own
+prompt. Do NOT call `Skill({skill: "agent-team"})` — that's for the team-lead.
 ```
 
 ### merger (shared singleton)
