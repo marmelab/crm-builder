@@ -5,7 +5,7 @@ description: Multi-agent team workflow for implementing tickets with peer-to-pee
 
 # Agent Team — Single-team peer-to-peer workflow
 
-Invoked by `chat-orchestrator` (team-lead) for COMPLEX requests, and read by every member at startup.
+Invoked by `chat-orchestrator` (team-lead) for COMPLEX requests.
 
 **Runtime constraint:** one team per lead, no nested teams. So all members of a wave live in one shared team `tickets`, with deterministic suffixed names.
 
@@ -13,7 +13,7 @@ Invoked by `chat-orchestrator` (team-lead) for COMPLEX requests, and read by eve
 
 ---
 
-## TL;DR — for a wave of N tickets
+## Wave of N tickets
 
 1. PLANNER produces N tickets.
 2. Lead `TeamCreate({team_name: "tickets"})` (once per wave).
@@ -67,14 +67,14 @@ In one assistant message:
 TeamCreate({team_name: "tickets", description: "Wave of N tickets"})
 
 // Per ticket (one trio per ticket, all in this same message):
-Agent({subagent_type: "developer", name: "developer-TASK-001", team_name: "tickets", model: "opus", description: "Implement TASK-001", prompt: "<see Phase 2 — developer>"})
-Agent({subagent_type: "quality-reviewer", name: "quality-reviewer-TASK-001", team_name: "tickets", model: "sonnet", description: "Quality review TASK-001", prompt: "<see Phase 2 — quality-reviewer>"})
-Agent({subagent_type: "test-validator", name: "test-validator-TASK-001", team_name: "tickets", model: "sonnet", description: "Test validation TASK-001", prompt: "<see Phase 2 — test-validator>"})
+Agent({subagent_type: "developer", name: "developer-TASK-001", team_name: "tickets", model: "opus", description: "Implement TASK-001", prompt: "<see Spawn prompt frames below>"})
+Agent({subagent_type: "quality-reviewer", name: "quality-reviewer-TASK-001", team_name: "tickets", model: "sonnet", description: "Quality review TASK-001", prompt: "<see Spawn prompt frames below>"})
+Agent({subagent_type: "test-validator", name: "test-validator-TASK-001", team_name: "tickets", model: "sonnet", description: "Test validation TASK-001", prompt: "<see Spawn prompt frames below>"})
 
 // (... repeat trio for TASK-002, TASK-003, ...)
 
 // ONE shared merger (last):
-Agent({subagent_type: "merger", name: "merger", team_name: "tickets", model: "haiku", description: "Merge all tickets", prompt: "<see Phase 2 — merger>"})
+Agent({subagent_type: "merger", name: "merger", team_name: "tickets", model: "haiku", description: "Merge all tickets", prompt: "<see Spawn prompt frames below>"})
 ```
 
 Then in a second message: one `SendMessage(GO, …)` per developer:
@@ -85,19 +85,13 @@ SendMessage({to: "developer-TASK-001", message: "GO — Implement TASK-001 (work
 
 After GO: lead enters **passive wait**. It receives N final SendMessages from `merger` (one per ticket: `merged TASK-XXX, commit=<sha>` or `TASK-XXX merge failed: <reason>`). When count == N → Phase 3.
 
----
+### Spawn prompt frames
 
-## Phase 2 — Per-agent protocols
+Each member's per-cycle WORKFLOW is in its own auto-loaded protocol skill
+(`developer-protocol`, `quality-review-protocol`, `test-validation-protocol`,
+`merge-protocol`). The spawn prompt only needs to set up the inputs.
 
-Each protocol is the spawn prompt, parametrised by `TASK_ID` and `COUNTERPARTS`.
-
-### developer
-
-The per-cycle WORKFLOW (read → implement → request review → handle verdicts
-→ reflection → hand off to merger) lives in the `developer-protocol` skill,
-auto-loaded via the developer agent's frontmatter. The dispatch prompt only
-sets up the inputs.
-
+**developer-TASK-XXX**
 ```
 ROLE: developer
 TASK_ID: TASK-XXX
@@ -114,14 +108,9 @@ your context). Do NOT call `Skill({skill: "agent-team"})` — that's for the
 team-lead, not you.
 ```
 
-### quality-reviewer
-
-The per-cycle workflow (idle on dispatch → wait for dev's `"ready"` → review →
-verdict → loop) lives in the `quality-review-protocol` skill, auto-loaded via
-the agent's frontmatter. The dispatch prompt only sets up the inputs.
-
+**quality-reviewer-TASK-XXX** and **test-validator-TASK-XXX** share the same frame:
 ```
-ROLE: quality-reviewer
+ROLE: <quality-reviewer | test-validator>
 TASK_ID: TASK-XXX
 TEAM: tickets
 WORKTREE: /app/worktrees/TASK-XXX
@@ -129,38 +118,13 @@ TICKET_FILE: <session_dir>/TASK-XXX.json
 COUNTERPART: developer-TASK-XXX
 TEAM_LEAD: team-lead
 
-Apply the WORKFLOW from the quality-review-protocol skill (already in your
-context). The detailed review rubric (Parts A and B) is in your agent's own
-prompt. Do NOT call `Skill({skill: "agent-team"})` — that's for the team-lead.
+Apply the WORKFLOW from your auto-loaded <quality-review-protocol |
+test-validation-protocol> skill. The detailed rubric / verdict matrix is in
+your agent's own prompt. Do NOT call `Skill({skill: "agent-team"})`.
 ```
 
-### test-validator
-
-The per-cycle workflow (idle on dispatch → wait for dev's `"ready"` → validate
-→ verdict → loop) lives in the `test-validation-protocol` skill, auto-loaded
-via the agent's frontmatter. The dispatch prompt only sets up the inputs.
-
-```
-ROLE: test-validator
-TASK_ID: TASK-XXX
-TEAM: tickets
-WORKTREE: /app/worktrees/TASK-XXX
-TICKET_FILE: <session_dir>/TASK-XXX.json
-COUNTERPART: developer-TASK-XXX
-TEAM_LEAD: team-lead
-
-Apply the WORKFLOW from the test-validation-protocol skill (already in your
-context). Step 1/2/3 detail and the verdict matrix are in your agent's own
-prompt. Do NOT call `Skill({skill: "agent-team"})` — that's for the team-lead.
-```
-
-### merger (shared singleton)
-
-The MERGE STEPS themselves live in the `merge-protocol` skill, which is
-auto-loaded via the merger agent's frontmatter. The dispatch prompt only
-needs to wire up the team flow — message routing, looping, shutdown — not
-re-spell the merge procedure.
-
+**merger** (singleton, no suffix — needs a small loop wrapper around the
+auto-loaded `merge-protocol`):
 ```
 ROLE: merger
 NAME: merger   (no suffix — single shared merger for the whole wave)
