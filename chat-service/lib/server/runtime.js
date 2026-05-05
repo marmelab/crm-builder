@@ -40,8 +40,10 @@ export function createRuntime(session) {
       costUsdCurrentSpawn: 0,
       activeAgents: 0,
       // activeAgentIds tracks Claude Code task_ids for task_type="local_agent"
-      // events. The set's size IS activeAgents. Using a Set lets us properly
-      // match start/complete pairs by task_id (not all task_notifications have
+      // (planner, simple-developer) and task_type="in_process_teammate"
+      // (every COMPLEX team member: developer-TASK-XXX, reviewers, merger).
+      // The set's size IS activeAgents. Using a Set lets us properly match
+      // start/complete pairs by task_id (not all task_notifications have
       // matching task_started events — e.g., MCP tools emit completion without
       // our tracked start).
       activeAgentIds: new Set(),

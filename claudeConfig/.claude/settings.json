@@ -57,6 +57,10 @@
                     },
                     {
                         "type": "command",
+                        "command": "/home/developer/.claude/hooks/block-orchestrator-merge.sh"
+                    },
+                    {
+                        "type": "command",
                         "command": "/home/developer/.claude/hooks/restrict-documentator-bash.sh"
                     }
                 ]
@@ -69,61 +73,79 @@
                         "command": "/home/developer/.claude/hooks/restrict-documentator-write.sh"
                     }
                 ]
+            },
+            {
+                "matcher": "SendMessage",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "/home/developer/.claude/hooks/block-premature-shutdowns.sh"
+                    },
+                    {
+                        "type": "command",
+                        "command": "/home/developer/.claude/hooks/validate-before-review.sh",
+                        "timeout": 180,
+                        "statusMessage": "Validating before review/merge..."
+                    }
+                ]
+            },
+            {
+                "matcher": "TeamDelete",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "/home/developer/.claude/hooks/teamdelete-gate.sh",
+                        "timeout": 5,
+                        "statusMessage": "Checking team teardown state..."
+                    }
+                ]
+            }
+        ],
+        "PostToolUse": [
+            {
+                "matcher": "TeamDelete",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "/home/developer/.claude/hooks/teamdelete-cleanup.sh",
+                        "timeout": 5
+                    }
+                ]
             }
         ],
         "SubagentStop": [
             {
-                "matcher": "developer",
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": "/home/developer/.claude/hooks/run-e2e-tests.sh",
-                        "timeout": 120,
-                        "statusMessage": "Running e2e tests..."
-                    }
-                ]
-            },
-            {
-                "matcher": "developer",
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": "/home/developer/.claude/hooks/run-unit-tests-app.sh",
-                        "timeout": 120,
-                        "statusMessage": "Running unit tests (app)..."
-                    }
-                ]
-            },
-            {
-                "matcher": "developer",
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": "/home/developer/.claude/hooks/run-unit-tests-functions.sh",
-                        "timeout": 120,
-                        "statusMessage": "Running unit tests (functions)..."
-                    }
-                ]
-            },
-            {
-                "matcher": "developer",
+                "matcher": "simple-developer",
                 "hooks": [
                     {
                         "type": "command",
                         "command": "/home/developer/.claude/hooks/typecheck-on-commit.sh",
                         "timeout": 120,
-                        "statusMessage": "Running typecheck..."
-                    }
-                ]
-            },
-            {
-                "matcher": "developer",
-                "hooks": [
+                        "statusMessage": "Validating typecheck..."
+                    },
                     {
                         "type": "command",
                         "command": "/home/developer/.claude/hooks/prettier-on-stop.sh",
-                        "timeout": 120,
-                        "statusMessage": "Checking prettier..."
+                        "timeout": 60,
+                        "statusMessage": "Validating prettier..."
+                    },
+                    {
+                        "type": "command",
+                        "command": "/home/developer/.claude/hooks/run-unit-tests-app.sh",
+                        "timeout": 180,
+                        "statusMessage": "Running unit tests (app)..."
+                    },
+                    {
+                        "type": "command",
+                        "command": "/home/developer/.claude/hooks/run-unit-tests-functions.sh",
+                        "timeout": 180,
+                        "statusMessage": "Running unit tests (functions)..."
+                    },
+                    {
+                        "type": "command",
+                        "command": "/home/developer/.claude/hooks/run-e2e-tests.sh",
+                        "timeout": 600,
+                        "statusMessage": "Running e2e tests..."
                     }
                 ]
             }

@@ -25,7 +25,7 @@ You are never invoked on a schedule. Every run is user-triggered.
 
 Every other path is blocked by the `restrict-documentator-write.sh` hook. In particular, the canonical paths `/home/developer/.claude/{agents,skills,hooks,rules}/` and `/home/developer/.claude/settings.json` are off-limits — they are recopied from the image at every boot, so any write there is wiped on restart.
 
-You do not touch `/app/src/`, `/worktrees/**`, or anything else in the application code. The documentator captures patterns into the Claude config; it never edits the CRM itself.
+You do not touch `/app/src/`, `/app/worktrees/**`, or anything else in the application code. The documentator captures patterns into the Claude config; it never edits the CRM itself.
 
 ## Sources you read
 
@@ -82,7 +82,7 @@ For an `escalation`, replace **Resolution** with **Why no additive lever** and o
 
 - Never write outside the allowed paths listed above.
 - Never modify `claudeConfig/.claude/`, `/home/developer/.claude/{agents,skills,hooks,rules}/`, or `/home/developer/.claude/settings.json`.
-- Never edit `/app/src/`, `/worktrees/**`, or any application code.
+- Never edit `/app/src/`, `/app/worktrees/**`, or any application code.
 - For hooks: produce the script under `local/hooks/`, propose the wiring JSON in your output, do not edit `settings.local.json` unless explicitly approved.
 - Agents and skills only become discoverable to Claude Code at the next container boot (entrypoint.sh creates the symlinks). Note this in your output so the user knows.
 - Never lower a counter, never remove evidence from an existing entry.

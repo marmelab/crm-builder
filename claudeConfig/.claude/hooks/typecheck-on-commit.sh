@@ -10,12 +10,20 @@ echo "[$(date -Iseconds)] typecheck START pwd=$(pwd) CLAUDE_PROJECT_DIR=$CLAUDE_
 REPO="${CLAUDE_PROJECT_DIR:-/app}"
 cd "$REPO" || { echo "[$(date -Iseconds)] typecheck EXIT=0 cd_failed" >> "$LOG"; exit 0; }
 
-# Only check ACTIVE feature worktrees under /worktrees/. The main repo ($REPO,
+# Only check ACTIVE feature worktrees under /app/worktrees/. The main repo ($REPO,
 # usually /app) is the merge target — pre-existing state there is not the current
 # subagent's concern. Running typecheck on /app with orphan untracked files from
 # previous sessions caused a regression where a developer deviated from its task
 # to "fix" unrelated typecheck errors.
-WORKTREES=$(git worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2}' | grep "^/worktrees/" || true)
+#
+# VALIDATE_WORKTREE: when set by validate-before-review.sh, restrict to that
+# single worktree. Avoids the "shared brakes" issue where one dev's broken
+# state blocks all parallel SendMessages (one bad TASK poisoning N reviewers).
+if [ -n "${VALIDATE_WORKTREE:-}" ] && [ -d "$VALIDATE_WORKTREE" ]; then
+  WORKTREES="$VALIDATE_WORKTREE"
+else
+  WORKTREES=$(git worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2}' | grep "^/app/worktrees/" || true)
+fi
 
 if [ -z "$WORKTREES" ]; then
   echo "[$(date -Iseconds)] typecheck EXIT=0 no_active_worktree" >> "$LOG"
@@ -49,6 +57,7 @@ for WT in $WORKTREES; do
   if [ $EXIT_CODE -ne 0 ]; then
     FAILED=1
     AGGREGATED_ERR+="=== typecheck failed in $WT ===\n$(echo "$OUTPUT" | tail -20)\n\n"
+    echo "[$(date -Iseconds)] typecheck FAIL wt=$WT EXIT=$EXIT_CODE" >> "$LOG"
   else
     echo "[$(date -Iseconds)] typecheck OK wt=$WT" >> "$LOG"
   fi

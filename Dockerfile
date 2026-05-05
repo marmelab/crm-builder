@@ -71,8 +71,9 @@ RUN npm install -g typescript-language-server typescript
 
 # ── Git initialisation ────────────────────────────────────────
 # Required for agents to create worktrees:
-#   git worktree add /worktrees/my-feature feature/my-feature
-# Each worktree = isolated directory for one agent + its Vite dev server
+#   git worktree add /app/worktrees/my-feature feature/my-feature
+# Each worktree = isolated directory for one agent + its Vite dev server.
+# /app/worktrees/ is gitignored at runtime (entrypoint.sh).
 RUN git config --global user.email "claude@atomic-crm.dev" \
     && git config --global user.name "Claude Code" \
     && git init \
@@ -89,9 +90,14 @@ RUN useradd -m -s /bin/bash developer \
     && cp /root/.gitconfig /home/developer/.gitconfig \
     && chown -R developer:developer /home/developer \
     && chown -R developer:developer /app \
-    && mkdir -p /worktrees && chown developer:developer /worktrees \
+    && mkdir -p /app/worktrees && chown developer:developer /app/worktrees \
     && mkdir -p /app/node_modules/.vite && chown -R developer:developer /app/node_modules/.vite \
-    && ln -sf .claude/.claude.json /home/developer/.claude.json
+    && ln -sf .claude/.claude.json /home/developer/.claude.json \
+    # Pre-write the npm-ci hash so the first boot skips npm ci (node_modules from
+    # the image is already consistent with package-lock.json). Entrypoint only
+    # re-runs npm ci when an agent later modifies package-lock.json.
+    && sha256sum /app/package-lock.json | cut -d' ' -f1 > /app/.npm-ci-hash \
+    && chown developer:developer /app/.npm-ci-hash
 
 # ── Save original App.tsx (Supabase mode) ─────────────────────
 RUN cp src/App.tsx src/App.supabase.tsx

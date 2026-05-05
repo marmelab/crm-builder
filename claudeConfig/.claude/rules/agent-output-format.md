@@ -6,7 +6,7 @@ paths: []
 
 All agents read their ticket from `${TICKETS_DIR}/TASK-XXX.json` before starting. `TICKETS_DIR` is an absolute path passed in every dispatch prompt — it points to the per-session folder where ticket files live alongside the conversation's `log.jsonl` and `meta.json`.
 
-## Reviewer agents (code-reviewer, security-reviewer, test-validator)
+## Reviewer agents (quality-reviewer, test-validator)
 
 Output structured text — no JSON blocks:
 

@@ -74,6 +74,12 @@ chown -R developer:developer /home/developer/.claude 2>/dev/null || true
 # Chat-service logs dir (bind-mounted in dev, needs developer write access)
 mkdir -p /chat-service/logs 2>/dev/null || true
 chmod 777 /chat-service/logs 2>/dev/null || true
+# hooks.log is touched/appended by dozens of subagent processes; ensure it
+# exists and is writable by `developer` so a stale root-owned file from a
+# previous troubleshooting session doesn't silently break logging.
+touch /chat-service/logs/hooks.log 2>/dev/null || true
+chown developer:developer /chat-service/logs/hooks.log 2>/dev/null || true
+chmod 664 /chat-service/logs/hooks.log 2>/dev/null || true
 
 # Runtime-generated docs (reflections, learnings) — bind-mounted from host ./crm-docs.
 # On a fresh host, the directory may be empty and owned by root (if Docker runs as
@@ -100,10 +106,35 @@ fi
 
 chown -R developer:developer /app/docs 2>/dev/null || true
 
-# Worktrees root — same reasoning. Bind-mounted from host, needs developer write
-# access for `git worktree add /worktrees/TASK-XXX`.
-mkdir -p /worktrees 2>/dev/null || true
-chown -R developer:developer /worktrees 2>/dev/null || true
+# Worktrees root — lives inside /app so cp -al hard-links against
+# /app/node_modules stay on the same device. Excluded from git via .gitignore.
+mkdir -p /app/worktrees 2>/dev/null || true
+chown -R developer:developer /app/worktrees 2>/dev/null || true
+
+# Make sure /app/worktrees is gitignored (idempotent — only adds the line if
+# missing). Without this, `git status` in /app would list every worktree as
+# untracked and merger would try to add them.
+if [ -f /app/.gitignore ] && ! grep -qxF 'worktrees/' /app/.gitignore; then
+  echo 'worktrees/' >> /app/.gitignore
+fi
+
+# ── Sync node_modules with package-lock.json ──────────────────
+# Volume crm-app:/app persists node_modules across restarts. If an agent
+# modifies package.json/package-lock.json (e.g. adds a dependency) and
+# commits, the volume keeps the old node_modules. Hash-check at boot:
+# if package-lock.json changed since last npm ci, re-install.
+LOCK_HASH=$(sha256sum /app/package-lock.json 2>/dev/null | cut -d' ' -f1)
+PREV_HASH=$(cat /app/.npm-ci-hash 2>/dev/null || echo "")
+if [ -n "$LOCK_HASH" ] && [ "$LOCK_HASH" != "$PREV_HASH" ]; then
+  echo -e "${YELLOW}package-lock.json changed → wiping and reinstalling node_modules${NC}"
+  # rm -rf is mandatory: npm ci over an existing node_modules occasionally
+  # fails with ENOTEMPTY when a transitive dep tree shape changes (e.g.
+  # 'rmdir es-abstract' fails because some sub-dir is non-empty).
+  rm -rf /app/node_modules
+  (cd /app && su developer -c 'npm ci') || echo -e "${RED}npm ci failed — vite/tsc may be broken${NC}"
+  echo "$LOCK_HASH" > /app/.npm-ci-hash
+  chown developer:developer /app/.npm-ci-hash
+fi
 
 # Disable atomic-crm project's PostToolUse format-file.sh hook — replaced by a
 # SubagentStop prettier hook in our crm-builder config. The PostToolUse variant

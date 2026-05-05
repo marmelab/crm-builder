@@ -53,9 +53,18 @@ export async function processMessage(runtime, prompt) {
         const text = extractText(event);
         if (text) {
           receivedText = true;
+          // Suppress consecutive duplicates. The COMPLEX flow makes the
+          // orchestrator yield with the same "Working on it..." line on every
+          // STATE C wake-up (which can be 20+ in a 4-ticket run) — those are
+          // pure noise and pollute both the UI and the persisted log. We
+          // still set lastAssistantText so other code that reads it (final
+          // fallback message logic below) sees the last real text.
+          const isDuplicate = text.trim() === lastAssistantText.trim();
           lastAssistantText = text;
-          broadcast(runtime, { type: 'message', role: 'assistant', content: text });
-          runtime.session?.recordMessage('assistant', text).catch(() => {});
+          if (!isDuplicate) {
+            broadcast(runtime, { type: 'message', role: 'assistant', content: text });
+            runtime.session?.recordMessage('assistant', text).catch(() => {});
+          }
         }
 
         for (const tool of extractToolUses(event)) {
@@ -68,14 +77,19 @@ export async function processMessage(runtime, prompt) {
 
         // Track active sub-agents. Claude Code emits task_started events for
         // many things (Bash calls, MCP tool calls, subagent dispatches, ...).
-        // We only count `task_type === "local_agent"` which is the actual
-        // "subagent spawned via Agent tool" signal. Previously we counted all
-        // task_started events, which caused the counter to drift to double-digit
-        // values (observed: UI showed 11 when only ~3 agents were active).
+        // We count two task_types: 'local_agent' (Agent without team_name —
+        // planner, simple-developer) and 'in_process_teammate' (Agent dispatched
+        // into a team — every COMPLEX member: developer-TASK-XXX, reviewers,
+        // merger). Without 'in_process_teammate', COMPLEX runs only show
+        // orchestrator+planner in the UI. Filtering both still excludes the
+        // Bash/MCP task_started noise that previously drifted the counter to
+        // double-digit values.
         // Match completion via task_id — task_notification reuses the started
         // event's task_id.
         if (event.type === 'system') {
-          if (event.subtype === 'task_started' && event.task_type === 'local_agent' && event.task_id) {
+          const isAgentTaskType =
+            event.task_type === 'local_agent' || event.task_type === 'in_process_teammate';
+          if (event.subtype === 'task_started' && isAgentTaskType && event.task_id) {
             runtime.stats.activeAgentIds.add(event.task_id);
             runtime.stats.activeAgents = runtime.stats.activeAgentIds.size;
             sendStats(runtime);

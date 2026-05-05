@@ -40,7 +40,7 @@ function resetCrmSource() {
     // git checkout reverts src/ — but App.tsx in git is the Supabase-defaulted version,
     // so we re-apply the mode-specific variant after checkout.
     execSync(
-      'docker exec -u developer atomic-crm-demo sh -c "' +
+      `docker exec -u developer ${CONTAINER} sh -c "` +
         'cd /app && git checkout -- src/ && ' +
         'if [ \\"${MODE:-demo}\\" = \\"demo\\" ]; then ' +
         '  cp /app-variants/App.fakerest.tsx src/App.tsx; ' +
@@ -161,7 +161,10 @@ async function runCase(caseDef) {
 
   const start = Date.now();
   let waitingForTurn = null;
-  const TURN_TIMEOUT_MS = caseDef.expect?.maxDurationMs || 300000;
+  const TURN_TIMEOUT_OVERRIDE = Number.parseInt(process.env.TURN_TIMEOUT_MS || '', 10);
+  const TURN_TIMEOUT_MS = Number.isFinite(TURN_TIMEOUT_OVERRIDE) && TURN_TIMEOUT_OVERRIDE > 0
+    ? TURN_TIMEOUT_OVERRIDE
+    : (caseDef.expect?.maxDurationMs || 300000);
 
   const waitForTurn = () => new Promise((resolve, reject) => {
     waitingForTurn = resolve;

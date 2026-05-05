@@ -38,10 +38,12 @@ fi
 
 # Only block for subagents whose prompt forbids validation commands.
 # The orchestrator (no agent_type) and planner/merger/project-manager are
-# allowed. Claude Code's PreToolUse hook matcher filters on tool_name only —
-# agent-type filtering must happen here in the script.
+# allowed. simple-developer is also blocked — SubagentStop hooks (wired in
+# settings.json with matcher "simple-developer") do the validation; the
+# agent should not run them inline. Claude Code's PreToolUse hook matcher
+# filters on tool_name only — agent-type filtering must happen here.
 case "$AGENT" in
-  developer|quality-reviewer|test-validator)
+  developer|quality-reviewer|test-validator|simple-developer)
     ;;
   *)
     exit 0
