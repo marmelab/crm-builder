@@ -36,3 +36,11 @@ V2 agentic team :
 * case 4 : 
 
 * enlever silent-mode-check
+
+* les scrollbar sont immonde:
+  * celle dans la liste des sessions
+  * celle du textInput pour écrire un message
+
+* on changeait le nom de la discussion au 2eme message. ça n'a plus lieux d'être
+
+* au hover d'un message je veux voir à quel heur il a été envoyé

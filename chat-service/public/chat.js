@@ -1,6 +1,7 @@
 import { el, formatTokens } from './lib/dom.js';
 import { renderStatsPanel, initStatsRefresh } from './lib/stats/index.js';
 import { initConnection, initDisplay, initHistory, openConfirmModal, initRecentPopup } from './lib/sessions/index.js';
+import { initRollback } from './lib/rollback/index.js';
 
 const widget   = document.getElementById('chat-widget');
 const toggle   = document.getElementById('chat-toggle');
@@ -107,6 +108,8 @@ const historyApi = initHistory({
   switchSession: switchSessionAndOpen,
   closeDiscussion,
 });
+
+initRollback({ getSessionId: () => display.getSessionId(), appendMessage });
 
 const connection = initConnection({
   handleWsMessage,
@@ -220,7 +223,7 @@ function handleWsMessage(event) {
     }
     timeline.forEach((it, i) => {
       if (it.kind === 'message') {
-        appendMessage(it.role, it.content, { queued: queuedIdx.has(i) });
+        appendMessage(it.role, it.content, { queued: queuedIdx.has(i), subtype: it.subtype });
         return;
       }
       // Debug event — buffer it so a later debug-toggle ON can replay it,
@@ -367,8 +370,9 @@ function appendMessage(role, content, seqOrOpts = ++seqCounter) {
   const opts = typeof seqOrOpts === 'object' && seqOrOpts !== null ? seqOrOpts : {};
   const seq = typeof seqOrOpts === 'number' ? seqOrOpts : (opts.seq ?? ++seqCounter);
   const queued = !!opts.queued;
+  const subtype = opts.subtype;
   const el = document.createElement('div');
-  el.className = `msg msg-${role}${queued ? ' msg-queued' : ''}`;
+  el.className = `msg msg-${role}${queued ? ' msg-queued' : ''}${subtype ? ' msg-' + subtype : ''}`;
   el.textContent = content;
   if (queued) {
     const badge = document.createElement('span');

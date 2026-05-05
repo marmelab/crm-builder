@@ -62,15 +62,18 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
 }
 #chat-title:hover { background: rgba(255,255,255,.06); }
 
-#chat-debug {
+#chat-debug,
+#chat-restore-btn {
   display: inline-flex; align-items: center; justify-content: center;
   background: none; border: none; color: #636366;
   cursor: pointer; padding: 4px;
   transition: color .15s, background .15s; border-radius: 6px;
 }
-#chat-debug:hover { color: #fff; }
+#chat-debug:hover,
+#chat-restore-btn:hover { color: #fff; }
 #chat-debug.debug-active { color: #3b82f6; background: rgba(59,130,246,.15); }
-#chat-debug svg { display: block; }
+#chat-debug svg,
+#chat-restore-btn svg { display: block; }
 
 /* Sessions panel — full-height sidebar pinned to the left edge of the
    viewport, always visible while the widget is open. */
@@ -270,6 +273,27 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
   align-self: flex-start;
   background: #2c2c2e;
   border-bottom-left-radius: 4px;
+}
+.msg-rollback {
+  align-self: stretch;
+  max-width: 100%;
+  background: rgba(245, 158, 11, .12);
+  border: 1px solid rgba(245, 158, 11, .35);
+  border-left: 3px solid #f59e0b;
+  border-radius: 8px;
+  color: #fcd34d;
+  font-size: 13px;
+  padding: 10px 13px;
+}
+.msg-rollback::before {
+  content: "↺ Rollback";
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: #f59e0b;
+  margin-bottom: 4px;
 }
 
 /* Mode choice buttons */
