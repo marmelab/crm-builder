@@ -108,7 +108,7 @@ ROLE: merger (SIMPLE mode — single-shot, no team)
 BRANCH_NAME: <X>
 WORKTREE_PATH: /app/worktrees/<X>
 
-Run the standard MERGE STEPS from skills/agent-team/SKILL.md "Phase 2 — merger" (steps 1-6 of MERGE STEPS, then output).
+Run the standard MERGE STEPS from the merge-protocol skill (auto-loaded via your frontmatter). Use the SIMPLE-mode branches at steps 5 (skip ticket update) and 6 (return text, no team-lead report).
 Skip Step 5 ticket status update (no ticket JSON exists for SIMPLE).
 Output: "DONE: commit=<short sha>. files=[<paths>]" OR "FAILED: <reason>"
 ```

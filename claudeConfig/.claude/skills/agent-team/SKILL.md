@@ -209,6 +209,11 @@ DO NOT:
 
 ### merger (shared singleton)
 
+The MERGE STEPS themselves live in the `merge-protocol` skill, which is
+auto-loaded via the merger agent's frontmatter. The dispatch prompt only
+needs to wire up the team flow — message routing, looping, shutdown — not
+re-spell the merge procedure.
+
 ```
 ROLE: merger
 NAME: merger   (no suffix — single shared merger for the whole wave)
@@ -218,70 +223,29 @@ TEAM_LEAD: team-lead
 
 INITIAL ACTION ON DISPATCH:
 **Stop immediately. Do NOT call any tool — including Skill. Idle until you
-receive your first SendMessage from a `developer-TASK-XXX` (NOT from team-lead —
-team-lead never SendMessages you to start work; the developer notifies you
-when their ticket is ready).** This prompt is self-contained; do NOT load
-the agent-team skill — it's for the team-lead, not you.
+receive your first SendMessage from a `developer-TASK-XXX`.** Your spawn
+context already has the merge-protocol skill loaded; do NOT call
+`Skill({skill: "agent-team"})` — it's for the team-lead, not you.
 
 WORKFLOW (loop until shutdown_request):
-You receive SendMessages from any developer-TASK-XXX. Each MUST start with "ready: TASK-XXX, branch=<branch>". Process serially (git lock makes it serial anyway).
+Each incoming message from a developer-TASK-XXX MUST start with
+"ready: TASK-XXX, branch=<branch>". Process them serially (git lock makes it
+serial anyway).
 
 For each incoming message:
 1. Parse from: → derive TASK_ID (e.g. from="developer-TASK-006" → "TASK-006").
-2. Parse "branch=<branch>" (fallback: read ${TICKETS_DIR}/TASK-XXX.json, pick branch_name).
+2. Parse "branch=<branch>" (fallback: read ${TICKETS_DIR}/TASK-XXX.json,
+   pick branch_name).
 3. WORKTREE_PATH = /app/worktrees/TASK-XXX.
-4. Run MERGE STEPS below.
-5. Idle and wait for next message — do NOT stop after one merge.
+4. Run the MERGE STEPS from the merge-protocol skill (already in your
+   context). Use the COMPLEX-mode branches at steps 5 (update ticket) and
+   6 (SendMessage report to team-lead).
+5. Idle for the next message — do NOT stop after one merge.
 6. On SendMessage(shutdown_request): reply shutdown_approved and stop.
 
-If unexpected sender or malformed message: SendMessage(team-lead, "merger received unexpected from <from>: <quote>") and idle.
-
-MERGE STEPS (authoritative — applies to both COMPLEX and SIMPLE-mode mergers):
-
-1. Verify worktree clean:
-   cd <WORKTREE_PATH> && git status --porcelain
-   Non-empty → developer left uncommitted changes. Report failed, do not merge.
-
-2. Return to base + reset stale debris in /app (mandatory, idempotent):
-   cd /app && BASE=$(git symbolic-ref --short HEAD)
-   git pull --ff-only 2>/dev/null || true
-   git reset --hard HEAD && /entrypoint-helpers/apply-app-variant.sh
-   - reset discards stale tracked-file changes (debris from previous runs).
-   - apply-app-variant re-copies App.fakerest.tsx (demo) or App.supabase.tsx (full) over src/App.tsx — without it the reset reverts App.tsx to the upstream stub and the dev server breaks.
-   - Untracked files (docs/project-context.json, ticket JSONs in ${TICKETS_DIR}) survive — they belong to other tickets.
-
-3. Merge:
-   git merge --no-ff <branch_name> -m "<type>(<TASK_ID>): <ticket title>"
-   <type> matches the ticket's type field (feat/fix/chore).
-   On conflict (CONFLICT in output): git merge --abort, report failed with conflicting files. Do NOT resolve — that's developer's job.
-
-4. Cleanup:
-   git worktree remove <WORKTREE_PATH> && git branch -d <branch_name>
-   On worktree-remove failure (leftover files): git worktree remove --force <WORKTREE_PATH>.
-
-5. Update ticket status (COMPLEX mode only — TASK_ID starts with "TASK-"):
-   Use the Edit tool, NOT shell (cat | jq > tmp && mv is blocked by block-bash-file-write):
-     Edit(
-       file_path: "${TICKETS_DIR}/<TASK_ID>.json",
-       old_string: '"status": "pending"',
-       new_string: '"status": "merged"'
-     )
-   If status was "in_progress", substitute. Verify with Read. Skip this step if TASK_ID does not start with "TASK-" (e.g. SIMPLE-mode slug).
-
-6. Report:
-   SendMessage(team-lead, "merged TASK-XXX, commit=<short sha>")   (COMPLEX)
-   OR return "DONE: commit=<short sha>. files=[...]"               (SIMPLE — no team_lead)
-
-7. On any failure of steps 1-4: report "TASK-XXX merge failed: <reason>" (COMPLEX) or "FAILED: <reason>" (SIMPLE), idle for next message (COMPLEX) or return (SIMPLE).
-
-NEVER:
-- `git add` / `git commit` / `git stash` / `git clean -fd` / `git checkout -- <file>`.
-- `git push`, `gh` commands.
-- `--no-verify`, `--force`, `-f` on git.
-- Force-merge on conflict — abort and report failed.
-- Spawn agents, TeamCreate, TeamDelete.
-- Edit any file in /app or any worktree (only the Step 5 ticket JSON edit is allowed).
-- Stop after one merge in COMPLEX (loop until shutdown_request).
+If unexpected sender or malformed message:
+SendMessage(team-lead, "merger received unexpected from <from>: <quote>")
+and idle.
 ```
 
 ---

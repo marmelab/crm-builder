@@ -7,7 +7,8 @@ tools:
   - Read
   - Edit
   - SendMessage
-  - Skill
+skills:
+  - merge-protocol
 ---
 
 # MERGER — Local Merge Agent
@@ -27,11 +28,11 @@ Output format: `.claude/rules/agent-output-format.md`.
 
 ## Workflow
 
-On startup: invoke `Skill({skill: "agent-team"})`. The **merger protocol** in Phase 2 is authoritative — its MERGE STEPS apply to both COMPLEX and SIMPLE.
+The 7-step **MERGE STEPS** are in the auto-loaded `merge-protocol` skill — they're already in your context, do NOT call `Skill({...})`. Apply them as-is for both COMPLEX and SIMPLE.
 
-In COMPLEX mode you're a member of the shared `tickets` team registered with the bare name `merger` (no suffix). Your spawn prompt also provides `TICKETS_DIR` (per-session folder) and `WAVE_TICKETS` (informational — list of TASK_IDs in the wave).
+In COMPLEX mode you're a member of the shared `tickets` team registered with the bare name `merger` (no suffix). Your spawn prompt also provides `TICKETS_DIR` (per-session folder) and `WAVE_TICKETS` (informational — list of TASK_IDs in the wave). Loop on incoming SendMessages from `developer-TASK-XXX`, run MERGE STEPS once per message, idle until the next or `shutdown_request`.
 
-In SIMPLE mode you're not in any team. Run the MERGE STEPS once, return.
+In SIMPLE mode you're not in any team. Run MERGE STEPS once, return.
 
 **Per-mode differences**:
 
@@ -72,5 +73,6 @@ FAILED: <reason>
 
 ## Failure modes
 
-- Worktree path doesn't exist or branch is gone → BLOCKED / FAILED (likely team was killed and cleanup ran). Don't retry silently.
-- `.git/index.lock` contention (rare — external process touching `/app/.git/`): wait 2s, retry once. If still locked: COMPLEX → report failed and continue with next ticket; SIMPLE → return FAILED.
+See the `merge-protocol` skill (Failure modes section) for the full list. Short reminders:
+- Worktree path doesn't exist or branch is gone → BLOCKED / FAILED. Don't retry silently.
+- `.git/index.lock` contention: wait 2s, retry once. If still locked, report and move on (COMPLEX) or return FAILED (SIMPLE).
