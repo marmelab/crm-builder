@@ -1,6 +1,7 @@
 import { el, formatTokens } from './lib/dom.js';
 import { renderStatsPanel, initStatsRefresh } from './lib/stats/index.js';
 import { initConnection, initDisplay, initHistory, openConfirmModal, initRecentPopup } from './lib/sessions/index.js';
+import { renderInlineMarkdown } from './lib/markdown.js';
 
 const widget   = document.getElementById('chat-widget');
 const toggle   = document.getElementById('chat-toggle');
@@ -369,7 +370,13 @@ function appendMessage(role, content, seqOrOpts = ++seqCounter) {
   const queued = !!opts.queued;
   const el = document.createElement('div');
   el.className = `msg msg-${role}${queued ? ' msg-queued' : ''}`;
-  el.textContent = content;
+  // Assistant messages may include markdown; render bold/italic/code.
+  // User messages stay plain text — paranoia about pasted content.
+  if (role === 'assistant') {
+    el.innerHTML = renderInlineMarkdown(content);
+  } else {
+    el.textContent = content;
+  }
   if (queued) {
     const badge = document.createElement('span');
     badge.className = 'queued-badge';
