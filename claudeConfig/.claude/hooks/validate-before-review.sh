@@ -198,6 +198,13 @@ if [ -n "$CACHE_WORKTREES" ]; then
   done
   if [ "$ALL_CACHED" = "1" ]; then
     echo "[$(date -Iseconds)] validate-before-review CACHE HIT to=$TO (worktree at last-validated SHA)" >> "$LOG" 2>/dev/null || true
+    if [ -n "$TASK_ID" ]; then
+      case "$TO" in
+        quality-reviewer-*) touch "${FLAG_QR:-/tmp/notified-qr-$TASK_ID}" 2>/dev/null || true ;;
+        test-validator-*)   touch "${FLAG_TV:-/tmp/notified-tv-$TASK_ID}" 2>/dev/null || true ;;
+        merger|merger-*)    touch "${FLAG_MERGER:-/tmp/notified-merger-$TASK_ID}" 2>/dev/null || true ;;
+      esac
+    fi
     exit 0
   fi
 fi
