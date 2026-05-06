@@ -42,8 +42,10 @@ fi
 #
 # Detection order:
 #  1. CLAUDE_AGENT_NAME env var matches "developer-*" (preferred when set).
-#  2. agent_type field in hook input JSON equals "developer" — fallback for
-#     in-process teammates where CLAUDE_AGENT_NAME may not be propagated.
+#  2. agent_type field in hook input JSON: for in_process_teammates, the runtime
+#     sets agent_type to the FULL agent name including the TASK suffix, e.g.
+#     "developer-TASK-001". Match with "developer|developer-*" to cover both
+#     the bare subagent_type and the suffixed in_process_teammate form.
 CALLER_IS_DEVELOPER=0
 case "${CLAUDE_AGENT_NAME:-}" in
   developer-*) CALLER_IS_DEVELOPER=1 ;;
@@ -63,7 +65,7 @@ try {
 echo "[$(date -Iseconds)] validate-before-review INVOKE agent_env='${CLAUDE_AGENT_NAME:-}' agent_type='$_AGENT_TYPE' to='$_RECV'" >> "$LOG" 2>/dev/null || true
 if [ "$CALLER_IS_DEVELOPER" = "0" ]; then
   case "$_AGENT_TYPE" in
-    developer) CALLER_IS_DEVELOPER=1 ;;
+    developer|developer-*) CALLER_IS_DEVELOPER=1 ;;
   esac
 fi
 if [ "$CALLER_IS_DEVELOPER" = "0" ]; then
