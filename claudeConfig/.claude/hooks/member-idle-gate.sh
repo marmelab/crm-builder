@@ -6,6 +6,14 @@
 # this gate they read an empty worktree and send unsolicited "nothing to review"
 # messages, confusing the developer and breaking the review loop.
 #
+# Why NOT check the team inbox file:
+# Reviewers are dispatched with their task context already in the spawn prompt
+# (a <teammate-message> from team-lead). The inbox therefore contains 1 message
+# immediately at spawn time — an inbox-based COUNT >= 1 check would always pass
+# and never block. The /tmp flag approach is the correct signal: it is only
+# written by validate-before-review.sh when the developer explicitly validates
+# and sends a "ready for review" message, which is a strictly later event.
+#
 # Mechanism: check for the flag file that validate-before-review.sh writes when
 # the developer successfully validates and then sends a message to this reviewer:
 #   /tmp/notified-qr-TASK-XXX  (quality-reviewer-TASK-XXX)
