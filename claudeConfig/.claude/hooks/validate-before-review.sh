@@ -230,15 +230,22 @@ case "${VALIDATE_DRY_RUN:-}" in
 esac
 
 # Auto-apply prettier before running the validation chain.
-# Commits any formatting fixes automatically so the chain passes without
-# requiring the developer to add prettier-ignore or retry manually.
+# If prettier --write fails (e.g. syntax error in a source file), exit early
+# with the actual error so the developer knows what to fix instead of seeing a
+# cryptic "prettier check failed" later in the chain.
 if [ -n "${VALIDATE_WORKTREE:-}" ] && [ -d "$VALIDATE_WORKTREE" ]; then
-  if (cd "$VALIDATE_WORKTREE" && npx prettier --write 'src/**' >/dev/null 2>&1); then
-    if ! git -C "$VALIDATE_WORKTREE" diff --quiet 2>/dev/null; then
-      git -C "$VALIDATE_WORKTREE" add -A 2>/dev/null || true
-      git -C "$VALIDATE_WORKTREE" commit -m "style($TASK_ID): auto-apply prettier" 2>/dev/null || true
-      echo "[$(date -Iseconds)] validate-before-review auto-prettier wt=$VALIDATE_WORKTREE committed" >> "$LOG" 2>/dev/null || true
-    fi
+  PRETTIER_OUT=$( (cd "$VALIDATE_WORKTREE" && npx prettier --write 'src/**') 2>&1 )
+  PRETTIER_EXIT=$?
+  if [ $PRETTIER_EXIT -ne 0 ]; then
+    echo "[$(date -Iseconds)] validate-before-review auto-prettier FAILED exit=$PRETTIER_EXIT wt=$VALIDATE_WORKTREE" >> "$LOG" 2>/dev/null || true
+    echo "Prettier could not format one or more files (likely a syntax error). Fix the issue and commit before sending to reviewer." >&2
+    printf '%s\n' "$PRETTIER_OUT" >&2
+    exit 2
+  fi
+  if ! git -C "$VALIDATE_WORKTREE" diff --quiet 2>/dev/null; then
+    git -C "$VALIDATE_WORKTREE" add -A 2>/dev/null || true
+    git -C "$VALIDATE_WORKTREE" commit -m "style($TASK_ID): auto-apply prettier" 2>/dev/null || true
+    echo "[$(date -Iseconds)] validate-before-review auto-prettier wt=$VALIDATE_WORKTREE committed" >> "$LOG" 2>/dev/null || true
   fi
 fi
 
