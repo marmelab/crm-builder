@@ -99,7 +99,7 @@ Bash writes bypass PostToolUse hooks (prettier, typecheck) and leave the codebas
 
 ## Validation commands — DO NOT RUN
 
-See `.claude/rules/validation-commands.md` for the full list and rationale. Short version: typecheck / prettier / unit / e2e / lint / build are blocked by `block-bash-validation`. After implementation + commit: stop and report DONE. SubagentStop hooks run validation, inject failures via stderr; fix, commit, stop again.
+See `.claude/rules/validation-commands.md` for the full list and rationale. Short version: typecheck / prettier / unit / e2e / lint / build are blocked by `block-bash-validation`. After implementation + commit: **SendMessage to your reviewers** (developer-protocol step 3). The `validate-before-review` PreToolUse hook runs validation automatically when you attempt that SendMessage — if validation fails the message is blocked and you fix + commit + retry. Do NOT stop here and wait for SubagentStop hooks; those are for simple-developer only.
 
 ## Bash — what IS allowed
 
