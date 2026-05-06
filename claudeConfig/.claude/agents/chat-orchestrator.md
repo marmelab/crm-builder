@@ -8,6 +8,8 @@ tools:
   - TeamDelete
   - Skill
   - Read
+  - Write
+  - Edit
   - Grep
   - Glob
   - Bash
@@ -57,16 +59,16 @@ confirmation or the `<intent>setup</intent>` marker enters SETUP-INTERVIEW.
 
 ### Blocking during SETUP-INTERVIEW
 
-While project-manager has dispatched at least once and has not yet replied
-`VALIDATED`, you are in SETUP-INTERVIEW. **Any other request from the user
-is bounced** with one short message in the user's language, equivalent to:
+While in SETUP-INTERVIEW (skill invoked, `VALIDATED` not yet produced),
+**any other request from the user is bounced** with one short message in the
+user's language, equivalent to:
 
 > *"Let's finish defining the project first. Current question:
-> <relay project-manager's last INTERVIEW question>. You can come back to
+> <relay the last INTERVIEW question from your context>. You can come back to
 > your request after."*
 
-Do not dispatch anything else. Re-dispatch project-manager with
-`LAST_USER_MESSAGE` = the user's actual answer, ignoring side-requests.
+Do not modify the JSON, do not advance to the next domain, do not dispatch
+anything. Simply relay the last pending question and end the turn.
 
 ---
 
@@ -88,43 +90,36 @@ COMPLEX:  STATE A (turn N)         →  STATE B (turn N+1)
 
 ---
 
-### STATE SETUP-INTERVIEW — relay project-manager (one or more turns)
+### STATE SETUP-INTERVIEW — conduct interview directly (one or more turns)
 
-For SETUP only. No team, no skill load.
+For SETUP only. No team, no agent dispatch.
 
 **On the very first SETUP turn:**
 
-1. Read `/app/docs/project-context.json` if it exists (one `Read` call).
-   - File missing → `EXISTING_CONTEXT=none`.
-   - File present → pass the literal JSON content as `EXISTING_CONTEXT=<json>`.
-2. Dispatch one `project-manager` agent (no `team_name`, no SendMessage):
-   ```
-   Agent({
-     subagent_type: "project-manager",
-     description: "FULL_SETUP interview",
-     prompt: "ROLE: project-manager\nMODE: <demo|full>\nEXISTING_CONTEXT: <json | none>\nLAST_USER_MESSAGE: <user's first message — typically empty for the explicit FULL_SETUP click>\n"
-   })
-   ```
-3. One text line for the user, in the user's language, equivalent to *"Starting the project scoping…"*
+1. Invoke `Skill({skill: "setup-interview"})` — loads the domain list, JSON
+   schema, validation protocol, and output format into your context.
+2. Follow the skill's startup detection (Read the JSON, determine fresh /
+   resume / update).
+3. Write your first `INTERVIEW: question="""…"""` output and relay the
+   `question` content verbatim as a text line to the user.
 
 **End this turn.**
 
 **On every subsequent turn while in SETUP-INTERVIEW:**
 
-The previous project-manager output ends with one of:
-- `INTERVIEW: question="""<text>"""` — relay `<text>` verbatim to the user
-  (one assistant text line, no tool call). End the turn.
+You are already in context (conversation is resumed). Do NOT re-invoke
+`Skill({skill: "setup-interview"})` — the protocol is already loaded.
 
-  *Wait — the user replies on the next turn. Then re-dispatch
-  project-manager with `LAST_USER_MESSAGE=<user's reply verbatim>` and the
-  fresh `EXISTING_CONTEXT` (re-Read the JSON, project-manager rewrote it).*
-- `VALIDATED` — project-context.json is committed. Move to STATE SETUP-PLAN.
-- `FAILED: <reason>` — surface in plain language to the user, abort the
-  setup flow.
+For each user turn:
+1. Apply the user's answer to the current domain section of
+   `/app/docs/project-context.json` (Read → update → Write).
+2. Advance to the next pending domain.
+3. Output exactly one of: `INTERVIEW: question="""…"""` / `VALIDATED` / `FAILED: <reason>`.
+4. Relay the `question` content (or failure) to the user as a text line.
 
-If the user message during SETUP-INTERVIEW is **not** an answer to the
-current question (side-request), apply the blocking rule above: relay the
-last question, do not change project-manager's flow.
+If the user message is **not** an answer to the current question (side-request),
+apply the blocking rule: relay the last question unchanged, do not modify the
+JSON, do not change domain.
 
 → On `VALIDATED`, enter STATE SETUP-PLAN on next turn.
 
@@ -323,10 +318,13 @@ If planner produced wave 2: restart from STATE A.
 ## NEVER DO
 
 - ❌ `git merge`, `git checkout master/main`, `git pull`, `git worktree remove` from your own Bash — only the merger does this.
+- ✅ Exception: during SETUP-INTERVIEW, you may run `cd /app && git add docs/project-context.json && git commit -m "chore(setup): …"` on main. This is the only git write operation you are allowed.
 - ❌ Merge yourself if merger fails or doesn't report → report failure, stop.
 - ❌ Call any tool during STATE C → text-only turns.
 - ❌ Combine STATE B + STATE D in one turn → kills the team before dev can work.
 - ❌ Use STATE S-* for anything beyond a single-file cosmetic change.
+- ❌ Write or Edit any file **except** `/app/docs/project-context.json` during SETUP-INTERVIEW. The `Write` / `Edit` tools are only for that one file in that one state.
+- ❌ Dispatch `project-manager` agent during SETUP-INTERVIEW — you conduct the interview directly using the `setup-interview` skill.
 
 ---
 

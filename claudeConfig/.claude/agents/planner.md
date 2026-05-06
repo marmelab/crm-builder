@@ -42,6 +42,18 @@ Run 1-3 Grep/Glob calls per probable area. Examples:
 
 Collect 2-6 paths per ticket. Paths only, do NOT read contents.
 
+## Step 2.5 — Visual customization detection
+
+Before decomposing, check if any part of the request involves:
+- Colors, theme, brand identity (primary color, accent, background)
+- Dark / light mode
+- Component styling (border radius, button style, card appearance)
+- Layout or information density preferences
+- Shadows, fonts, spacing
+
+If yes, mark those tickets as visual (see ticket format below). The developer
+will load the `shadcn-customization` skill to handle them correctly.
+
 ## Step 3 — Decompose into tickets
 
 Rules:
@@ -74,11 +86,12 @@ Rules:
   "dependencies": ["TASK-000"],
   "parallel_safe": true,
   "branch_name": "feature/company-importance-type",
+  "visual_customization": false,
   "status": "pending"
 }
 ```
 
-### Field semantics (critical for orchestrator)
+### Field semantics (critical for orchestrator and developer)
 
 **`dependencies`**: ticket IDs that MUST be merged before this ticket starts. Tickets in the same wave (no dep between them) run in parallel in separate worktrees.
 
@@ -92,6 +105,8 @@ Rules:
 Normal feature tickets (type / component / config prop) → `parallel_safe: true`.
 
 **`branch_name`**: filesystem-safe, `feature/<short-kebab>` or `fix/<short-kebab>`. Used to create the worktree.
+
+**`visual_customization`**: set `true` when the ticket touches colors, theme, component styling, dark/light mode, or layout preferences. The developer loads `Skill({skill: "shadcn-customization"})` as its first action on such tickets.
 
 ### Dependency rules
 
@@ -139,6 +154,22 @@ When `SETUP_MODE=true`:
 - Use sensible `dependencies` — extend-tickets often depend on the base
   entity already shipping with Atomic CRM (no dep needed), create-tickets'
   UI tickets depend on their migration ticket.
+- **Cleanup tickets** — read the `cleanup` section of `project-context.json`.
+  For each element listed there, produce one removal ticket. Cleanup tickets
+  run in Wave 1 (no dependencies) and are `parallel_safe: true` unless two
+  of them touch the same shared file (e.g. `App.tsx`, router, global types).
+
+  What a cleanup ticket must do:
+  - Remove the entity's routes, list/show/edit components, and navigation entry.
+  - Remove its TypeScript types and fake-data generators (demo mode) or drop
+    the Supabase table (full mode — separate migration ticket).
+  - Remove any reference to the entity in other components (sidebar, dashboards,
+    relation selectors).
+  - For feature removals (pipeline, analytics, csv_import_export): remove the
+    corresponding UI sections, menu items, and related hooks/utils.
+
+  Title convention: `"Remove unused <element> from default CRM"`.
+  Type: `"fix"`.
 - Commit project-context.json on main as described in Step 4.
 
 ## Step 5 — Order + summarize
