@@ -23,10 +23,9 @@ any other path.
 
 ### Existing-config summary template (validated == true)
 
-Output one `INTERVIEW:` block, translated into the user's language at runtime:
+Output a plain-text message to the user (translate into the user's language at runtime):
 
 ```
-INTERVIEW: question="""
 Here's what I already know about your project:
 - Industry: <industry>
 - Team size: <team_size>
@@ -39,7 +38,6 @@ Here's what I already know about your project:
 Would you like to:
 (a) update part of this config (I'll go domain by domain),
 (b) start from scratch (I'll wipe everything and redo the full interview)?
-"""
 ```
 
 - Update intent → **UPDATE flow**: for each domain, ask "Current value: `<…>`. Keep as-is, or change it?"
@@ -56,7 +54,10 @@ Each user turn during SETUP-INTERVIEW:
 3. Update `interview_progress.domain_N` to `"done"`, keep `validated: false`.
 4. `Write("/app/docs/project-context.json", <full updated JSON>)`.
 5. Move to the next pending domain.
-6. Output **exactly one** of: `INTERVIEW: question="""…"""` / `VALIDATED` / `FAILED: <reason>`.
+6. Output **exactly one** of:
+   - The next question as a **plain text message** to the user (no prefix, no wrapper).
+   - `VALIDATED` — when final confirmation is received (see Final validation).
+   - `FAILED: <reason>` — unrecoverable error.
 
 Summarize what you understood after each domain and wait for confirmation before
 moving to the next. Never ask multiple domains in one turn.
@@ -124,22 +125,21 @@ Before final validation, derive what should be removed to keep the CRM clean.
 **Steps:**
 
 1. Compare domain answers against the table above. Derive a candidate removal list.
-2. Present it to the user — one `INTERVIEW:` block, translated to their language.
+2. Present it to the user as a **plain text message**, translated to their language.
 
    **Language rule (strict):** describe only what the user *sees* in the
    interface — sections, screens, buttons. Never mention entities, tables,
    components, types, or any technical term. The user interprets the
    business meaning; you handle the technical implications internally.
 
+   Example (translate at runtime):
    ```
-   INTERVIEW: question="""
    Based on what you told me, it looks like you won't need these sections
    in your CRM — I can remove them to keep things clean:
    - <plain-language feature name>: <one-sentence business reason>
    - …
 
    Does that sound right? Anything you'd like to keep?
-   """
    ```
 
    Plain-language names to use (never the internal names):
@@ -186,7 +186,7 @@ When all 8 applicable domains are `"done"`:
 
 1. Read the JSON. Produce a compact plain-language summary in the user's
    language.
-2. Output one `INTERVIEW:` block asking for confirmation (translate at runtime):
+2. Output a plain-text message asking for confirmation (translate at runtime):
    > *"<summary>. All good? I'll lock the project spec. (yes / no)"*
 3. On any affirmative (yes / ok / valid / go / looks good, in any language):
    a. Set `validated: true`. `Write` the file.
@@ -203,7 +203,7 @@ Every orchestrator turn during SETUP-INTERVIEW ends with **exactly one** of:
 
 | Output | Meaning |
 |---|---|
-| `INTERVIEW: question="""<text>"""` | Relay `<text>` verbatim to the user; re-enter this skill on the next user turn. |
+| Plain text question | Ask the user the next domain question directly; re-enter this skill on the next user turn. No wrapper, no prefix. |
 | `VALIDATED` | JSON committed. Move to STATE SETUP-PLAN. |
 | `FAILED: <reason>` | Unrecoverable error; surface to user, abort setup. |
 

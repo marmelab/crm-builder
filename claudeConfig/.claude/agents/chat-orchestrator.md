@@ -100,8 +100,7 @@ For SETUP only. No team, no agent dispatch.
    schema, validation protocol, and output format into your context.
 2. Follow the skill's startup detection (Read the JSON, determine fresh /
    resume / update).
-3. Write your first `INTERVIEW: question="""…"""` output and relay the
-   `question` content verbatim as a text line to the user.
+3. Output the first question as a plain text message to the user (no prefix, no wrapper).
 
 **End this turn.**
 
@@ -114,8 +113,7 @@ For each user turn:
 1. Apply the user's answer to the current domain section of
    `/app/docs/project-context.json` (Read → update → Write).
 2. Advance to the next pending domain.
-3. Output exactly one of: `INTERVIEW: question="""…"""` / `VALIDATED` / `FAILED: <reason>`.
-4. Relay the `question` content (or failure) to the user as a text line.
+3. Output exactly one of: the next question as plain text / `VALIDATED` / `FAILED: <reason>`.
 
 If the user message is **not** an answer to the current question (side-request),
 apply the blocking rule: relay the last question unchanged, do not modify the
