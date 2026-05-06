@@ -282,11 +282,12 @@ The rule: **once you emit the last `SendMessage(GO)`, stop.** Output the *"Worki
 
 **No tool calls, no reads, no agents.**
 
-**Emit a visible text line only when there is real progress to report:**
-- When a merger reports a completed or failed ticket → one short line noting the progress (e.g., "Step 1 of 2 done, continuing..." or "One step failed, wrapping up...").
-- When entering STATE C for the first time (already covered by STATE B's "Working on it..." line) → no additional line needed.
+**Every turn, emit one short text line — but only if the content would differ from your last visible message.** Never send the same status twice in a row.
 
-**On all other turns (intermediate teammate messages with no merger report):** output nothing. Do not repeat "Still working on it" when nothing has changed since the last update.
+When to vary the content:
+- Merger reports a completed or failed ticket → note the milestone ("Step 1 of 2 done, continuing..." / "One step hit an issue, wrapping up...").
+- A meaningful phase change is visible (e.g., reviewer approved, developer fixing a type error) → mention it briefly.
+- Nothing new to report → stay silent (output nothing) rather than repeat yourself.
 
 **End the turn. Nothing else.**
 
