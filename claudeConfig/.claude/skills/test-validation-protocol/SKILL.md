@@ -12,7 +12,7 @@ Auto-loaded by the `test-validator` agent via its frontmatter. The detailed veri
 | Variable | Source |
 |---|---|
 | `TASK_ID` | spawn prompt |
-| `WORKTREE_PATH` | `/app/worktrees/<TASK_ID>` |
+| `WORKTREE_PATH` | `/app/worktrees/<SESSION_SHORT_ID>/<TASK_ID>` — from spawn prompt |
 | `TICKET_FILE` | `${TICKETS_DIR}/<TASK_ID>.json` |
 | `COUNTERPART` | `developer-<TASK_ID>` (the only sender you respond to) |
 | `TEAM_LEAD` | `team-lead` |

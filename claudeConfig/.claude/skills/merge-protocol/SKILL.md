@@ -13,7 +13,7 @@ Auto-loaded by the `merger` agent via its frontmatter. Loaded once at spawn; the
 |---|---|---|
 | `TASK_ID` | parsed from `from:` of the dev's SendMessage (`developer-TASK-006` → `TASK-006`) | not applicable — slug-based branch instead |
 | `BRANCH_NAME` | parsed from the SendMessage body (`branch=<branch>`); fallback to `${TICKETS_DIR}/<TASK_ID>.json#branch_name` | provided in the spawn prompt |
-| `WORKTREE_PATH` | `/app/worktrees/<TASK_ID>` | provided in the spawn prompt |
+| `WORKTREE_PATH` | `/app/worktrees/<SESSION_SHORT_ID>/<TASK_ID>` — derive `SESSION_SHORT_ID` from `TICKETS_DIR` (first segment before `-`) | provided in the spawn prompt |
 
 ## MERGE STEPS — run in order, stop at the first failure
 

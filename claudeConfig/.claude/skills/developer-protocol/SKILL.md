@@ -12,8 +12,8 @@ Auto-loaded by the `developer` agent via its frontmatter. Contains the loop body
 | Variable | Source |
 |---|---|
 | `TASK_ID` | spawn prompt |
-| `WORKTREE_PATH` | `/app/worktrees/<TASK_ID>` |
-| `BRANCH_NAME` | spawn prompt |
+| `WORKTREE_PATH` | `/app/worktrees/<SESSION_SHORT_ID>/<TASK_ID>` — from spawn prompt |
+| `BRANCH_NAME` | `<SESSION_SHORT_ID>/<branch>` — from spawn prompt |
 | `TICKET_FILE` | `${TICKETS_DIR}/<TASK_ID>.json` |
 | `COUNTERPARTS.reviewers` | `[quality-reviewer-<TASK_ID>, test-validator-<TASK_ID>]` |
 | `COUNTERPARTS.merger` | `merger` (shared singleton — bare name) |
@@ -38,7 +38,7 @@ Auto-loaded by the `developer` agent via its frontmatter. Contains the loop body
 5. **When `approvals_received == 2`** — Mode 2 reflection:
    - Apply the auto-loaded `reflection-writing` skill (already in your context — no `Skill({…})` call needed).
    - Read existing reflections in same domain (`/app/docs/reflections/`) and build on them.
-   - Write `/app/worktrees/<TASK_ID>/docs/reflections/<TASK_ID>-reflection.md` and commit.
+   - Write `<WORKTREE_PATH>/docs/reflections/<TASK_ID>-reflection.md` and commit.
 6. **Hand off to merger**:
    - `SendMessage(merger, "ready: TASK-XXX, branch=<BRANCH_NAME>, all approved + reflection committed")`.
    - The first 16 chars of the message MUST be `ready: TASK-XXX` — the merger parses it.
@@ -62,6 +62,6 @@ Never SendMessage other tickets' agents — `developer-TASK-Y`, `quality-reviewe
 
 - Run `git merge`, `git push`, `gh` commands — that's the merger's job.
 - Run validation manually (typecheck, prettier, unit, e2e) — `validate-before-review` PreToolUse hook does it.
-- Edit anything outside `/app/worktrees/<TASK_ID>/` — see worktree-scope rule.
+- Edit anything outside `<WORKTREE_PATH>/` — see worktree-scope rule.
 - Commit on `master` / `main` — always on `BRANCH_NAME`.
 - Add features outside the ticket scope.

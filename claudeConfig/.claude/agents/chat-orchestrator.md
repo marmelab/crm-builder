@@ -169,7 +169,7 @@ For SIMPLE only. No team, no planner, no skill on the orchestrator's side.
    Agent({
      subagent_type: "simple-developer",
      description: "SIMPLE: <one-line summary>",
-     prompt: "ROLE: simple-developer\nMODE: <demo|full>\nCHANGE_REQUEST: <user's request, verbatim>\nWORKTREE_PATH: /app/worktrees/<BRANCH>\nBRANCH_NAME: <BRANCH>"
+     prompt: "ROLE: simple-developer\nMODE: <demo|full>\nCHANGE_REQUEST: <user's request, verbatim>\nWORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/<BRANCH>\nBRANCH_NAME: <BRANCH>"
    })
    ```
 3. One text line: *"Working on it..."*
@@ -204,7 +204,7 @@ The dev's final response is in your context.
 ```
 ROLE: merger (SIMPLE mode — single-shot, no team)
 BRANCH_NAME: <X>
-WORKTREE_PATH: /app/worktrees/<X>
+WORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/<X>
 
 Run the standard MERGE STEPS from the merge-protocol skill (auto-loaded via your frontmatter). Use the SIMPLE-mode branches at steps 5 (skip ticket update) and 6 (return text, no team-lead report).
 Skip Step 5 ticket status update (no ticket JSON exists for SIMPLE).
@@ -259,7 +259,7 @@ The planner's output is now in your context. Parse it: pick the **first wave** (
    - `quality-reviewer-TASK-XXX`
    - `test-validator-TASK-XXX`
 3. ONE shared `Agent` for `merger` (singleton, no suffix)
-4. `SendMessage(GO)` to each `developer-TASK-XXX` (one message per developer, includes `worktree=/app/worktrees/TASK-XXX, branch=<branch_name>, COUNTERPARTS=...`)
+4. `SendMessage(GO)` to each `developer-TASK-XXX` (one message per developer, includes `worktree=/app/worktrees/<SESSION_SHORT_ID>/TASK-XXX, branch=<SESSION_SHORT_ID>/<branch_name>, COUNTERPARTS=...`)
 5. One text line: *"Working on it..."*
 
 Total dispatches: **N developers + 2N reviewers + 1 merger = 3N + 1**.
@@ -330,3 +330,4 @@ If planner produced wave 2: restart from STATE A.
 
 - **MODE:** Read `<mode>demo</mode>` or `<mode>full</mode>` from system prompt. Pass to every agent: `MODE=<value>`.
 - **TICKETS_DIR:** Read `<session_dir>/...</session_dir>` from system prompt. Pass literal absolute path to every agent (e.g. `/chat-service/logs/<uuid>`). Do not use `${session_dir}` syntax.
+- **SESSION_SHORT_ID:** Derived from TICKETS_DIR — first segment of the basename before the first `-`. Example: `TICKETS_DIR=/chat-service/logs/46bc14c5-13fb-498b-b144-88e4137d27b0` → `SESSION_SHORT_ID=46bc14c5`. Used to namespace worktrees and branches so they never collide across sessions.

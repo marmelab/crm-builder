@@ -105,10 +105,15 @@ try {
 fi
 
 if [ -n "$TASK_ID" ]; then
-  # The chained scripts re-check that this dir exists before using it; if the
-  # worktree has been removed (e.g. post-merge), they fall back to scanning
-  # all active worktrees, which will be a no-op when none remain.
-  export VALIDATE_WORKTREE="/app/worktrees/$TASK_ID"
+  # Worktrees are per-session: /app/worktrees/<session_short>/<TASK_ID>
+  # session_short = first 8 chars of the UUID in CHAT_SESSION_DIR.
+  SESSION_SHORT=$(basename "${CHAT_SESSION_DIR:-}" | cut -d'-' -f1)
+  if [ -n "$SESSION_SHORT" ]; then
+    export VALIDATE_WORKTREE="/app/worktrees/$SESSION_SHORT/$TASK_ID"
+  else
+    # Fallback: no session context (e.g. manual hook test) — scan all worktrees.
+    export VALIDATE_WORKTREE="/app/worktrees/$TASK_ID"
+  fi
 fi
 
 # (F) Enforce that the developer notifies BOTH reviewers before reaching the

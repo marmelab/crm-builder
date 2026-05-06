@@ -80,7 +80,7 @@ Agent({subagent_type: "merger", name: "merger", team_name: "tickets", model: "ha
 Then in a second message: one `SendMessage(GO, …)` per developer:
 
 ```
-SendMessage({to: "developer-TASK-001", message: "GO — Implement TASK-001 (worktree=/app/worktrees/TASK-001, branch=<branch>). Ticket spec at <path>. COUNTERPARTS: reviewers=[quality-reviewer-TASK-001, test-validator-TASK-001], merger=merger."})
+SendMessage({to: "developer-TASK-001", message: "GO — Implement TASK-001 (worktree=/app/worktrees/<SESSION_SHORT_ID>/TASK-001, branch=<SESSION_SHORT_ID>/<branch>). Ticket spec at <path>. COUNTERPARTS: reviewers=[quality-reviewer-TASK-001, test-validator-TASK-001], merger=merger."})
 ```
 
 After GO: lead enters **passive wait**. It receives N final SendMessages from `merger` (one per ticket: `merged TASK-XXX, commit=<sha>` or `TASK-XXX merge failed: <reason>`). When count == N → Phase 3.
@@ -96,7 +96,7 @@ Each member's per-cycle WORKFLOW is in its own auto-loaded protocol skill
 ROLE: developer
 TASK_ID: TASK-XXX
 TEAM: tickets
-WORKTREE: /app/worktrees/TASK-XXX
+WORKTREE: /app/worktrees/<SESSION_SHORT_ID>/TASK-XXX
 TICKET_FILE: <session_dir>/TASK-XXX.json
 COUNTERPARTS:
   - reviewers: [quality-reviewer-TASK-XXX, test-validator-TASK-XXX]
@@ -113,7 +113,7 @@ team-lead, not you.
 ROLE: <quality-reviewer | test-validator>
 TASK_ID: TASK-XXX
 TEAM: tickets
-WORKTREE: /app/worktrees/TASK-XXX
+WORKTREE: /app/worktrees/<SESSION_SHORT_ID>/TASK-XXX
 TICKET_FILE: <session_dir>/TASK-XXX.json
 COUNTERPART: developer-TASK-XXX
 TEAM_LEAD: team-lead
@@ -143,11 +143,14 @@ Each incoming message from a developer-TASK-XXX MUST start with
 "ready: TASK-XXX, branch=<branch>". Process them serially (git lock makes it
 serial anyway).
 
+SESSION_SHORT_ID = first segment of basename(TICKETS_DIR) before the first `-`
+(e.g. TICKETS_DIR=/chat-service/logs/46bc14c5-13fb-… → SESSION_SHORT_ID=46bc14c5).
+
 For each incoming message:
 1. Parse from: → derive TASK_ID (e.g. from="developer-TASK-006" → "TASK-006").
 2. Parse "branch=<branch>" (fallback: read ${TICKETS_DIR}/TASK-XXX.json,
    pick branch_name).
-3. WORKTREE_PATH = /app/worktrees/TASK-XXX.
+3. WORKTREE_PATH = /app/worktrees/<SESSION_SHORT_ID>/<TASK_ID>.
 4. Run the MERGE STEPS from the merge-protocol skill (already in your
    context). Use the COMPLEX-mode branches at steps 5 (update ticket) and
    6 (SendMessage report to team-lead).

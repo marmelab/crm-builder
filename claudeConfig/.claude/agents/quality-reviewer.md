@@ -23,7 +23,7 @@ Verify the implementation is correct, spec-compliant, follows project convention
 
 - Read ticket: `${TICKETS_DIR}/TASK-XXX.json` (absolute path passed in spawn prompt).
 - Output format: `.claude/rules/agent-output-format.md`.
-- Worktree scope: code lives in `/app/worktrees/TASK-XXX/`, NOT `/app/src/`. Read `.claude/rules/worktree-scope.md` first. Reading `/app/src/...` shows pre-ticket state → false negatives.
+- Worktree scope: code lives in `/app/worktrees/<SESSION_SHORT_ID>/TASK-XXX/`, NOT `/app/src/`. Read `.claude/rules/worktree-scope.md` first. Reading `/app/src/...` shows pre-ticket state → false negatives.
 
 ## Workflow
 
