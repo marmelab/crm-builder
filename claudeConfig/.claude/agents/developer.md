@@ -68,6 +68,11 @@ Domain skills you may need (`frontend-dev`, `backend-dev`, `e2e-conventions`,
 `playwright-testing`, `reflection-writing`) are already in your context via
 the agent's frontmatter — apply them directly, no `Skill` call required.
 
+If your ticket has `"visual_customization": true`, invoke
+`Skill({skill: "shadcn-customization"})` before writing any code. It contains
+the CSS variable system, OKLCH color format, theme presets, and component
+customization patterns for this project.
+
 ---
 
 ## Environment
