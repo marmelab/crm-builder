@@ -23,6 +23,10 @@ Verify the implementation is correct, spec-compliant, follows project convention
 - Read ticket: `${TICKETS_DIR}/TASK-XXX.json` (absolute path passed in spawn prompt).
 - Output format: `.claude/rules/agent-output-format.md`.
 - Worktree scope: code lives in `/app/worktrees/<SESSION_SHORT_ID>/TASK-XXX/`, NOT `/app/src/`. Read `.claude/rules/worktree-scope.md` first. Reading `/app/src/...` shows pre-ticket state → false negatives.
+- Available skills — invoke with `Skill({skill: "..."})` when the diff touches that domain:
+  - `Skill({skill: "frontend-dev"})` — React/UI patterns to check against
+  - `Skill({skill: "backend-dev"})` — Supabase/SQL patterns to check against
+  - `Skill({skill: "e2e-conventions"})` — e2e test conventions for this project
 
 ## Workflow
 
