@@ -37,6 +37,15 @@
     "hooks": {
         "PreToolUse": [
             {
+                "matcher": "Bash|Read|Grep|Glob|SendMessage",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "/home/developer/.claude/hooks/member-idle-gate.sh"
+                    }
+                ]
+            },
+            {
                 "matcher": "Bash",
                 "hooks": [
                     {

@@ -36,7 +36,9 @@ for WT in $WORKTREES; do
     continue
   fi
 
-  OUTPUT=$(npm run prettier 2>&1)
+  # Scope to src/ only — avoids false positives on docs/ files created by
+  # the planner (e.g. project-context.json) that the developer didn't touch.
+  OUTPUT=$(npx prettier --check 'src/**' 2>&1)
   EXIT_CODE=$?
   if [ $EXIT_CODE -ne 0 ]; then
     FAILED=1
