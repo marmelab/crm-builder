@@ -7,8 +7,7 @@ tools:
   - Read
   - Edit
   - SendMessage
-skills:
-  - merge-protocol
+skills: []
 ---
 
 # MERGER — Local Merge Agent
@@ -134,6 +133,6 @@ FAILED: <reason>
 
 ## Failure modes
 
-See the `merge-protocol` skill (Failure modes section) for the full list. Short reminders:
+Short reminders:
 - Worktree path doesn't exist or branch is gone → BLOCKED / FAILED. Don't retry silently.
 - `.git/index.lock` contention: wait 2s, retry once. If still locked, report and move on (COMPLEX) or return FAILED (SIMPLE).

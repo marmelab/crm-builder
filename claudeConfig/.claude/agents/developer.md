@@ -11,7 +11,6 @@ tools:
   - Grep
   - SendMessage
 skills:
-  - developer-protocol
   - frontend-dev
   - backend-dev
   - reflection-writing
@@ -125,7 +124,7 @@ Bash writes bypass PostToolUse hooks (prettier, typecheck) and leave the codebas
 
 ## Validation commands — DO NOT RUN
 
-See `.claude/rules/validation-commands.md` for the full list and rationale. Short version: typecheck / prettier / unit / e2e / lint / build are blocked by `block-bash-validation`. After implementation + commit: **SendMessage to your reviewers** (developer-protocol step 3). The `validate-before-review` PreToolUse hook runs validation automatically when you attempt that SendMessage — if validation fails the message is blocked and you fix + commit + retry. Do NOT stop here and wait for SubagentStop hooks; those are for simple-developer only.
+See `.claude/rules/validation-commands.md` for the full list and rationale. Short version: typecheck / prettier / unit / e2e / lint / build are blocked by `block-bash-validation`. After implementation + commit: **SendMessage to your reviewers** (WORKFLOW step 3 above). The `validate-before-review` PreToolUse hook runs validation automatically when you attempt that SendMessage — if validation fails the message is blocked and you fix + commit + retry. Do NOT stop here and wait for SubagentStop hooks; those are for simple-developer only.
 
 ## Bash — what IS allowed
 
@@ -199,6 +198,6 @@ Implement the plan. No deviations without flagging team-lead.
 
 ## Mode 2 — Reflection (after all reviews approved)
 
-The trigger and step list are in the auto-loaded `developer-protocol` skill
+The trigger and step list are in the WORKFLOW section above (step 5)
 (step 5 of its WORKFLOW). The reflection format itself is in the auto-loaded
 `reflection-writing` skill — also already in your context.

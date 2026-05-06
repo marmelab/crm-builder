@@ -9,7 +9,6 @@ tools:
   - Grep
   - SendMessage
 skills:
-  - test-validation-protocol
   - e2e-conventions
 ---
 

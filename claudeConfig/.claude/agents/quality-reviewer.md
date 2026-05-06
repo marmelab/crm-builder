@@ -9,7 +9,6 @@ tools:
   - Bash
   - SendMessage
 skills:
-  - quality-review-protocol
   - frontend-dev
   - backend-dev
   - e2e-conventions
