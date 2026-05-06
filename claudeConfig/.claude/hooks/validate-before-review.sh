@@ -264,7 +264,7 @@ esac
 # with the actual error so the developer knows what to fix instead of seeing a
 # cryptic "prettier check failed" later in the chain.
 if [ -n "${VALIDATE_WORKTREE:-}" ] && [ -d "$VALIDATE_WORKTREE" ]; then
-  PRETTIER_OUT=$( (cd "$VALIDATE_WORKTREE" && npx prettier --write 'src/**') 2>&1 )
+  PRETTIER_OUT=$( (cd "$VALIDATE_WORKTREE" && npx prettier --write 'src/**/*.{ts,tsx,js,jsx,css,json,html}') 2>&1 )
   PRETTIER_EXIT=$?
   if [ $PRETTIER_EXIT -ne 0 ]; then
     echo "[$(date -Iseconds)] validate-before-review auto-prettier FAILED exit=$PRETTIER_EXIT wt=$VALIDATE_WORKTREE" >> "$LOG" 2>/dev/null || true
