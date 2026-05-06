@@ -28,9 +28,30 @@ Verify the implementation works to the extent the local environment allows. Auth
 
 ## Workflow
 
-You are a member of the shared `tickets` team. Spawn prompt provides `TASK_ID` and `COUNTERPART` (your developer's suffixed name).
+Your spawn prompt provides `TASK_ID`, `WORKTREE_PATH`, `TICKET_FILE`, `COUNTERPART` (your developer's suffixed name), `TEAM_LEAD`.
 
-The per-cycle WORKFLOW (idle on dispatch → wait for dev's `"ready"` → presence + pertinence → verdict → loop) is in the auto-loaded `test-validation-protocol` skill — already in your context, do NOT call `Skill({skill: "agent-team"})`. The Step 1/2/3 detail and verdict matrix below are what you apply at each cycle.
+**On dispatch: do NOT call any tool. Idle silently until you receive a SendMessage from `COUNTERPART` saying "ready, please validate".**
+
+Rationale: the worktree doesn't exist yet at dispatch time. Any tool call before the developer's message is wasted work on an empty state.
+
+**Per-cycle loop (repeat until `shutdown_request`):**
+
+1. **Read** ticket spec at `TICKET_FILE` and the worktree (including new test files).
+2. **PRESENCE** — every new behavior in the diff has at least one test (unit or e2e).
+3. **PERTINENCE** — assertions actually cover the failure modes that matter (a test that always passes is not pertinent).
+4. **Apply** Steps 1 (integration), 2 (screenshots if reachable), 3 (e2e spec sanity) — see detail sections below.
+5. **Send verdict** to `COUNTERPART`:
+   - `Verdict: GREEN\n\nStep 1 — integration: …\nStep 2 — …\nStep 3 — …\nSummary: …`
+   - `Verdict: GREEN_WITH_SANDBOX_LIMITATIONS\n…` — Steps 1 + 3 clean, Step 2 skipped (auth/no display). Treated as approval.
+   - `Verdict: RED\n\nIssues:\n- …\nSummary: …` — Step 1 missing or any blocking issue.
+6. **Idle** for the next message. Do NOT stop — loop until `shutdown_request`.
+
+**Going idle without sending a verdict is a failure mode — the developer is waiting on you.**
+
+**DO NOT:**
+- Run tests (`npx vitest`, `npx playwright test`) — `validate-before-review` hook does this.
+- Run `npx playwright install --with-deps`.
+- SendMessage other reviewers / merger / other ticket agents.
 
 ---
 

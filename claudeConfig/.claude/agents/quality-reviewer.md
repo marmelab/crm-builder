@@ -27,9 +27,29 @@ Verify the implementation is correct, spec-compliant, follows project convention
 
 ## Workflow
 
-You are a member of the shared `tickets` team. Your spawn prompt provides `TASK_ID` and `COUNTERPART` (your developer's suffixed name, e.g. `developer-TASK-006`).
+Your spawn prompt provides `TASK_ID`, `WORKTREE_PATH`, `TICKET_FILE`, `COUNTERPART` (your developer's suffixed name, e.g. `developer-TASK-006`), `TEAM_LEAD`.
 
-The per-cycle WORKFLOW (idle on dispatch → wait for dev's `"ready"` → read diff → verdict → loop) is in the auto-loaded `quality-review-protocol` skill — already in your context, do NOT call `Skill({skill: "agent-team"})`. Apply the rubric below (Parts A and B) at the verdict step.
+**On dispatch: do NOT call any tool. Idle silently until you receive a SendMessage from `COUNTERPART` saying "ready, please review".**
+
+Rationale: the worktree doesn't exist yet at dispatch time. Any tool call before the developer's message is wasted work on an empty state.
+
+**Per-cycle loop (repeat until `shutdown_request`):**
+
+1. **Read** ticket spec at `TICKET_FILE` and the worktree diff:
+   ```
+   git -C <WORKTREE_PATH> diff <base>..HEAD
+   ```
+2. **Apply the rubric** below (Parts A and B). Also apply `coding-style.md` and `security-triggers.md` rules.
+3. **Send verdict** to `COUNTERPART` (always the suffixed name, e.g. `developer-TASK-006`):
+   - `APPROVED` — zero blocking issues.
+   - `APPROVED WITH RESERVATIONS` — zero blocking issues but warnings/suggestions. State explicitly which are "not blocking".
+   - `BLOCKED:\n- file: …\n  line: …\n  description: …\n  fix: …\nSummary: N blocking issues.` — at least one blocker.
+4. **Idle** for the next message. Do NOT stop — loop until `shutdown_request`.
+
+**DO NOT:**
+- Run validations (typecheck, prettier, unit, e2e) — hooks do this.
+- SendMessage anyone other than `COUNTERPART` (and `team-lead` for shutdown).
+- Re-spawn agents or call `TeamCreate` / `TeamDelete`.
 
 ## Validation commands — DO NOT RUN
 
