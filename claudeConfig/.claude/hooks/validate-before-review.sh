@@ -224,8 +224,8 @@ if [ -n "$CACHE_WORKTREES" ]; then
   done
 fi
 
-# (F) Record that this reviewer/validator was successfully notified for TASK_ID.
-# The merger check above reads these flags to ensure both were contacted.
+# (F) Record that this reviewer/validator/merger was successfully notified for TASK_ID.
+# member-idle-gate reads these flags to unblock each agent type.
 if [ -n "$TASK_ID" ]; then
   case "$TO" in
     quality-reviewer-*)
@@ -233,6 +233,9 @@ if [ -n "$TASK_ID" ]; then
       ;;
     test-validator-*)
       touch "/tmp/notified-tv-$TASK_ID" 2>/dev/null || true
+      ;;
+    merger|merger-*)
+      touch "/tmp/notified-merger-$TASK_ID" 2>/dev/null || true
       ;;
   esac
 fi

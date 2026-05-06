@@ -31,7 +31,7 @@ LOG="${CHAT_SESSION_DIR:-/chat-service/logs}/hooks.log"
 AGENT="${CLAUDE_AGENT_NAME:-}"
 
 case "$AGENT" in
-  quality-reviewer-*|test-validator-*)
+  quality-reviewer-*|test-validator-*|merger|merger-*)
     : # gate applies
     ;;
   *)
@@ -55,6 +55,9 @@ case "$AGENT" in
     ;;
   test-validator-*)
     FLAG="/tmp/notified-tv-$TASK_ID"
+    ;;
+  merger|merger-*)
+    FLAG="/tmp/notified-merger-$TASK_ID"
     ;;
   *)
     exit 0
