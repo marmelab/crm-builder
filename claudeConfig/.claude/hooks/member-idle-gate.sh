@@ -1,25 +1,29 @@
 #!/bin/bash
-# PreToolUse hook — prevents quality-reviewer-*, test-validator-*, and merger
-# from using any tool before receiving their first message from the developer.
+# PreToolUse hook — prevents quality-reviewer-* and test-validator-* from
+# using any tool before the developer has sent them a "ready for review" message.
 #
-# Rationale: reviewers and merger are dispatched simultaneously with the
-# developer. Without this gate:
-#   - Reviewers read the (empty) worktree and send unsolicited "branch is
-#     clean" messages, confusing the developer and breaking the review loop.
-#   - Merger sends an idle_notification to team-lead on spawn, which the
-#     orchestrator misreads as a completion signal and attempts a premature
-#     shutdown batch (caught by block-premature-shutdowns.sh, but noisy).
+# Rationale: reviewers are dispatched simultaneously with the developer. Without
+# this gate they read an empty worktree and send unsolicited "nothing to review"
+# messages, confusing the developer and breaking the review loop.
 #
-# Mechanism: check the agent's inbox inside the shared "tickets" team.
-# Empty / absent → block all tool calls. Non-empty → allow (developer has
-# sent at least one message, e.g. "ready, please review").
+# Mechanism: check for the flag file that validate-before-review.sh writes when
+# the developer successfully validates and then sends a message to this reviewer:
+#   /tmp/notified-qr-TASK-XXX  (quality-reviewer-TASK-XXX)
+#   /tmp/notified-tv-TASK-XXX  (test-validator-TASK-XXX)
+#
+# The merger is NOT gated here — it is already implicitly gated by
+# validate-before-review (developer must notify both reviewers before the hook
+# allows a SendMessage to merger). Blocking merger here would prevent it from
+# reporting back after a merge.
 
 set -u
+
+LOG="${CHAT_SESSION_DIR:-/chat-service/logs}/hooks.log"
 
 AGENT="${CLAUDE_AGENT_NAME:-}"
 
 case "$AGENT" in
-  quality-reviewer-*|test-validator-*|merger)
+  quality-reviewer-*|test-validator-*)
     : # gate applies
     ;;
   *)
@@ -27,32 +31,40 @@ case "$AGENT" in
     ;;
 esac
 
-INBOX="${HOME:-/home/developer}/.claude/teams/tickets/inboxes/$AGENT.json"
+# Extract the TASK-XXX id from the agent name (e.g. quality-reviewer-TASK-001 → TASK-001)
+TASK_ID=$(echo "$AGENT" | grep -oE 'TASK-[0-9]+' || echo "")
 
-if [ ! -f "$INBOX" ]; then
-  cat >&2 <<'EOF'
-[reviewer-idle-gate] Your inbox does not exist yet — the developer has not
-sent you a message. Do NOT call any tool (Read, Bash, Grep, SendMessage…).
+if [ -z "$TASK_ID" ]; then
+  # Unexpected name format — log and let through rather than hard-blocking.
+  mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
+  echo "[$(date -Iseconds)] member-idle-gate WARN agent=$AGENT no TASK_ID found, letting through" >> "$LOG" 2>/dev/null || true
+  exit 0
+fi
+
+case "$AGENT" in
+  quality-reviewer-*)
+    FLAG="/tmp/notified-qr-$TASK_ID"
+    ;;
+  test-validator-*)
+    FLAG="/tmp/notified-tv-$TASK_ID"
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+
+if [ ! -f "$FLAG" ]; then
+  mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
+  echo "[$(date -Iseconds)] member-idle-gate BLOCK agent=$AGENT task=$TASK_ID flag=$FLAG not found" >> "$LOG" 2>/dev/null || true
+  cat >&2 <<EOF
+[member-idle-gate] Your flag ($FLAG) does not exist yet.
+The developer has not sent you a "ready for review" message.
+Do NOT call any tool (Read, Bash, Grep, SendMessage…).
 Idle until you receive the developer's first SendMessage.
 EOF
   exit 2
 fi
 
-COUNT=$(node -e '
-try {
-  const fs = require("fs");
-  const msgs = JSON.parse(fs.readFileSync(process.argv[1], "utf8") || "[]");
-  process.stdout.write(String(Array.isArray(msgs) ? msgs.length : 0));
-} catch { process.stdout.write("0"); }
-' "$INBOX" 2>/dev/null || echo "0")
-
-if [ "$COUNT" -lt 1 ]; then
-  cat >&2 <<'EOF'
-[reviewer-idle-gate] Your inbox is empty — the developer has not sent a
-message yet. Do NOT call any tool (Read, Bash, Grep, SendMessage…).
-Idle until you receive the developer's first SendMessage.
-EOF
-  exit 2
-fi
-
+mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
+echo "[$(date -Iseconds)] member-idle-gate PASS agent=$AGENT task=$TASK_ID" >> "$LOG" 2>/dev/null || true
 exit 0
