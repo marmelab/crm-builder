@@ -89,14 +89,13 @@ cache stay valid.
 Every subsequent Read / Edit / Write / Bash runs inside the worktree, not in
 `/app`. See `.claude/rules/worktree-scope.md`.
 
-Domain skills you may need (`frontend-dev`, `backend-dev`, `e2e-conventions`,
-`playwright-testing`, `reflection-writing`) are already in your context via
-the agent's frontmatter — apply them directly, no `Skill` call required.
-
-If your ticket has `"visual_customization": true`, invoke
-`Skill({skill: "shadcn-customization"})` before writing any code. It contains
-the CSS variable system, OKLCH color format, theme presets, and component
-customization patterns for this project.
+Domain skills — invoke them explicitly with `Skill({skill: "..."})` when your task needs the detail they contain:
+- `Skill({skill: "frontend-dev"})` — React/UI/routing patterns
+- `Skill({skill: "backend-dev"})` — Supabase/SQL/dataProvider patterns
+- `Skill({skill: "e2e-conventions"})` — e2e test conventions for this project
+- `Skill({skill: "playwright-testing"})` — Playwright API and selector patterns
+- `Skill({skill: "reflection-writing"})` — reflection format (load at WORKFLOW step 5)
+- `Skill({skill: "shadcn-customization"})` — CSS variables, OKLCH colors, theme presets (load if `"visual_customization": true`)
 
 ---
 
@@ -191,7 +190,7 @@ Implement the plan. No deviations without flagging team-lead.
 - TypeScript strict: no `any`, no `@ts-ignore` without JSDoc.
 - JSDoc on every non-trivial exported function.
 - No features outside ticket scope.
-- e2e tests in `e2e/` if ticket touches UI/filters/forms/interactions, unless acceptance criteria say otherwise. Apply the auto-loaded `e2e-conventions` and `playwright-testing` skills (no need to call `Skill({…})` — they're already in your context). Don't run them — ship the spec, CI executes.
+- e2e tests in `e2e/` if ticket touches UI/filters/forms/interactions, unless acceptance criteria say otherwise. Call `Skill({skill: "e2e-conventions"})` and `Skill({skill: "playwright-testing"})` before writing e2e tests. Don't run them — ship the spec, CI executes.
 - Silent mode: Playwright `--headless`, Vite without `--open`, Vitest without `browser.ui`.
 
 ---
@@ -200,4 +199,4 @@ Implement the plan. No deviations without flagging team-lead.
 
 The trigger and step list are in the WORKFLOW section above (step 5)
 (step 5 of its WORKFLOW). The reflection format itself is in the auto-loaded
-`reflection-writing` skill — also already in your context.
+`reflection-writing` skill — load it with `Skill({skill: "reflection-writing"})` at this step.
