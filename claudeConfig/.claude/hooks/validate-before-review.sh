@@ -31,8 +31,18 @@ LOG="${CHAT_SESSION_DIR:-/chat-service/logs}/hooks.log"
 mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
 
 # Emit EXIT=N line on every exit so stats.js can build a proper execution record.
+# When exit code is 2 AND _LOG_WT is set (i.e. we reached actual validation, not
+# an early skip), also write a fail-cache so sibling SendMessages for the same
+# SHA fail instantly instead of re-running the full chain.
 _LOG_WT=""
-trap 'code=$?; echo "[$(date -Iseconds)] validate-before-review EXIT=$code wt=$_LOG_WT" >> "$LOG" 2>/dev/null || true' EXIT
+trap 'code=$?;
+  echo "[$(date -Iseconds)] validate-before-review EXIT=$code wt=$_LOG_WT" >> "$LOG" 2>/dev/null || true;
+  if [ "$code" = "2" ] && [ -n "$_LOG_WT" ]; then
+    _FAIL_SHA=$(git -C "$_LOG_WT" rev-parse HEAD 2>/dev/null || echo "");
+    if [ -n "$_FAIL_SHA" ]; then
+      printf "%s" "$_FAIL_SHA" > "/tmp/validate-cache-$(echo "$_LOG_WT" | tr "/" "_").bad.sha" 2>/dev/null || true;
+    fi;
+  fi' EXIT
 
 # Read stdin once — must happen before any exit that skips stdin.
 STDIN=$(cat)
@@ -214,6 +224,26 @@ if [ -n "$CACHE_WORKTREES" ]; then
   fi
 fi
 
+# Fail cache: if the current HEAD already failed a previous validation run on
+# the same SHA, fail instantly (<1s) instead of re-running the full 30-60s
+# chain. This avoids the double-run when the developer sends to quality-reviewer
+# and test-validator simultaneously and both hooks fire on the same broken commit.
+if [ -n "$CACHE_WORKTREES" ]; then
+  ALL_FAILED=1
+  for WT in $CACHE_WORKTREES; do
+    HEAD_SHA=$(git -C "$WT" rev-parse HEAD 2>/dev/null || echo "")
+    if [ -z "$HEAD_SHA" ]; then ALL_FAILED=0; break; fi
+    BAD_FILE="/tmp/validate-cache-$(echo "$WT" | tr '/' '_').bad.sha"
+    BAD_SHA=$(cat "$BAD_FILE" 2>/dev/null || echo "")
+    if [ "$HEAD_SHA" != "$BAD_SHA" ]; then ALL_FAILED=0; break; fi
+  done
+  if [ "$ALL_FAILED" = "1" ]; then
+    echo "[$(date -Iseconds)] validate-before-review FAIL-CACHE HIT to=$TO (SHA already failed)" >> "$LOG" 2>/dev/null || true
+    echo "This commit already failed validation. Fix the issue and make a new commit before messaging the reviewer." >&2
+    exit 2
+  fi
+fi
+
 # Dry-run hooks (test-only)
 case "${VALIDATE_DRY_RUN:-}" in
   1)
@@ -283,14 +313,15 @@ done
 echo "[$(date -Iseconds)] validate-before-review ALL OK to=$TO" >> "$LOG" 2>/dev/null || true
 
 # Cache the SHA(s) we just validated so subsequent SendMessages on the same
-# commit can short-circuit instantly. Scoped to CACHE_WORKTREES (= specific
-# worktree when VALIDATE_WORKTREE is set, all active worktrees otherwise).
+# commit can short-circuit instantly. Also clear the fail cache so a future
+# fix+commit isn't incorrectly blocked by a stale bad-SHA entry.
 if [ -n "$CACHE_WORKTREES" ]; then
   for WT in $CACHE_WORKTREES; do
     HEAD_SHA=$(git -C "$WT" rev-parse HEAD 2>/dev/null || echo "")
     if [ -n "$HEAD_SHA" ]; then
       CACHE_FILE="/tmp/validate-cache-$(echo "$WT" | tr '/' '_').sha"
       printf '%s' "$HEAD_SHA" > "$CACHE_FILE"
+      rm -f "/tmp/validate-cache-$(echo "$WT" | tr '/' '_').bad.sha" 2>/dev/null || true
     fi
   done
 fi
