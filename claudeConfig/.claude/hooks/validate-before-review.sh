@@ -27,7 +27,7 @@
 
 set -u
 
-LOG=/chat-service/logs/hooks.log
+LOG="${CHAT_SESSION_DIR:-/chat-service/logs}/hooks.log"
 mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
 
 # Read stdin once — must happen before any exit that skips stdin.
@@ -48,13 +48,20 @@ CALLER_IS_DEVELOPER=0
 case "${CLAUDE_AGENT_NAME:-}" in
   developer-*) CALLER_IS_DEVELOPER=1 ;;
 esac
-if [ "$CALLER_IS_DEVELOPER" = "0" ]; then
-  _AGENT_TYPE=$(node -e '
+_AGENT_TYPE=$(node -e '
 try {
   const i = JSON.parse(process.argv[1] || "{}");
   process.stdout.write(i.agent_type || "");
 } catch { process.stdout.write(""); }
 ' "$STDIN" 2>/dev/null || echo "")
+_RECV=$(node -e '
+try {
+  const i = JSON.parse(process.argv[1] || "{}");
+  process.stdout.write((i.tool_input && i.tool_input.to) || "");
+} catch { process.stdout.write(""); }
+' "$STDIN" 2>/dev/null || echo "")
+echo "[$(date -Iseconds)] validate-before-review INVOKE agent_env='${CLAUDE_AGENT_NAME:-}' agent_type='$_AGENT_TYPE' to='$_RECV'" >> "$LOG" 2>/dev/null || true
+if [ "$CALLER_IS_DEVELOPER" = "0" ]; then
   case "$_AGENT_TYPE" in
     developer) CALLER_IS_DEVELOPER=1 ;;
   esac
