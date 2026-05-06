@@ -27,23 +27,39 @@
 
 set -u
 
-# (A) Only gate when a developer-* agent is the caller. The orchestrator also
-# sends to merger (bare name) — without this check, its shutdown batch and
-# merge-forward messages get fully validated, wasting ~60s each.
-case "${CLAUDE_AGENT_NAME:-}" in
-  developer-*)
-    : # gate applies
-    ;;
-  *)
-    exit 0
-    ;;
-esac
-
 LOG=/chat-service/logs/hooks.log
 mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
 
+# Read stdin once — must happen before any exit that skips stdin.
 STDIN=$(cat)
 if [ -z "$STDIN" ]; then
+  exit 0
+fi
+
+# (A) Only gate when a developer agent is the caller. The orchestrator also
+# sends to merger (bare name) — without this check, its shutdown batch and
+# merge-forward messages get fully validated, wasting ~60s each.
+#
+# Detection order:
+#  1. CLAUDE_AGENT_NAME env var matches "developer-*" (preferred when set).
+#  2. agent_type field in hook input JSON equals "developer" — fallback for
+#     in-process teammates where CLAUDE_AGENT_NAME may not be propagated.
+CALLER_IS_DEVELOPER=0
+case "${CLAUDE_AGENT_NAME:-}" in
+  developer-*) CALLER_IS_DEVELOPER=1 ;;
+esac
+if [ "$CALLER_IS_DEVELOPER" = "0" ]; then
+  _AGENT_TYPE=$(node -e '
+try {
+  const i = JSON.parse(process.argv[1] || "{}");
+  process.stdout.write(i.agent_type || "");
+} catch { process.stdout.write(""); }
+' "$STDIN" 2>/dev/null || echo "")
+  case "$_AGENT_TYPE" in
+    developer) CALLER_IS_DEVELOPER=1 ;;
+  esac
+fi
+if [ "$CALLER_IS_DEVELOPER" = "0" ]; then
   exit 0
 fi
 
@@ -104,15 +120,24 @@ try {
 ' "$STDIN" 2>/dev/null || echo "")
 fi
 
+# Derive SESSION_SHORT from CHAT_SESSION_DIR for session-scoped paths and flags.
+# Scoping prevents stale /tmp flags from a previous stopped session from
+# unblocking reviewers in a new session for the same TASK-XXX name.
+SESSION_SHORT=$(basename "${CHAT_SESSION_DIR:-}" | cut -d'-' -f1)
+
 if [ -n "$TASK_ID" ]; then
   # Worktrees are per-session: /app/worktrees/<session_short>/<TASK_ID>
-  # session_short = first 8 chars of the UUID in CHAT_SESSION_DIR.
-  SESSION_SHORT=$(basename "${CHAT_SESSION_DIR:-}" | cut -d'-' -f1)
   if [ -n "$SESSION_SHORT" ]; then
     export VALIDATE_WORKTREE="/app/worktrees/$SESSION_SHORT/$TASK_ID"
+    FLAG_QR="/tmp/notified-qr-${SESSION_SHORT}-${TASK_ID}"
+    FLAG_TV="/tmp/notified-tv-${SESSION_SHORT}-${TASK_ID}"
+    FLAG_MERGER="/tmp/notified-merger-${SESSION_SHORT}-${TASK_ID}"
   else
     # Fallback: no session context (e.g. manual hook test) — scan all worktrees.
     export VALIDATE_WORKTREE="/app/worktrees/$TASK_ID"
+    FLAG_QR="/tmp/notified-qr-${TASK_ID}"
+    FLAG_TV="/tmp/notified-tv-${TASK_ID}"
+    FLAG_MERGER="/tmp/notified-merger-${TASK_ID}"
   fi
 fi
 
@@ -123,8 +148,8 @@ if [ -n "$TASK_ID" ]; then
   case "$TO" in
     merger|merger-*)
       MISSING=""
-      [ ! -f "/tmp/notified-qr-$TASK_ID" ] && MISSING="${MISSING}quality-reviewer-$TASK_ID "
-      [ ! -f "/tmp/notified-tv-$TASK_ID" ] && MISSING="${MISSING}test-validator-$TASK_ID "
+      [ ! -f "${FLAG_QR:-/tmp/notified-qr-$TASK_ID}" ] && MISSING="${MISSING}quality-reviewer-$TASK_ID "
+      [ ! -f "${FLAG_TV:-/tmp/notified-tv-$TASK_ID}" ] && MISSING="${MISSING}test-validator-$TASK_ID "
       if [ -n "$MISSING" ]; then
         echo "[validate-before-review] Blocked: cannot message merger for $TASK_ID before notifying all reviewers. Missing: $MISSING" >&2
         echo "Send \"ready, please review\" to both quality-reviewer-$TASK_ID AND test-validator-$TASK_ID first." >&2
@@ -231,16 +256,18 @@ fi
 
 # (F) Record that this reviewer/validator/merger was successfully notified for TASK_ID.
 # member-idle-gate reads these flags to unblock each agent type.
+# Flags are session-scoped (SESSION_SHORT prefix) to prevent stale flags from a
+# previous session from unblocking reviewers in a new one.
 if [ -n "$TASK_ID" ]; then
   case "$TO" in
     quality-reviewer-*)
-      touch "/tmp/notified-qr-$TASK_ID" 2>/dev/null || true
+      touch "${FLAG_QR:-/tmp/notified-qr-$TASK_ID}" 2>/dev/null || true
       ;;
     test-validator-*)
-      touch "/tmp/notified-tv-$TASK_ID" 2>/dev/null || true
+      touch "${FLAG_TV:-/tmp/notified-tv-$TASK_ID}" 2>/dev/null || true
       ;;
     merger|merger-*)
-      touch "/tmp/notified-merger-$TASK_ID" 2>/dev/null || true
+      touch "${FLAG_MERGER:-/tmp/notified-merger-$TASK_ID}" 2>/dev/null || true
       ;;
   esac
 fi

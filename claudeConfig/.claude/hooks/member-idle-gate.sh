@@ -107,13 +107,25 @@ EOF
   exit 2
 fi
 
-# Determine the correct flag file for this gate type
-case "$GATE_TYPE" in
-  qr)      FLAG="/tmp/notified-qr-$TASK_ID" ;;
-  tv)      FLAG="/tmp/notified-tv-$TASK_ID" ;;
-  merger)  FLAG="/tmp/notified-merger-$TASK_ID" ;;
-  *)       exit 0 ;;
-esac
+# Determine the correct flag file for this gate type.
+# Flags are session-scoped: <session_short>-<TASK_ID> so a stale flag from a
+# previous session (same TASK-XXX name) never unblocks a reviewer in a new one.
+SESSION_SHORT=$(basename "${CHAT_SESSION_DIR:-}" | cut -d'-' -f1)
+if [ -n "$SESSION_SHORT" ]; then
+  case "$GATE_TYPE" in
+    qr)      FLAG="/tmp/notified-qr-${SESSION_SHORT}-${TASK_ID}" ;;
+    tv)      FLAG="/tmp/notified-tv-${SESSION_SHORT}-${TASK_ID}" ;;
+    merger)  FLAG="/tmp/notified-merger-${SESSION_SHORT}-${TASK_ID}" ;;
+    *)       exit 0 ;;
+  esac
+else
+  case "$GATE_TYPE" in
+    qr)      FLAG="/tmp/notified-qr-$TASK_ID" ;;
+    tv)      FLAG="/tmp/notified-tv-$TASK_ID" ;;
+    merger)  FLAG="/tmp/notified-merger-$TASK_ID" ;;
+    *)       exit 0 ;;
+  esac
+fi
 
 if [ ! -f "$FLAG" ]; then
   echo "[$(date -Iseconds)] member-idle-gate BLOCK agent=$AGENT task=$TASK_ID flag=$FLAG not found" >> "$LOG" 2>/dev/null || true
