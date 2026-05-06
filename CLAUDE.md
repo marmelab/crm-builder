@@ -80,11 +80,11 @@ Per-case full diffs are archived to `chat-service/tests/results/<runTs>/<caseId>
 
 ## Agent team
 
-9 agents in [claudeConfig/.claude/agents/](claudeConfig/.claude/agents/). Each one: frontmatter (name, description, model, tools, skills) + prose. Models deliberately scoped:
+8 agents in [claudeConfig/.claude/agents/](claudeConfig/.claude/agents/). Each one: frontmatter (name, description, model, tools, skills) + prose. Models deliberately scoped:
 
 | Agent | Model | Role |
 |---|---|---|
-| chat-orchestrator | sonnet | User-facing. Classifies, routes, narrates. |
+| chat-orchestrator | sonnet | User-facing. Classifies, routes, narrates. Conducts the SETUP interview directly via the `setup-interview` skill (no sub-agent). |
 | planner | sonnet | Decomposes need → atomic tickets (JSON) with waves + file-path hints. |
 | architect | opus | Spec gatekeeper (before plan), plan approver (after). |
 | developer | opus | Plans, implements, commits inside a worktree. Mode 2 = reflection. |
@@ -92,7 +92,6 @@ Per-case full diffs are archived to `chat-service/tests/results/<runTs>/<caseId>
 | test-validator | haiku | Integration wiring, e2e presence, reachability. |
 | merger | haiku | `git merge --no-ff` to main, remove worktree. **Never `git add` / `git commit` itself** — only `git merge` and `git reset --hard HEAD` on `/app`. |
 | devops | sonnet | One-time bootstrap (fork, Supabase, env, deploy). |
-| project-manager | sonnet | Domain-by-domain interview → `project-context.json`. |
 
 The full lifecycle is encoded in the [agent-team](claudeConfig/.claude/skills/agent-team/) skill (single source of truth for dispatch order).
 

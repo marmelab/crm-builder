@@ -32,21 +32,15 @@ services:
     volumes:
       - crm-app:/app
       - claude-auth:/home/developer/.claude
-      # DEV ONLY — bind mounts pour itérer sur la config sans rebuild.
-      # Entrypoint sync ces fichiers vers /home/developer/.claude au boot.
-      # RETIRER avant release production (config doit vivre dans l'image).
-      - ./claudeConfig/.claude:/root/.claude:ro
-      - ./entrypoint.sh:/entrypoint.sh:ro
-      - ./chat-service/server.js:/chat-service/server.js:ro
-      - ./chat-service/public:/chat-service/public:ro
-      - ./chat-service/lib:/chat-service/lib:ro
-      # DEV ONLY — logs structurés des sessions chat pour review/analyse.
-      # RETIRER avant release production.
+      # NOTE: host-path bind mounts (./claudeConfig, ./chat-service/*, ./crm-docs)
+      # are disabled — the Docker daemon in this Codespace environment cannot access
+      # /workspaces paths, so they mount as empty dirs and break the chat-service.
+      # Rebuild the image to pick up local changes.
+      # Sessions use a host bind-mount so they survive container restarts and are
+      # inspectable from the host. The chat-logs named volume is kept as declaration
+      # but not used here.
       - ./sessions:/chat-service/logs
-      # Runtime-generated tickets, reflections, learnings.
-      # DEV bind so the maintainer can inspect patterns.md / reflections / etc.
-      # directly from the host. Persists indefinitely on host until `rm -rf`.
-      - ./crm-docs:/app/docs
+      - crm-docs:/app/docs
 
   # ── Full mode — local Supabase, requires Docker socket ─────
   crm-full:
@@ -65,9 +59,11 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock # ⚠️ required
       - supabase-cache:/root/.docker              # cache pulled images
       # Runtime-generated tickets, reflections, learnings (see demo profile comment).
-      - ./crm-docs:/app/docs
+      - crm-docs:/app/docs
 
 volumes:
   crm-app:
   supabase-cache:
   claude-auth:
+  chat-logs:
+  crm-docs:
