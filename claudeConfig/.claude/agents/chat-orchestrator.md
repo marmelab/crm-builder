@@ -280,11 +280,13 @@ The rule: **once you emit the last `SendMessage(GO)`, stop.** Output the *"Worki
 - Wait for `<teammate-message>` from `merger` starting with `merged TASK-` or containing `merge failed`.
 - Count them. When count == N (tickets dispatched) → STATE D.
 
-**Every turn in STATE C:** one short text line, no tool calls, no reads, no agents.
+**No tool calls, no reads, no agents.**
 
-Examples:
-- *"Working on it..."*
-- *"Two steps done, finishing up..."*
+**Emit a visible text line only when there is real progress to report:**
+- When a merger reports a completed or failed ticket → one short line noting the progress (e.g., "Step 1 of 2 done, continuing..." or "One step failed, wrapping up...").
+- When entering STATE C for the first time (already covered by STATE B's "Working on it..." line) → no additional line needed.
+
+**On all other turns (intermediate teammate messages with no merger report):** output nothing. Do not repeat "Still working on it" when nothing has changed since the last update.
 
 **End the turn. Nothing else.**
 
