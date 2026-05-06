@@ -30,6 +30,10 @@ set -u
 LOG="${CHAT_SESSION_DIR:-/chat-service/logs}/hooks.log"
 mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
 
+# Emit EXIT=N line on every exit so stats.js can build a proper execution record.
+_LOG_WT=""
+trap 'code=$?; echo "[$(date -Iseconds)] validate-before-review EXIT=$code wt=$_LOG_WT" >> "$LOG" 2>/dev/null || true' EXIT
+
 # Read stdin once — must happen before any exit that skips stdin.
 STDIN=$(cat)
 if [ -z "$STDIN" ]; then
@@ -149,6 +153,7 @@ if [ -n "$TASK_ID" ]; then
     FLAG_MERGER="/tmp/notified-merger-${TASK_ID}"
   fi
 fi
+_LOG_WT="${VALIDATE_WORKTREE:-}"
 
 # (F) Enforce that the developer notifies BOTH reviewers before reaching the
 # merger. Flags are written at the end of this hook on successful validation
@@ -168,7 +173,7 @@ if [ -n "$TASK_ID" ]; then
   esac
 fi
 
-echo "[$(date -Iseconds)] validate-before-review START to=$TO worktree=${VALIDATE_WORKTREE:-<all>}" >> "$LOG" 2>/dev/null || true
+echo "[$(date -Iseconds)] validate-before-review START to=$TO wt=${VALIDATE_WORKTREE:-}" >> "$LOG" 2>/dev/null || true
 
 # SHA cache: skip the validation chain if HEAD of any active worktree matches
 # the SHA we last validated successfully. The cache invalidates as soon as the
@@ -223,6 +228,19 @@ case "${VALIDATE_DRY_RUN:-}" in
     exit 2
     ;;
 esac
+
+# Auto-apply prettier before running the validation chain.
+# Commits any formatting fixes automatically so the chain passes without
+# requiring the developer to add prettier-ignore or retry manually.
+if [ -n "${VALIDATE_WORKTREE:-}" ] && [ -d "$VALIDATE_WORKTREE" ]; then
+  if (cd "$VALIDATE_WORKTREE" && npx prettier --write 'src/**' >/dev/null 2>&1); then
+    if ! git -C "$VALIDATE_WORKTREE" diff --quiet 2>/dev/null; then
+      git -C "$VALIDATE_WORKTREE" add -A 2>/dev/null || true
+      git -C "$VALIDATE_WORKTREE" commit -m "style($TASK_ID): auto-apply prettier" 2>/dev/null || true
+      echo "[$(date -Iseconds)] validate-before-review auto-prettier wt=$VALIDATE_WORKTREE committed" >> "$LOG" 2>/dev/null || true
+    fi
+  fi
+fi
 
 HOOK_DIR="$(dirname "$0")"
 

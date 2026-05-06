@@ -12,9 +12,11 @@ const HOOK_NAME_MAP = {
   'block-bash-validation': 'block-bash-validation.sh',
   'circuit-breaker':       'circuit-breaker.sh',
   'silent-mode-check':     'silent-mode-check.sh',
+  'validate-before-review': 'validate-before-review.sh',
 };
 const BLOCKING_HOOKS = new Set([
   'block-bash-file-write.sh','block-bash-validation.sh','circuit-breaker.sh','silent-mode-check.sh',
+  'validate-before-review.sh',
 ]);
 
 function parseHookLine(line) {
@@ -132,8 +134,22 @@ export function assignHookExecsToPhases(events, phases, hookAggregates) {
       worktreeByPhaseId.set(ev.task_id, toolUseIdToWorktree.get(ev.tool_use_id));
     }
   }
+  // Build phaseIdByWorktree. When multiple phases share a worktree (developer +
+  // quality-reviewer + test-validator all use the same TASK-XXX path), prefer
+  // the developer phase so validation hooks are attributed there, not to
+  // whichever reviewer had the last task_started event.
   const phaseIdByWorktree = new Map();
-  for (const [phaseId, wt] of worktreeByPhaseId) phaseIdByWorktree.set(wt, phaseId);
+  for (const [phaseId, wt] of worktreeByPhaseId) {
+    if (!phaseIdByWorktree.has(wt)) {
+      phaseIdByWorktree.set(wt, phaseId);
+    } else {
+      const existing = phases.find((p) => p.phaseId === phaseIdByWorktree.get(wt));
+      if (existing?.agentType !== 'developer') {
+        const incoming = phases.find((p) => p.phaseId === phaseId);
+        if (incoming?.agentType === 'developer') phaseIdByWorktree.set(wt, phaseId);
+      }
+    }
+  }
   for (const agg of hookAggregates) {
     for (const exec of agg.executions) {
       if (!exec.worktree) continue;
