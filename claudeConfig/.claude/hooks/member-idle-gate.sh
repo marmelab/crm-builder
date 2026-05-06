@@ -19,6 +19,15 @@
 #   /tmp/notified-qr-TASK-XXX  (quality-reviewer-TASK-XXX)
 #   /tmp/notified-tv-TASK-XXX  (test-validator-TASK-XXX)
 #
+# How CLAUDE_AGENT_NAME and agent_type interact:
+# - CLAUDE_AGENT_NAME (env var): set by the runtime to the full `name` passed to
+#   Agent() — e.g. "quality-reviewer-TASK-001". Reliable when set.
+# - agent_type (stdin JSON field): always present but only the base type, without
+#   the TASK suffix — e.g. "quality-reviewer". Cannot give TASK_ID alone.
+# - TASK_ID fallback: extracted from the tool_input JSON (file_path, command,
+#   or message fields always contain TASK-XXX when a reviewer operates on its
+#   worktree). If no TASK_ID found in tool_input, block conservatively.
+#
 # The merger is NOT gated here — it is already implicitly gated by
 # validate-before-review (developer must notify both reviewers before the hook
 # allows a SendMessage to merger). Blocking merger here would prevent it from
@@ -27,45 +36,86 @@
 set -u
 
 LOG="${CHAT_SESSION_DIR:-/chat-service/logs}/hooks.log"
+mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
 
-AGENT="${CLAUDE_AGENT_NAME:-}"
+STDIN=$(cat)
 
+# Determine agent identity. Prefer CLAUDE_AGENT_NAME (full suffixed name) when set.
+# Fall back to agent_type from stdin (base type without TASK suffix).
+AGENT_NAME_ENV="${CLAUDE_AGENT_NAME:-}"
+AGENT_TYPE=$(node -e '
+try {
+  const i = JSON.parse(process.argv[1] || "{}");
+  process.stdout.write(i.agent_type || "");
+} catch { process.stdout.write(""); }
+' "$STDIN" 2>/dev/null || echo "")
+
+if [ -n "$AGENT_NAME_ENV" ]; then
+  AGENT="$AGENT_NAME_ENV"
+else
+  AGENT="$AGENT_TYPE"
+fi
+
+# Determine which gate type applies (if any)
 case "$AGENT" in
-  quality-reviewer-*|test-validator-*|merger|merger-*)
-    : # gate applies
+  quality-reviewer-*|quality-reviewer)
+    GATE_TYPE="qr"
+    ;;
+  test-validator-*|test-validator)
+    GATE_TYPE="tv"
+    ;;
+  merger|merger-*)
+    GATE_TYPE="merger"
     ;;
   *)
     exit 0
     ;;
 esac
 
-# Extract the TASK-XXX id from the agent name (e.g. quality-reviewer-TASK-001 → TASK-001)
+# Extract TASK_ID: first from agent name (if it contains TASK-XXX suffix),
+# then from tool_input fields (file path, command, message, recipient).
 TASK_ID=$(echo "$AGENT" | grep -oE 'TASK-[0-9]+' || echo "")
 
 if [ -z "$TASK_ID" ]; then
-  # Unexpected name format — log and let through rather than hard-blocking.
-  mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
-  echo "[$(date -Iseconds)] member-idle-gate WARN agent=$AGENT no TASK_ID found, letting through" >> "$LOG" 2>/dev/null || true
-  exit 0
+  # CLAUDE_AGENT_NAME not set or base type only — scan tool_input for TASK-XXX
+  TASK_ID=$(node -e '
+try {
+  const i = JSON.parse(process.argv[1] || "{}");
+  const inp = i.tool_input || {};
+  const candidates = [
+    inp.file_path || "", inp.command || "", inp.path || "",
+    inp.to || "", inp.message || "",
+    JSON.stringify(inp)
+  ];
+  for (const s of candidates) {
+    const m = String(s).match(/TASK-[0-9]+/);
+    if (m) { process.stdout.write(m[0]); process.exit(0); }
+  }
+  process.stdout.write("");
+} catch { process.stdout.write(""); }
+' "$STDIN" 2>/dev/null || echo "")
 fi
 
-case "$AGENT" in
-  quality-reviewer-*)
-    FLAG="/tmp/notified-qr-$TASK_ID"
-    ;;
-  test-validator-*)
-    FLAG="/tmp/notified-tv-$TASK_ID"
-    ;;
-  merger|merger-*)
-    FLAG="/tmp/notified-merger-$TASK_ID"
-    ;;
-  *)
-    exit 0
-    ;;
+if [ -z "$TASK_ID" ]; then
+  # No TASK_ID anywhere — block conservatively: reviewers/merger should always
+  # have a TASK context; no context means something unexpected is happening.
+  echo "[$(date -Iseconds)] member-idle-gate BLOCK-NOTASK agent=$AGENT gate=$GATE_TYPE (no TASK_ID in input)" >> "$LOG" 2>/dev/null || true
+  cat >&2 <<EOF
+[member-idle-gate] Cannot determine TASK_ID for agent '$AGENT'.
+Do NOT call any tool until you receive the developer's "ready for review" SendMessage.
+EOF
+  exit 2
+fi
+
+# Determine the correct flag file for this gate type
+case "$GATE_TYPE" in
+  qr)      FLAG="/tmp/notified-qr-$TASK_ID" ;;
+  tv)      FLAG="/tmp/notified-tv-$TASK_ID" ;;
+  merger)  FLAG="/tmp/notified-merger-$TASK_ID" ;;
+  *)       exit 0 ;;
 esac
 
 if [ ! -f "$FLAG" ]; then
-  mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
   echo "[$(date -Iseconds)] member-idle-gate BLOCK agent=$AGENT task=$TASK_ID flag=$FLAG not found" >> "$LOG" 2>/dev/null || true
   cat >&2 <<EOF
 [member-idle-gate] Your flag ($FLAG) does not exist yet.
@@ -76,6 +126,5 @@ EOF
   exit 2
 fi
 
-mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
 echo "[$(date -Iseconds)] member-idle-gate PASS agent=$AGENT task=$TASK_ID" >> "$LOG" 2>/dev/null || true
 exit 0
