@@ -96,7 +96,24 @@ try {
 ' "$STDIN" 2>/dev/null || echo "")
 fi
 
+# Determine the correct flag file for this gate type.
+# Flags are session-scoped: <session_short>-<TASK_ID> so a stale flag from a
+# previous session (same TASK-XXX name) never unblocks a reviewer in a new one.
+SESSION_SHORT=$(basename "${CHAT_SESSION_DIR:-}" | cut -d'-' -f1)
+
 if [ -z "$TASK_ID" ]; then
+  # Merger special case: the merger often runs git/shell commands that don't
+  # mention TASK-XXX (e.g. "git log HEAD~5..HEAD", "git branch --merged").
+  # Once the developer has validated and sent to the merger, the session-scoped
+  # flag /tmp/notified-merger-SESSION-TASK-XXX exists. If any such flag exists
+  # we know the merger was properly unblocked and can allow all its tool calls.
+  if [ "$GATE_TYPE" = "merger" ] && [ -n "$SESSION_SHORT" ]; then
+    MERGER_FLAG=$(ls /tmp/notified-merger-${SESSION_SHORT}-* 2>/dev/null | head -1)
+    if [ -n "$MERGER_FLAG" ]; then
+      echo "[$(date -Iseconds)] member-idle-gate PASS agent=$AGENT task=any (session merger flag: $MERGER_FLAG)" >> "$LOG" 2>/dev/null || true
+      exit 0
+    fi
+  fi
   # No TASK_ID anywhere — block conservatively: reviewers/merger should always
   # have a TASK context; no context means something unexpected is happening.
   echo "[$(date -Iseconds)] member-idle-gate BLOCK-NOTASK agent=$AGENT gate=$GATE_TYPE (no TASK_ID in input)" >> "$LOG" 2>/dev/null || true
@@ -106,11 +123,6 @@ Do NOT call any tool until you receive the developer's "ready for review" SendMe
 EOF
   exit 2
 fi
-
-# Determine the correct flag file for this gate type.
-# Flags are session-scoped: <session_short>-<TASK_ID> so a stale flag from a
-# previous session (same TASK-XXX name) never unblocks a reviewer in a new one.
-SESSION_SHORT=$(basename "${CHAT_SESSION_DIR:-}" | cut -d'-' -f1)
 if [ -n "$SESSION_SHORT" ]; then
   case "$GATE_TYPE" in
     qr)      FLAG="/tmp/notified-qr-${SESSION_SHORT}-${TASK_ID}" ;;

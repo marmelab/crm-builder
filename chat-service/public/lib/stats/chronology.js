@@ -16,6 +16,11 @@ export const TOOL_ICON = {
 };
 export function toolIcon(name) { return TOOL_ICON[name] || '🔧'; }
 
+const VERDICT_ICON = {
+  shutdown: '🛑', awr: '🟡', approved: '✅', blocked: '❌',
+  ready: '📨', 'merger-report': '🔀',
+};
+
 const TASK_ID_RE = /(TASK-\d{3,})/;
 function taskIdOf(phase) {
   const m = (phase.agentName || phase.description || '').match(TASK_ID_RE);
@@ -96,7 +101,10 @@ function renderPhaseRow(phase, relLabel) {
 
 function renderChildRow(child, relLabel) {
   let icon = '🔧', label = child.kind, detail = '';
-  if (child.kind === 'tool_use') { icon = toolIcon(child.tool); label = child.tool; detail = child.detail ?? ''; }
+  if (child.kind === 'tool_use') {
+    icon = (child.verdict && VERDICT_ICON[child.verdict]) ? VERDICT_ICON[child.verdict] : toolIcon(child.tool);
+    label = child.tool; detail = child.detail ?? '';
+  }
   else if (child.kind === 'skill') { icon = '🧠'; label = 'Skill'; detail = child.skill; }
   else if (child.kind === 'hook') {
     const failed = child.result === 'fail';
