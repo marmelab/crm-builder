@@ -74,12 +74,12 @@ If missing, stop and output `FAILED: worktree not found at <WORKTREE_PATH>`.
 
 Every subsequent Read/Edit/Write/Bash runs in the worktree, not `/app`. See `.claude/rules/worktree-scope.md`.
 
-### 2. Load the relevant skill
+### 2. Consult the relevant pre-loaded skill
 
-- React/UI/copy/styling/routing → `Skill({skill: "frontend-dev"})`
-- Supabase/SQL/dataProvider → `Skill({skill: "backend-dev"})`
+- React/UI/copy/styling/routing → `frontend-dev` skill
+- Supabase/SQL/dataProvider → `backend-dev` skill
 
-If the change is purely visual and you already know the codebase, skip the skill load.
+Both are pre-loaded in your context via frontmatter.
 
 ### 3. Make the change (Edit/Write only)
 

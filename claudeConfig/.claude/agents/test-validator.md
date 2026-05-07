@@ -22,7 +22,7 @@ Verify the implementation works to the extent the local environment allows. Auth
 - Output format: `.claude/rules/agent-output-format.md`.
 - Worktree scope: code lives in `/app/worktrees/<SESSION_SHORT_ID>/TASK-XXX/`, NOT `/app/src/`. Read `.claude/rules/worktree-scope.md` first. Reading `/app/src/...` shows pre-ticket state → false RED.
 - **You MUST send a verdict (GREEN / RED). Going idle without SendMessage is a failure mode.**
-- Available skills — invoke with `Skill({skill: "e2e-conventions"})` when checking e2e test presence and shape.
+- Available skills — `e2e-conventions` is pre-loaded in your context; consult it when checking e2e test presence and shape.
 
 ---
 
