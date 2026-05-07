@@ -2,12 +2,7 @@
 
 * utilisation de /loop pour contrôler les agents, et vérifier ou ils en sont ?
 
-
 * mettre en place outupStyle ? https://code.claude.com/docs/en/output-styles
-
-* clean logs hooks
-
-* faire des bashs pour création/clean worktree, branche
 
 * to discuss with françois
 * -  stop -> clean worktrees / sessions / etc.
@@ -24,11 +19,9 @@
 
 * deux tendances sur équipe d'agents : spawn tout au démarrage mais reviewers et merger invalident leur cache car attendent leur tour (au bout de 5min d'inactivité, invalidité cache) ou les spawn au moment ou on en a besoin.
 
-
 * case 1 : 54k in 3k out 0.445$ 3min englishCrmMessages 1line
 * case 2 : 260k in 8k out 1.133$ 4min index.css 7lines
 * case 4 : 299k in 16k out 1.905$ 6min
-
 
 V2 agentic team :
 * case 1 : 21k 0.288$ 2min21 
