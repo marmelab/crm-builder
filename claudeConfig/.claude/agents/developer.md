@@ -34,7 +34,12 @@ Output format: `.claude/rules/agent-output-format.md`.
 
 ## WORKFLOW (follow in strict order)
 
-1. **Read ticket** at `TICKET_FILE` and any reflections in `/app/docs/reflections/` for the same domain.
+1. **Read ticket** at `TICKET_FILE` and any past reflections for the same domain:
+   ```bash
+   ls /app/docs/reflections/          # list past sessions
+   ls /app/docs/reflections/<session>/ # list tasks in a session
+   ```
+   Read the most recent files that look domain-relevant (same component, same feature area).
 2. **Implement** in the worktree — Edit / Write / Bash. Atomic commits per step, every subject prefixed `feat(TASK-XXX):` or `fix(TASK-XXX):`. See Mode 1 below.
 3. **Request review** (both at once):
    - `SendMessage(quality-reviewer-TASK-XXX, "ready, please review")`
@@ -46,8 +51,7 @@ Output format: `.claude/rules/agent-output-format.md`.
    - `APPROVED WITH RESERVATIONS` → `approvals_received++`. For each issue: fix inline if small and clearly correct, otherwise skip and note in reflection.
    - `BLOCKED: …` → `approvals_received = 0`, fix the blocking issues, commit, **re-notify ALL reviewers** (the diff changed). Loop.
 5. **When `approvals_received == 2`** — write reflection:
-   - Read `/app/docs/reflections/` for related past reflections.
-   - Write `/app/docs/reflections/<TASK_ID>-reflection.md` (absolute path — outside the worktree, directly on the shared volume so it survives worktree cleanup and is immediately readable by future agents without a merge).
+   - Write `/app/docs/reflections/<SESSION_SHORT_ID>/<TASK_ID>.md` — absolute path, outside the worktree, directly on the shared volume. `SESSION_SHORT_ID` is the first segment of your session UUID (derive it from `WORKTREE_PATH`, e.g. `/app/worktrees/58c3f4c7/TASK-001` → `58c3f4c7`). Create the directory if needed.
 6. **Hand off to merger**:
    - `SendMessage(merger, "ready: TASK-XXX, branch=<BRANCH_NAME>, all approved")`
    - The first 16 chars of the message MUST be `ready: TASK-XXX` — the merger parses it.
