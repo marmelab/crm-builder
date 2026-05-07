@@ -308,7 +308,7 @@ function handleWsMessage(event) {
     // Keep the working bubble visible — the turn isn't over until a
     // `status: working=false` frame arrives. The bubble's sentinel seq
     // ensures the new message lands above it.
-    appendMessage('assistant', msg.content);
+    appendMessage('assistant', msg.content, { subtype: msg.subtype });
     historyApi.refreshHistory();
   }
 }
@@ -366,6 +366,8 @@ function appendChoices(content, options, seq = ++seqCounter) {
   placeIntoMessages(wrap, seq);
 }
 
+const ROLLBACK_ICON_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h2"/><path d="M16 21h2a2 2 0 0 0 2-2V8"/><path d="m9 15 3-3 3 3"/><path d="M12 12v9"/></svg>';
+
 function appendMessage(role, content, seqOrOpts = ++seqCounter) {
   const opts = typeof seqOrOpts === 'object' && seqOrOpts !== null ? seqOrOpts : {};
   const seq = typeof seqOrOpts === 'number' ? seqOrOpts : (opts.seq ?? ++seqCounter);
@@ -373,7 +375,17 @@ function appendMessage(role, content, seqOrOpts = ++seqCounter) {
   const subtype = opts.subtype;
   const el = document.createElement('div');
   el.className = `msg msg-${role}${queued ? ' msg-queued' : ''}${subtype ? ' msg-' + subtype : ''}`;
-  el.textContent = content;
+  if (subtype === 'rollback') {
+    const header = document.createElement('div');
+    header.className = 'msg-rollback-header';
+    header.innerHTML = `${ROLLBACK_ICON_SVG}<span>Rollback</span>`;
+    const body = document.createElement('div');
+    body.className = 'msg-rollback-body';
+    body.textContent = content;
+    el.append(header, body);
+  } else {
+    el.textContent = content;
+  }
   if (queued) {
     const badge = document.createElement('span');
     badge.className = 'queued-badge';

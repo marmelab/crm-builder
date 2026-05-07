@@ -5,17 +5,25 @@ import { promisify } from 'node:util';
 import { CWD, LOG_DIR, ALLOWED_STATES, MIME_TYPES, UUID_RE, DOCUMENTATOR_OPTS } from './config.js';
 import { listSessions, getSession, patchSession } from './session-store.js';
 import { runtimes } from './runtime.js';
+import { broadcast } from './ws-bus.js';
 import { runDocumentator } from '../documentator-cron.js';
 
 const execFileAsync = promisify(execFile);
+const GIT_BUF = { maxBuffer: 4 * 1024 * 1024 };
+const COMMIT_FORMAT = '%H%x09%P%x09%s%x09%aI';
+const parseCommitLog = (out) => out.split('\n').filter(Boolean).map((line) => {
+  const [sha, parents, subject, date] = line.split('\t');
+  return { sha, parents: parents ? parents.split(' ') : [], subject, date };
+});
 
 async function persistAssistantMessage(sessionId, content, { subtype } = {}) {
-  // Live runtime path — keeps meta.json in sync (lastMessageAt, messageCount).
+  const payload = { type: 'message', role: 'assistant', content };
+  if (subtype) payload.subtype = subtype;
+  // Live runtime path — broadcast() handles WS fan-out + logWrite, so every
+  // tab connected to this session sees the message immediately.
   const runtime = runtimes.get(sessionId);
   if (runtime?.session) {
-    const payload = { type: 'message', role: 'assistant', content };
-    if (subtype) payload.subtype = subtype;
-    runtime.session.logWrite('out', payload);
+    broadcast(runtime, payload);
     await runtime.session.recordMessage('assistant', content);
     return;
   }
@@ -23,14 +31,7 @@ async function persistAssistantMessage(sessionId, content, { subtype } = {}) {
   // (don't materialise a stray session folder for an invalid id).
   const logPath = `${LOG_DIR}/${sessionId}/log.jsonl`;
   try { await stat(logPath); } catch { return; }
-  const entry = {
-    ts: new Date().toISOString(),
-    dir: 'out',
-    type: 'message',
-    role: 'assistant',
-    content,
-  };
-  if (subtype) entry.subtype = subtype;
+  const entry = { ts: new Date().toISOString(), dir: 'out', ...payload };
   await appendFile(logPath, JSON.stringify(entry) + '\n');
 }
 
@@ -84,14 +85,15 @@ async function findRevertedFullShas() {
     const { stdout } = await execFileAsync(
       'git',
       ['-C', CWD, 'log', '--all', '--grep=This reverts commit', '--format=%B%x00'],
-      { maxBuffer: 4 * 1024 * 1024 },
+      GIT_BUF,
     );
     const reverted = new Set();
     const re = /This reverts commit ([0-9a-f]{40})/g;
     let m;
     while ((m = re.exec(stdout)) !== null) reverted.add(m[1]);
     return reverted;
-  } catch {
+  } catch (err) {
+    console.warn('[rollback] findRevertedFullShas failed:', err.message);
     return new Set();
   }
 }
@@ -115,6 +117,21 @@ async function collectSessionCommitShas(sessionDir) {
   }
 }
 
+// Resolves the session's reported SHAs to full commit metadata, drops any
+// already-reverted ones. Sorted newest-first. Used by both /commits and
+// /rollback so the two routes stay in sync on what counts as "active".
+async function loadActiveSessionCommits(sessionDir) {
+  const reportedShas = await collectSessionCommitShas(sessionDir);
+  if (reportedShas.length === 0) return [];
+  const [resolveOut, reverted] = await Promise.all([
+    execFileAsync('git', ['-C', CWD, 'log', '--no-walk', `--format=${COMMIT_FORMAT}`, ...reportedShas], GIT_BUF),
+    findRevertedFullShas(),
+  ]);
+  return parseCommitLog(resolveOut.stdout)
+    .filter((c) => !reverted.has(c.sha))
+    .sort((a, b) => (a.date < b.date ? 1 : -1));
+}
+
 async function handleSessionCommitsRequest(req, res, sessionId) {
   if (!UUID_RE.test(sessionId)) {
     res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -122,53 +139,33 @@ async function handleSessionCommitsRequest(req, res, sessionId) {
     return;
   }
   try {
-    const sessionDir = `${LOG_DIR}/${sessionId}`;
-    const reportedShas = await collectSessionCommitShas(sessionDir);
-    if (reportedShas.length === 0) {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ sessionId, commits: [] }));
-      return;
-    }
-    const FORMAT = '%H%x09%P%x09%s%x09%aI';
-    const parseLog = (out) => out.split('\n').filter(Boolean).map((line) => {
-      const [sha, parents, subject, date] = line.split('\t');
-      return { sha, parents: parents ? parents.split(' ') : [], subject, date };
-    });
-
-    const { stdout } = await execFileAsync(
-      'git',
-      ['-C', CWD, 'log', '--no-walk', `--format=${FORMAT}`, ...reportedShas],
-      { maxBuffer: 4 * 1024 * 1024 },
-    );
-    const reverted = await findRevertedFullShas();
-    const primary = parseLog(stdout).filter((c) => !reverted.has(c.sha));
+    const primary = await loadActiveSessionCommits(`${LOG_DIR}/${sessionId}`);
     if (primary.length === 0) {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ sessionId, commits: [] }));
       return;
     }
-
     // Each merge commit hides its branch's source commits behind the merge.
     // Expand <merge>^1..<merge>^2 to surface the `simple: ...` /
-    // `feat(TASK-XXX): ...` commits introduced by the branch.
-    const seen = new Set(primary.map((c) => c.sha));
-    const commits = [...primary];
-    for (const c of primary) {
-      if (c.parents.length < 2) continue;
+    // `feat(TASK-XXX): ...` commits introduced by the branch — in parallel.
+    const merges = primary.filter((c) => c.parents.length >= 2);
+    const expansions = await Promise.all(merges.map(async (c) => {
       const range = `${c.parents[0]}..${c.parents[1]}`;
       try {
-        const { stdout: s2 } = await execFileAsync(
-          'git',
-          ['-C', CWD, 'log', range, `--format=${FORMAT}`],
-          { maxBuffer: 4 * 1024 * 1024 },
-        );
-        for (const child of parseLog(s2)) {
-          if (seen.has(child.sha)) continue;
-          seen.add(child.sha);
-          commits.push(child);
-        }
+        const { stdout } = await execFileAsync('git', ['-C', CWD, 'log', range, `--format=${COMMIT_FORMAT}`], GIT_BUF);
+        return parseCommitLog(stdout);
       } catch (err) {
         console.warn(`[commits] expand range ${range} failed:`, err.message);
+        return [];
+      }
+    }));
+    const seen = new Set(primary.map((c) => c.sha));
+    const commits = [...primary];
+    for (const list of expansions) {
+      for (const child of list) {
+        if (seen.has(child.sha)) continue;
+        seen.add(child.sha);
+        commits.push(child);
       }
     }
     commits.sort((a, b) => (a.date < b.date ? 1 : -1));
@@ -187,6 +184,22 @@ async function handleSessionCommitsRequest(req, res, sessionId) {
   }
 }
 
+async function captureConflictsAndAbort() {
+  let conflicts = [];
+  try {
+    const { stdout } = await execFileAsync('git', ['-C', CWD, 'status', '--porcelain']);
+    conflicts = stdout
+      .split('\n')
+      .filter((l) => /^(UU|AA|DD|AU|UA|DU|UD) /.test(l))
+      .map((l) => l.slice(3));
+  } catch (err) {
+    console.warn('[rollback] status check failed:', err.message);
+  }
+  try { await execFileAsync('git', ['-C', CWD, 'revert', '--abort']); }
+  catch (err) { console.warn('[rollback] revert --abort failed:', err.message); }
+  return conflicts;
+}
+
 async function handleSessionRollbackRequest(req, res, sessionId) {
   if (!UUID_RE.test(sessionId)) {
     res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -194,31 +207,12 @@ async function handleSessionRollbackRequest(req, res, sessionId) {
     return;
   }
   try {
-    const sessionDir = `${LOG_DIR}/${sessionId}`;
-    const reportedShas = await collectSessionCommitShas(sessionDir);
-    if (reportedShas.length === 0) {
-      res.writeHead(404, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ ok: false, error: 'no_commits' }));
-      return;
-    }
-    // Resolve full SHAs and parents — `--no-walk` keeps the order of the
-    // arguments, but we want newest-first so we sort by commit date.
-    const { stdout } = await execFileAsync(
-      'git',
-      ['-C', CWD, 'log', '--no-walk', '--format=%H%x09%P%x09%aI', ...reportedShas],
-      { maxBuffer: 4 * 1024 * 1024 },
-    );
-    const alreadyReverted = await findRevertedFullShas();
-    const commits = stdout.split('\n').filter(Boolean).map((line) => {
-      const [sha, parents, date] = line.split('\t');
-      return { sha, parents: parents ? parents.split(' ') : [], date };
-    }).filter((c) => !alreadyReverted.has(c.sha));
+    const commits = await loadActiveSessionCommits(`${LOG_DIR}/${sessionId}`);
     if (commits.length === 0) {
       res.writeHead(404, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ ok: false, error: 'no_commits' }));
       return;
     }
-    commits.sort((a, b) => (a.date < b.date ? 1 : -1));
 
     const reverted = [];
     for (const c of commits) {
@@ -226,23 +220,15 @@ async function handleSessionRollbackRequest(req, res, sessionId) {
       if (c.parents.length >= 2) args.push('-m', '1');
       args.push(c.sha);
       try {
-        await execFileAsync('git', args, { maxBuffer: 4 * 1024 * 1024 });
+        await execFileAsync('git', args, GIT_BUF);
         reverted.push(c.sha);
       } catch (err) {
-        // Capture conflicts BEFORE aborting (abort wipes the index state).
-        let conflicts = [];
-        try {
-          const { stdout: st } = await execFileAsync('git', ['-C', CWD, 'status', '--porcelain']);
-          conflicts = st
-            .split('\n')
-            .filter((l) => /^(UU|AA|DD|AU|UA|DU|UD) /.test(l))
-            .map((l) => l.slice(3));
-        } catch {}
-        try { await execFileAsync('git', ['-C', CWD, 'revert', '--abort']); } catch {}
+        const conflicts = await captureConflictsAndAbort();
         const filesLine = conflicts.length ? `\nConflicting files:\n- ${conflicts.join('\n- ')}` : '';
         const partial = reverted.length ? `\n${reverted.length} commit(s) were reverted before the conflict.` : '';
         const chatMessage = `Rollback stopped — conflict on ${c.sha.slice(0, 7)}.${filesLine}${partial}`;
-        await persistAssistantMessage(sessionId, chatMessage, { subtype: 'rollback' }).catch(() => {});
+        await persistAssistantMessage(sessionId, chatMessage, { subtype: 'rollback' })
+          .catch((e) => console.warn('[rollback] persist failed:', e.message));
         res.writeHead(409, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
           ok: false,
@@ -257,7 +243,8 @@ async function handleSessionRollbackRequest(req, res, sessionId) {
       }
     }
     const chatMessage = `Rollback done — ${reverted.length} commit${reverted.length > 1 ? 's' : ''} reverted.`;
-    await persistAssistantMessage(sessionId, chatMessage, { subtype: 'rollback' }).catch(() => {});
+    await persistAssistantMessage(sessionId, chatMessage, { subtype: 'rollback' })
+      .catch((e) => console.warn('[rollback] persist failed:', e.message));
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ok: true, reverted, chatMessage }));
   } catch (err) {

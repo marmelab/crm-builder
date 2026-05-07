@@ -44,3 +44,5 @@ V2 agentic team :
 * on changeait le nom de la discussion au 2eme message. ça n'a plus lieux d'être
 
 * au hover d'un message je veux voir à quel heur il a été envoyé
+
+* réaliser une démo intéractive pour la team SALES d'ici le 23 juin
