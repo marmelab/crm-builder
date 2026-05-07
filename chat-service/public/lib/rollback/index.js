@@ -29,9 +29,8 @@ export function initRollback({ getSessionId, appendMessage }) {
         return;
       }
 
-      const count = data.commits.length;
       const ok = await openConfirmModal({
-        title: `Rollback ${count} commit${count > 1 ? 's' : ''}?`,
+        title: 'Rollback changes ?',
         body: 'This will revert every change made in this session. If git reports a conflict, the rollback stops.',
         confirmLabel: 'Rollback',
         cancelLabel: 'Cancel',
