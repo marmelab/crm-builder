@@ -14,12 +14,3 @@ export const MIME_TYPES = {
 };
 
 export const ALLOWED_STATES = new Set(['in_progress', 'completed', 'cancelled', 'waiting']);
-
-export const DOCUMENTATOR_OPTS = {
-  sessionsDir: LOG_DIR,
-  lastRunPath: '/app/docs/learnings/runs/last-run.txt',
-  runsDir: '/app/docs/learnings/runs',
-  agentMdPath: `${CLAUDE_HOME}/.claude/agents/documentator.md`,
-  claudeHome: CLAUDE_HOME,
-  cwd: CWD,
-};
