@@ -2,11 +2,10 @@ import { readFile, appendFile, stat } from 'node:fs/promises';
 import { extname, join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { CWD, LOG_DIR, ALLOWED_STATES, MIME_TYPES, UUID_RE, DOCUMENTATOR_OPTS } from './config.js';
+import { CWD, LOG_DIR, ALLOWED_STATES, MIME_TYPES, UUID_RE } from './config.js';
 import { listSessions, getSession, patchSession } from './session-store.js';
 import { runtimes } from './runtime.js';
 import { broadcast } from './ws-bus.js';
-import { runDocumentator } from '../documentator-cron.js';
 
 const execFileAsync = promisify(execFile);
 const GIT_BUF = { maxBuffer: 4 * 1024 * 1024 };
@@ -270,30 +269,6 @@ export function createRequestHandler({ publicDir }) {
     const rollbackMatch = req.url?.match(/^\/api\/sessions\/([0-9a-f-]+)\/rollback$/i);
     if (rollbackMatch && req.method === 'POST') {
       return handleSessionRollbackRequest(req, res, rollbackMatch[1]);
-    }
-
-    // API: trigger a documentator run manually (loopback only — see config.js for opts).
-    if (req.url === '/api/documentator/run' && req.method === 'POST') {
-      const remote = req.socket.remoteAddress || '';
-      const isLoopback =
-        remote === '127.0.0.1' ||
-        remote === '::1' ||
-        remote === '::ffff:127.0.0.1';
-      if (!isLoopback) {
-        res.writeHead(403, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'documentator manual trigger restricted to loopback' }));
-        return;
-      }
-      runDocumentator(DOCUMENTATOR_OPTS)
-        .then((result) => {
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify(result));
-        })
-        .catch((err) => {
-          res.writeHead(500, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: err.message }));
-        });
-      return;
     }
 
     // API: list sessions

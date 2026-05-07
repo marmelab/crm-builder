@@ -1,15 +1,17 @@
 #!/bin/bash
-# PreToolUse / Write|Edit hook. In phase 1, the documentator may only modify
-# /app/docs/learnings/patterns.md. Block any other file. Pass-through for any
-# other agent or for non-documentator claude sessions (no DOCUMENTATOR_RUN env var).
+# PreToolUse / Write|Edit hook. Restricts the documentator's writes to a small
+# set of paths: the ledger, the runtime additions tree, and settings.local.json.
+# All other paths are blocked — the documentator is not allowed to touch
+# application code or to modify the resynced base config under
+# /home/developer/.claude/{agents,skills,hooks,rules,settings.json}.
+# Pass-through for any other agent or for non-documentator claude sessions
+# (no DOCUMENTATOR_RUN env var).
 
 set -euo pipefail
 
 if [ "${DOCUMENTATOR_RUN:-}" != "1" ]; then
   exit 0
 fi
-
-ALLOWED="/app/docs/learnings/patterns.md"
 
 ENVELOPE=$(cat)
 FILE_PATH=$(node -e '
@@ -24,9 +26,15 @@ if [ -z "$FILE_PATH" ]; then
   exit 2
 fi
 
-if [ "$FILE_PATH" != "$ALLOWED" ]; then
-  echo "Write/Edit blocked for documentator: in phase 1 only $ALLOWED may be modified. Attempted: $FILE_PATH" >&2
-  exit 2
-fi
+LEDGER="/app/docs/learnings/patterns.md"
+LOCAL_PREFIX="/home/developer/.claude/local/"
+SETTINGS_LOCAL="/home/developer/.claude/settings.local.json"
 
-exit 0
+if [ "$FILE_PATH" = "$LEDGER" ]; then exit 0; fi
+if [ "$FILE_PATH" = "$SETTINGS_LOCAL" ]; then exit 0; fi
+case "$FILE_PATH" in
+  "$LOCAL_PREFIX"*) exit 0 ;;
+esac
+
+echo "Write/Edit blocked for documentator: $FILE_PATH is outside the allowed set. Allowed: $LEDGER, $SETTINGS_LOCAL, ${LOCAL_PREFIX}**." >&2
+exit 2
