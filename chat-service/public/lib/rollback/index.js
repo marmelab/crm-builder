@@ -31,7 +31,7 @@ export function initRollback({ getSessionId, appendMessage }) {
 
       const ok = await openConfirmModal({
         title: 'Rollback changes ?',
-        body: 'This will revert every change made in this session. If git reports a conflict, the rollback stops.',
+        body: 'This will revert every change made in this session.',
         confirmLabel: 'Rollback',
         cancelLabel: 'Cancel',
       });
