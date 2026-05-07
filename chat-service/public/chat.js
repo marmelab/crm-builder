@@ -595,9 +595,12 @@ stopBtn.addEventListener('click', () => {
 });
 
 // Auto-resize textarea
+const INPUT_MAX_HEIGHT = 120;
 input.addEventListener('input', () => {
   input.style.height = 'auto';
-  input.style.height = Math.min(input.scrollHeight, 100) + 'px';
+  const sh = input.scrollHeight;
+  input.style.height = Math.min(sh, INPUT_MAX_HEIGHT) + 'px';
+  input.style.overflowY = sh > INPUT_MAX_HEIGHT ? 'auto' : 'hidden';
 });
 
 // Submit on Enter (Shift+Enter = newline)
