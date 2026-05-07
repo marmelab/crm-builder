@@ -9,7 +9,11 @@ After all reviews are APPROVED, before SendMessaging the merger.
 
 ## Where
 
-`docs/reflections/TASK-XXX-reflection.md`
+`/app/docs/reflections/TASK-XXX-reflection.md`
+
+This is an **absolute path** outside any worktree — it writes directly into the
+shared volume (`crm-docs`), so the reflection is immediately readable by future
+agents without waiting for a merge, and survives worktree cleanup.
 
 ## Format — KEEP IT SHORT
 

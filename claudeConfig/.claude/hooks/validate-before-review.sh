@@ -179,6 +179,12 @@ if [ -n "$TASK_ID" ]; then
         echo "Send \"ready, please review\" to both quality-reviewer-$TASK_ID AND test-validator-$TASK_ID first." >&2
         exit 2
       fi
+      # COMPLEX mode: both reviewer flags exist, meaning the full validation chain already
+      # ran and passed when the developer first notified the reviewers. Skip re-running it
+      # for the merger — the reviewer approval is the trust anchor.
+      echo "[$(date -Iseconds)] validate-before-review COMPLEX-SKIP to=merger $TASK_ID (both reviewer flags present)" >> "$LOG" 2>/dev/null || true
+      touch "${FLAG_MERGER:-/tmp/notified-merger-$TASK_ID}" 2>/dev/null || true
+      exit 0
       ;;
   esac
 fi

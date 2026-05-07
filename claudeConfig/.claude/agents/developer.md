@@ -47,9 +47,9 @@ Output format: `.claude/rules/agent-output-format.md`.
    - `BLOCKED: …` → `approvals_received = 0`, fix the blocking issues, commit, **re-notify ALL reviewers** (the diff changed). Loop.
 5. **When `approvals_received == 2`** — write reflection:
    - Read `/app/docs/reflections/` for related past reflections.
-   - Write `<WORKTREE_PATH>/docs/reflections/<TASK_ID>-reflection.md` and commit.
+   - Write `/app/docs/reflections/<TASK_ID>-reflection.md` (absolute path — outside the worktree, directly on the shared volume so it survives worktree cleanup and is immediately readable by future agents without a merge).
 6. **Hand off to merger**:
-   - `SendMessage(merger, "ready: TASK-XXX, branch=<BRANCH_NAME>, all approved + reflection committed")`
+   - `SendMessage(merger, "ready: TASK-XXX, branch=<BRANCH_NAME>, all approved")`
    - The first 16 chars of the message MUST be `ready: TASK-XXX` — the merger parses it.
 7. **Stop.** The merger and team-lead handle cleanup.
 
