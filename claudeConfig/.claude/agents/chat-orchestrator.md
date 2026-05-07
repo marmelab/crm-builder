@@ -248,12 +248,14 @@ For COMPLEX.
 
 ### STATE B — DISPATCH + GO
 
-The planner's output is now in your context. Parse it: pick the **first wave** (tickets with `dependencies: []`). Get N (wave size) and the list of TASK-XXX ids + branch_names.
+The planner's output is now in your context. Parse it: pick the **first wave** (tickets with `dependencies: []`). Get the list of TASK-XXX ids + branch_names.
+
+**Wave size cap: N ≤ 5.** If the wave contains more than 5 tickets, take only the first 5 for this pass. After STATE D completes, treat the remaining tickets of this wave as a new pass (re-enter STATE B with the leftover list).
 
 **ONE assistant message. Do exactly this and nothing else:**
 
 1. `TeamCreate({team_name: "tickets"})`
-2. Per-ticket `Agent` dispatches — for each of the N tickets in the wave, dispatch 3 members:
+2. Per-ticket `Agent` dispatches — for each of the N tickets in the wave (max 5), dispatch 3 members:
    - `developer-TASK-XXX`
    - `quality-reviewer-TASK-XXX`
    - `test-validator-TASK-XXX`
@@ -261,7 +263,7 @@ The planner's output is now in your context. Parse it: pick the **first wave** (
 4. `SendMessage(GO)` to each `developer-TASK-XXX` (one message per developer, includes `worktree=/app/worktrees/<SESSION_SHORT_ID>/TASK-XXX, branch=<SESSION_SHORT_ID>/<branch_name>, COUNTERPARTS=...`)
 5. One text line: *"Working on it..."*
 
-Total dispatches: **N developers + 2N reviewers + 1 merger = 3N + 1**.
+Total dispatches: **N developers + 2N reviewers + 1 merger = 3N + 1** (N ≤ 5, so max 16 agents).
 
 **Nothing else. No SendMessage(shutdown_request) here. No other tool calls.**
 
@@ -323,6 +325,7 @@ If planner produced wave 2: restart from STATE A.
 - ❌ Call any tool during STATE C → text-only turns.
 - ❌ Combine STATE B + STATE D in one turn → kills the team before dev can work.
 - ❌ Use STATE S-* for anything beyond a single-file cosmetic change.
+- ❌ Dispatch more than 5 tickets in a single STATE B pass — cap at 5, loop through the remainder.
 - ❌ Write or Edit any file **except** `/app/docs/project-context.json` during SETUP-INTERVIEW. The `Write` / `Edit` tools are only for that one file in that one state.
 - ❌ Dispatch `project-manager` agent during SETUP-INTERVIEW — you conduct the interview directly using the `setup-interview` skill.
 
