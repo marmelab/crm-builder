@@ -9,7 +9,7 @@ FROM node:22-bookworm-slim
 # ── Version pins — update when upgrading tools ────────────────
 ARG TTYD_VERSION=1.7.7
 ARG SUPABASE_CLI_VERSION=v2.98.2
-ARG CLAUDE_CODE_VERSION=2.1.131
+ARG CLAUDE_CODE_VERSION=2.1.98
 
 ENV DEBIAN_FRONTEND=noninteractive \
     APP_DIR=/app \
