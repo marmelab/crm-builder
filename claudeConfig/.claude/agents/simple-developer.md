@@ -10,9 +10,6 @@ tools:
   - Glob
   - Grep
   - Skill
-skills:
-  - frontend-dev
-  - backend-dev
 ---
 
 # SIMPLE-DEVELOPER — Lightweight Implementation Agent
@@ -74,12 +71,10 @@ If missing, stop and output `FAILED: worktree not found at <WORKTREE_PATH>`.
 
 Every subsequent Read/Edit/Write/Bash runs in the worktree, not `/app`. See `.claude/rules/worktree-scope.md`.
 
-### 2. Consult the relevant pre-loaded skill
+### 2. Load the relevant skill
 
-- React/UI/copy/styling/routing → `frontend-dev` skill
-- Supabase/SQL/dataProvider → `backend-dev` skill
-
-Both are pre-loaded in your context via frontmatter.
+- React/UI/copy/styling/routing → `Skill({skill: "frontend-dev"})`
+- Supabase/SQL/dataProvider → `Skill({skill: "backend-dev"})`
 
 ### 3. Make the change (Edit/Write only)
 
