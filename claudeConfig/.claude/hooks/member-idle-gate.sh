@@ -113,6 +113,24 @@ if [ -z "$TASK_ID" ]; then
       echo "[$(date -Iseconds)] member-idle-gate PASS agent=$AGENT task=any (session merger flag: $MERGER_FLAG)" >> "$LOG" 2>/dev/null || true
       exit 0
     fi
+    # SIMPLE flow: orchestrator dispatches merger directly (no SendMessage, no
+    # validate-before-review) so no merger flag is ever written. Detect by
+    # presence of /worktrees/<SESSION_SHORT>/simple in tool_input — SIMPLE
+    # worktrees are /worktrees/<SESSION_SHORT>/simple, COMPLEX ones are
+    # /worktrees/<SESSION_SHORT>/TASK-XXX. Both are session-scoped.
+    IS_SIMPLE=$(node -e "
+try {
+  const i = JSON.parse(process.argv[1] || '{}');
+  const s = JSON.stringify(i.tool_input || {});
+  process.stdout.write(s.includes('/worktrees/${SESSION_SHORT}/simple') ? '1' : '');
+} catch { process.stdout.write(''); }
+" "$STDIN" 2>/dev/null || echo "")
+    if [ -n "$IS_SIMPLE" ]; then
+      SIMPLE_FLAG="/tmp/notified-merger-${SESSION_SHORT}-simple"
+      touch "$SIMPLE_FLAG" 2>/dev/null || true
+      echo "[$(date -Iseconds)] member-idle-gate PASS agent=$AGENT task=simple (SIMPLE flow, wrote $SIMPLE_FLAG)" >> "$LOG" 2>/dev/null || true
+      exit 0
+    fi
   fi
   # No TASK_ID anywhere — block conservatively: reviewers/merger should always
   # have a TASK context; no context means something unexpected is happening.

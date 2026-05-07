@@ -66,13 +66,7 @@ Not in any team. `BRANCH_NAME` and `WORKTREE_PATH` are in your spawn prompt. Run
    ```
    `<type>` = ticket's `type` field (feat / fix / chore). On `CONFLICT`: `git merge --abort`, report failed with conflicting files. Do NOT resolve — that's the developer's job.
 
-4. **Cleanup**
-   ```bash
-   git worktree remove <WORKTREE_PATH> && git branch -d <BRANCH_NAME>
-   ```
-   On worktree-remove failure: `git worktree remove --force <WORKTREE_PATH>`.
-
-5. **Update ticket status** (COMPLEX only — skip in SIMPLE)
+4. **Update ticket status** (COMPLEX only — skip in SIMPLE)
    Use the **Edit tool** (NOT shell):
    ```
    Edit(file_path: "${TICKETS_DIR}/<TASK_ID>.json", old_string: '"status": "pending"', new_string: '"status": "merged"')

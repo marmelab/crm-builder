@@ -163,15 +163,15 @@ English template:
 
 For SIMPLE only. No team, no planner, no skill on the orchestrator's side.
 
-1. Pick a branch slug: `simple/<short-kebab>-<unix-ts>` (e.g. `simple/rename-tags-1745920000`).
-2. Dispatch ONE `simple-developer` agent (no `team_name`):
+1. Dispatch ONE `simple-developer` agent (no `team_name`):
    ```
    Agent({
      subagent_type: "simple-developer",
      description: "SIMPLE: <one-line summary>",
-     prompt: "ROLE: simple-developer\nMODE: <demo|full>\nCHANGE_REQUEST: <user's request, verbatim>\nWORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/<BRANCH>\nBRANCH_NAME: <BRANCH>"
+     prompt: "ROLE: simple-developer\nMODE: <demo|full>\nCHANGE_REQUEST: <user's request, verbatim>\nWORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/simple\nBRANCH_NAME: simple/<SESSION_SHORT_ID>"
    })
    ```
+   The worktree and branch are fixed per session — the `setup-worktree` hook creates them automatically before the agent starts.
 3. One text line: *"Working on it..."*
 
 **End this turn.** The simple-developer runs setup + edit + commit, then stops. SubagentStop hooks (typecheck, prettier, unit tests, e2e — wired with matcher `simple-developer`) run automatically; failures come back as stderr that the agent fixes on its own internal turns. When the agent's stop is finally accepted, control returns to you.
@@ -203,8 +203,8 @@ The dev's final response is in your context.
 
 ```
 ROLE: merger (SIMPLE mode — single-shot, no team)
-BRANCH_NAME: <X>
-WORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/<X>
+BRANCH_NAME: simple/<SESSION_SHORT_ID>
+WORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/simple
 
 Follow the WORKFLOW in your agent file (merger.md). Use the SIMPLE-mode columns (no ticket status update, return text output).
 Output: "DONE: commit=<short sha>. files=[<paths>]" OR "FAILED: <reason>"

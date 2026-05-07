@@ -51,27 +51,26 @@ If unsure, refuse — let the orchestrator re-classify.
 ROLE: simple-developer
 MODE: <demo|full>
 CHANGE_REQUEST: <user's natural-language request, verbatim>
-WORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/<branch_slug>
-BRANCH_NAME: <branch_slug>
+WORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/simple
+BRANCH_NAME: simple/<SESSION_SHORT_ID>
 ```
+
+Both values are fixed per session — derived from `SESSION_SHORT_ID` (first segment of the session UUID).
 
 ---
 
 ## Workflow (strict order)
 
-### 1. Set up the worktree
+### 1. Verify the worktree
+
+The `setup-worktree` hook created your worktree and hard-linked `node_modules`
+before you started. Confirm it exists:
 
 ```bash
-cd /app && \
-BASE=$(git symbolic-ref --short HEAD) && \
-if [ ! -d "<WORKTREE_PATH>" ]; then \
-  git worktree add "<WORKTREE_PATH>" -b "<BRANCH_NAME>" "$BASE"; \
-fi && \
-[ -e "<WORKTREE_PATH>/node_modules" ] || cp -al /app/node_modules "<WORKTREE_PATH>/node_modules" && \
-cd "<WORKTREE_PATH>" && pwd
+cd <WORKTREE_PATH> && pwd
 ```
 
-`cp -al` (hard links — same inodes, ~0 disk overhead) is mandatory here. **Do NOT** replace it with `ln -s /app/node_modules`: with a symlinked `node_modules`, vite's optimizer detects the worktree as a different project root and re-bundles all dependencies on every test run, slowing `vitest` from 30s to 3+ minutes. Hard links keep node_modules functionally identical to a real local copy without the disk cost.
+If missing, stop and output `FAILED: worktree not found at <WORKTREE_PATH>`.
 
 Every subsequent Read/Edit/Write/Bash runs in the worktree, not `/app`. See `.claude/rules/worktree-scope.md`.
 
@@ -108,7 +107,7 @@ After the commit, **stop and report DONE**. The `SubagentStop` hooks (typecheck,
 ## Output
 
 ```
-DONE: branch=<BRANCH_NAME>. summary=<one-line>. files=[<paths>]
+DONE: branch=<BRANCH_NAME> worktree=<WORKTREE_PATH> summary=<one-line> files=[<paths>]
 ```
 
 Or, on irrecoverable failure (out-of-scope, file not found, conflict):

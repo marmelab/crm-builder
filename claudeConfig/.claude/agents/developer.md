@@ -65,26 +65,17 @@ Never cross-ticket: `developer-TASK-Y`, `quality-reviewer-TASK-Y` etc. are off-l
 
 ---
 
-## MANDATORY FIRST ACTION — set up the worktree
+## MANDATORY FIRST ACTION — verify the worktree
 
-Your spawn prompt always contains `WORKTREE_PATH=…` and `BRANCH_NAME=…`. Before
-anything else, run this Bash one-shot:
+The `setup-worktree` hook has already created your worktree and hard-linked
+`node_modules` before you started. Your first action is to confirm it exists:
 
 ```bash
-cd /app && \
-BASE=$(git symbolic-ref --short HEAD) && \
-if [ ! -d "<WORKTREE_PATH>" ]; then \
-  git worktree add "<WORKTREE_PATH>" -b "<BRANCH_NAME>" "$BASE"; \
-fi && \
-[ -e "<WORKTREE_PATH>/node_modules" ] || cp -al /app/node_modules "<WORKTREE_PATH>/node_modules" && \
-cd "<WORKTREE_PATH>" && pwd
+cd <WORKTREE_PATH> && pwd
 ```
 
-`cp -al` (hard links) is required — do NOT use `ln -s /app/node_modules`. A
-symlinked `node_modules` makes vite's optimizer treat the worktree as a
-different project root and re-bundle every dependency on each `vitest` run
-(30s → 3+ min). Hard links keep zero disk overhead while letting vitest's
-cache stay valid.
+If the directory is missing (hook failure), stop immediately and report
+`FAILED: worktree not found at <WORKTREE_PATH>`.
 
 Every subsequent Read / Edit / Write / Bash runs inside the worktree, not in
 `/app`. See `.claude/rules/worktree-scope.md`.

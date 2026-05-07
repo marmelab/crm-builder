@@ -122,7 +122,31 @@
                 ]
             }
         ],
+        "SubagentStart": [
+            {
+                "matcher": "simple-developer|developer",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "/home/developer/.claude/hooks/setup-worktree.sh",
+                        "timeout": 60,
+                        "statusMessage": "Setting up worktree..."
+                    }
+                ]
+            }
+        ],
         "SubagentStop": [
+            {
+                "matcher": "merger",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "/home/developer/.claude/hooks/cleanup-worktree.sh",
+                        "timeout": 30,
+                        "statusMessage": "Cleaning up worktree..."
+                    }
+                ]
+            },
             {
                 "matcher": "simple-developer",
                 "hooks": [
