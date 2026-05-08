@@ -282,7 +282,7 @@ The rule: **once you emit the last `SendMessage(GO)`, stop.** Output the *"Worki
 - Wait for `<teammate-message>` from `merger` starting with `merged TASK-` or containing `merge failed`.
 - Count them. When count == N (tickets dispatched) → STATE D.
 
-**No tool calls, no reads, no agents.**
+**No tool calls, no reads, no agents — except for the resume trigger below.**
 
 **Every turn, emit one short text line — but only if the content would differ from your last visible message.** Never send the same status twice in a row.
 
@@ -294,6 +294,34 @@ When to vary the content:
 **End the turn. Nothing else.**
 
 → When merger report count == N, enter STATE D.
+
+### Resume trigger — user sends "resume" / "continue" (or equivalent) in STATE C
+
+Agents may have died mid-work due to a rate limit. The `tickets` team still exists
+(TeamDelete was never called). Re-use it — no TeamCreate needed.
+
+**ONE assistant message:**
+
+1. For each TASK-XXX in the current wave: `Read("${TICKETS_DIR}/TASK-XXX.json")` and
+   check `status`.
+2. Skip tickets with `status: "merged"` — already done.
+3. For each non-merged ticket, re-dispatch the full trio into the **existing** team:
+   ```
+   Agent({subagent_type: "developer",         name: "developer-TASK-XXX",        team_name: "tickets", model: "opus",   description: "Resume TASK-XXX", prompt: "<same spawn prompt as original + RESUME note>"})
+   Agent({subagent_type: "quality-reviewer",  name: "quality-reviewer-TASK-XXX", team_name: "tickets", model: "sonnet", description: "Resume review TASK-XXX", prompt: "<same spawn prompt>"})
+   Agent({subagent_type: "test-validator",    name: "test-validator-TASK-XXX",   team_name: "tickets", model: "sonnet", description: "Resume validation TASK-XXX", prompt: "<same spawn prompt>"})
+   ```
+4. If any tickets are non-merged, also re-dispatch the shared merger:
+   ```
+   Agent({subagent_type: "merger", name: "merger", team_name: "tickets", model: "haiku", description: "Resume wave merges", prompt: "<same spawn prompt>"})
+   ```
+5. Re-send `GO` to each new developer. Add to the GO message:
+   `RESUME: check the worktree for existing commits and continue from the latest committed state.`
+6. One text line to the user (in their language): *"Resuming — restarting the work that was interrupted."*
+
+**Do not reset the merge count** — merger reports already received still count toward N.
+
+**End this turn. Re-enter normal STATE C.**
 
 ---
 
