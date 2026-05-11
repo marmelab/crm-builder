@@ -29,3 +29,5 @@ V2 agentic team :
 * case 4 : 
 
 * enlever silent-mode-check
+
+* réaliser une démo intéractive pour la team SALES d'ici le 23 juin

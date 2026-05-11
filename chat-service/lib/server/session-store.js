@@ -46,7 +46,9 @@ export function digestLog(logText) {
     if (entry.dir === 'in' && entry.type === 'user_message') {
       timeline.push({ kind: 'message', role: 'user', content: entry.display || entry.content || '', ts: entry.ts });
     } else if (entry.dir === 'out' && entry.type === 'message' && entry.role === 'assistant') {
-      timeline.push({ kind: 'message', role: 'assistant', content: entry.content || '', ts: entry.ts });
+      const item = { kind: 'message', role: 'assistant', content: entry.content || '', ts: entry.ts };
+      if (entry.subtype) item.subtype = entry.subtype;
+      timeline.push(item);
     } else if (entry.dir === 'out' && entry.type === 'debug_raw') {
       if (entry.event?.type === 'result') {
         // usage is per-spawn (one result per claude -p invocation) — sum is correct.

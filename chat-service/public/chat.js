@@ -2,6 +2,7 @@ import { el, formatTokens } from './lib/dom.js';
 import { renderStatsPanel, initStatsRefresh } from './lib/stats/index.js';
 import { initConnection, initDisplay, initHistory, openConfirmModal, initRecentPopup } from './lib/sessions/index.js';
 import { renderInlineMarkdown } from './lib/markdown.js';
+import { initRollback } from './lib/rollback/index.js';
 
 const widget   = document.getElementById('chat-widget');
 const toggle   = document.getElementById('chat-toggle');
@@ -108,6 +109,8 @@ const historyApi = initHistory({
   switchSession: switchSessionAndOpen,
   closeDiscussion,
 });
+
+initRollback({ getSessionId: () => display.getSessionId(), appendMessage });
 
 const connection = initConnection({
   handleWsMessage,
@@ -221,7 +224,7 @@ function handleWsMessage(event) {
     }
     timeline.forEach((it, i) => {
       if (it.kind === 'message') {
-        appendMessage(it.role, it.content, { queued: queuedIdx.has(i) });
+        appendMessage(it.role, it.content, { queued: queuedIdx.has(i), subtype: it.subtype, ts: it.ts });
         return;
       }
       // Debug event — buffer it so a later debug-toggle ON can replay it,
@@ -306,7 +309,7 @@ function handleWsMessage(event) {
     // Keep the working bubble visible — the turn isn't over until a
     // `status: working=false` frame arrives. The bubble's sentinel seq
     // ensures the new message lands above it.
-    appendMessage('assistant', msg.content);
+    appendMessage('assistant', msg.content, { subtype: msg.subtype, ts: msg.ts });
     historyApi.refreshHistory();
   }
 }
@@ -364,15 +367,32 @@ function appendChoices(content, options, seq = ++seqCounter) {
   placeIntoMessages(wrap, seq);
 }
 
+const ROLLBACK_ICON_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h2"/><path d="M16 21h2a2 2 0 0 0 2-2V8"/><path d="m9 15 3-3 3 3"/><path d="M12 12v9"/></svg>';
+
+function formatMessageTime(ts) {
+  const d = ts ? new Date(ts) : new Date();
+  if (isNaN(d.getTime())) return '';
+  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (d.toDateString() === new Date().toDateString()) return time;
+  return `${d.toLocaleDateString([], { day: '2-digit', month: '2-digit' })} ${time}`;
+}
+
 function appendMessage(role, content, seqOrOpts = ++seqCounter) {
   const opts = typeof seqOrOpts === 'object' && seqOrOpts !== null ? seqOrOpts : {};
   const seq = typeof seqOrOpts === 'number' ? seqOrOpts : (opts.seq ?? ++seqCounter);
   const queued = !!opts.queued;
+  const subtype = opts.subtype;
   const el = document.createElement('div');
-  el.className = `msg msg-${role}${queued ? ' msg-queued' : ''}`;
-  // Assistant messages may include markdown; render bold/italic/code.
-  // User messages stay plain text — paranoia about pasted content.
-  if (role === 'assistant') {
+  el.className = `msg msg-${role}${queued ? ' msg-queued' : ''}${subtype ? ' msg-' + subtype : ''}`;
+  if (subtype === 'rollback') {
+    const header = document.createElement('div');
+    header.className = 'msg-rollback-header';
+    header.innerHTML = `${ROLLBACK_ICON_SVG}<span>Rollback</span>`;
+    const body = document.createElement('div');
+    body.className = 'msg-rollback-body';
+    body.textContent = content;
+    el.append(header, body);
+  } else if (role === 'assistant') {
     el.innerHTML = renderInlineMarkdown(content);
   } else {
     el.textContent = content;
@@ -382,6 +402,13 @@ function appendMessage(role, content, seqOrOpts = ++seqCounter) {
     badge.className = 'queued-badge';
     badge.textContent = '⏳ waiting';
     el.appendChild(badge);
+  }
+  const stamp = formatMessageTime(opts.ts);
+  if (stamp) {
+    const time = document.createElement('span');
+    time.className = 'msg-time';
+    time.textContent = stamp;
+    el.appendChild(time);
   }
   placeIntoMessages(el, seq);
 }
@@ -586,9 +613,12 @@ stopBtn.addEventListener('click', () => {
 });
 
 // Auto-resize textarea
+const INPUT_MAX_HEIGHT = 120;
 input.addEventListener('input', () => {
   input.style.height = 'auto';
-  input.style.height = Math.min(input.scrollHeight, 100) + 'px';
+  const sh = input.scrollHeight;
+  input.style.height = Math.min(sh, INPUT_MAX_HEIGHT) + 'px';
+  input.style.overflowY = sh > INPUT_MAX_HEIGHT ? 'auto' : 'hidden';
 });
 
 // Submit on Enter (Shift+Enter = newline)
