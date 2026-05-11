@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help build up up-full down restart logs shell test test-unit test-smoke bench bench-update clean-sessions reset \
+.PHONY: help build up up-full down wipe restart logs shell test test-unit test-smoke bench bench-update clean-sessions reset \
         start demo full stop kill image log tail bash exec tests smoke clean archive reload
 
 help: ## Show this help
@@ -17,6 +17,9 @@ up-full: ## Start the stack in full mode (Supabase, host network)
 
 down: ## Stop and remove containers (volumes preserved)
 	docker compose --profile demo --profile full down
+
+wipe: ## Stop and remove containers AND volumes (wipes atomic-crm checkout, deps, sessions)
+	docker compose --profile demo --profile full down -v
 
 restart: down up ## Restart the demo stack
 
