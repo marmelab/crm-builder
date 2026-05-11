@@ -97,7 +97,26 @@ export function extractPhases(events, agentToolIdToTeam) {
   return [...byTaskId.values()].sort((a, b) => a.startTs.localeCompare(b.startTs));
 }
 
-export function buildOrchestratorPhase(events, agentPhases, startTs, endTs) {
+// Time the user spent idle between turns: sum of (next user_message ts − last
+// assistant message ts) for each reply→question transition. This is genuine
+// human think-time — not model latency — and should be excluded from the
+// "orchestrator working time" metric.
+export function computeUserWaitMs(events) {
+  let waitMs = 0;
+  let lastAssistantTs = null;
+  for (const rec of events) {
+    if (rec.type === 'message' && rec.role === 'assistant') {
+      lastAssistantTs = rec.ts;
+    } else if (rec.type === 'user_message' && lastAssistantTs) {
+      const gap = msBetween(lastAssistantTs, rec.ts);
+      if (gap > 0) waitMs += gap;
+      lastAssistantTs = null;
+    }
+  }
+  return waitMs;
+}
+
+export function buildOrchestratorPhase(events, agentPhases, startTs, endTs, userWaitMs = 0) {
   const totalMs = startTs && endTs ? msBetween(startTs, endTs) : 0;
   const intervals = agentPhases
     .filter((p) => p.startTs && p.endTs)
@@ -128,10 +147,14 @@ export function buildOrchestratorPhase(events, agentPhases, startTs, endTs) {
         + (u.output_tokens || 0);
     }
   }
+  const wallDurationMs = Math.max(0, totalMs - agentCoverageMs);
   return {
     phaseId: 'orchestrator', kind: 'orchestrator', agentType: 'orchestrator',
     description: 'Orchestrator', teamName: null,
-    startTs, endTs, durationMs: Math.max(0, totalMs - agentCoverageMs),
+    startTs, endTs,
+    durationMs: Math.max(0, wallDurationMs - userWaitMs),
+    wallDurationMs,
+    userWaitMs,
     opsCount, tokensTotal, errorsCount: 0, retriesCount: 0, children: [],
   };
 }
