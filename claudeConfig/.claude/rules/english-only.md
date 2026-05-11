@@ -17,13 +17,6 @@ the user's chosen `industry: "boulangerie"` or `entity name: "facture"`
 inside `project-context.json` or fake-data fixtures). Even then, prefer
 English when it doesn't change the semantics.
 
-## Why
-
-Code review, search, AI assistants, and onboarding all assume English. Mixed
-languages cause grep misses, awkward translations, and inconsistent agent
-output (an agent prompt written in French biases the LLM to reply in
-French even when the user is English-speaking).
-
 ## Speaking another language at runtime
 
 Agents that converse with the user (chat-orchestrator, project-manager,
