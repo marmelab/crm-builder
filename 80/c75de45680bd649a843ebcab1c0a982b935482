@@ -1,0 +1,20 @@
+claudeConfig/.claude/settings.json
+  s_a398bb94b54ffc::t_66de73be8ffbbb 8-11
+  s_a398bb94b54ffc::t_086bd087bf0bc0 18
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.4",
+  "base_commit_sha": "80c75de45680bd649a843ebcab1c0a982b935482",
+  "prompts": {},
+  "sessions": {
+    "s_a398bb94b54ffc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "064a09db-feb5-422b-a144-e7b88b90c06a",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Jerome <jerome@marmelab.com>"
+    }
+  }
+}
