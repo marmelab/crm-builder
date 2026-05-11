@@ -223,7 +223,7 @@ function handleWsMessage(event) {
     }
     timeline.forEach((it, i) => {
       if (it.kind === 'message') {
-        appendMessage(it.role, it.content, { queued: queuedIdx.has(i), subtype: it.subtype });
+        appendMessage(it.role, it.content, { queued: queuedIdx.has(i), subtype: it.subtype, ts: it.ts });
         return;
       }
       // Debug event — buffer it so a later debug-toggle ON can replay it,
@@ -308,7 +308,7 @@ function handleWsMessage(event) {
     // Keep the working bubble visible — the turn isn't over until a
     // `status: working=false` frame arrives. The bubble's sentinel seq
     // ensures the new message lands above it.
-    appendMessage('assistant', msg.content, { subtype: msg.subtype });
+    appendMessage('assistant', msg.content, { subtype: msg.subtype, ts: msg.ts });
     historyApi.refreshHistory();
   }
 }
@@ -368,6 +368,14 @@ function appendChoices(content, options, seq = ++seqCounter) {
 
 const ROLLBACK_ICON_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h2"/><path d="M16 21h2a2 2 0 0 0 2-2V8"/><path d="m9 15 3-3 3 3"/><path d="M12 12v9"/></svg>';
 
+function formatMessageTime(ts) {
+  const d = ts ? new Date(ts) : new Date();
+  if (isNaN(d.getTime())) return '';
+  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (d.toDateString() === new Date().toDateString()) return time;
+  return `${d.toLocaleDateString([], { day: '2-digit', month: '2-digit' })} ${time}`;
+}
+
 function appendMessage(role, content, seqOrOpts = ++seqCounter) {
   const opts = typeof seqOrOpts === 'object' && seqOrOpts !== null ? seqOrOpts : {};
   const seq = typeof seqOrOpts === 'number' ? seqOrOpts : (opts.seq ?? ++seqCounter);
@@ -391,6 +399,13 @@ function appendMessage(role, content, seqOrOpts = ++seqCounter) {
     badge.className = 'queued-badge';
     badge.textContent = '⏳ waiting';
     el.appendChild(badge);
+  }
+  const stamp = formatMessageTime(opts.ts);
+  if (stamp) {
+    const time = document.createElement('span');
+    time.className = 'msg-time';
+    time.textContent = stamp;
+    el.appendChild(time);
   }
   placeIntoMessages(el, seq);
 }

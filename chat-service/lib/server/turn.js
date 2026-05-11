@@ -62,7 +62,7 @@ export async function processMessage(runtime, prompt) {
           const isDuplicate = text.trim() === lastAssistantText.trim();
           lastAssistantText = text;
           if (!isDuplicate) {
-            broadcast(runtime, { type: 'message', role: 'assistant', content: text });
+            broadcast(runtime, { type: 'message', role: 'assistant', content: text, ts: new Date().toISOString() });
             runtime.session?.recordMessage('assistant', text).catch(() => {});
           }
         }
@@ -155,11 +155,11 @@ export async function processMessage(runtime, prompt) {
     ]);
     if (runtime.stopping) {
       const stopText = '⏹ Session stopped.';
-      broadcast(runtime, { type: 'message', role: 'assistant', content: stopText });
+      broadcast(runtime, { type: 'message', role: 'assistant', content: stopText, ts: new Date().toISOString() });
       await runtime.session?.recordMessage('assistant', stopText).catch(() => {});
     } else if (exitCode !== 0 || !receivedText || resultError || rateLimit) {
       const errText = friendlyError({ exitCode, stderr: stderrBuf, rateLimit, resultError });
-      broadcast(runtime, { type: 'message', role: 'assistant', content: errText });
+      broadcast(runtime, { type: 'message', role: 'assistant', content: errText, ts: new Date().toISOString() });
       // Await: the finally block below writes meta.json right after; a
       // fire-and-forget here would race with that write and corrupt the file.
       await runtime.session?.recordMessage('assistant', errText).catch(() => {});
@@ -167,7 +167,7 @@ export async function processMessage(runtime, prompt) {
   } catch (err) {
     if (err?.name !== 'AbortError') {
       const errText = "Something went wrong. Want to try again?";
-      broadcast(runtime, { type: 'message', role: 'assistant', content: errText });
+      broadcast(runtime, { type: 'message', role: 'assistant', content: errText, ts: new Date().toISOString() });
       await runtime.session?.recordMessage('assistant', errText).catch(() => {});
     }
   } finally {

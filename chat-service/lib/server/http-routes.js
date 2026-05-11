@@ -16,7 +16,7 @@ const parseCommitLog = (out) => out.split('\n').filter(Boolean).map((line) => {
 });
 
 async function persistAssistantMessage(sessionId, content, { subtype } = {}) {
-  const payload = { type: 'message', role: 'assistant', content };
+  const payload = { type: 'message', role: 'assistant', content, ts: new Date().toISOString() };
   if (subtype) payload.subtype = subtype;
   // Live runtime path — broadcast() handles WS fan-out + logWrite, so every
   // tab connected to this session sees the message immediately.

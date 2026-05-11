@@ -263,6 +263,7 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
 #chat-messages::-webkit-scrollbar-thumb { background: #636366; border-radius: 4px; }
 
 .msg {
+  position: relative;
   max-width: 85%; padding: 11px 15px; border-radius: 14px;
   font-size: 14px; line-height: 1.55; color: #f2f2f7;
   white-space: pre-wrap; word-break: break-word;
@@ -279,6 +280,19 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
   font-size: 10px; font-weight: 600; opacity: .9;
   text-transform: uppercase; letter-spacing: .03em;
 }
+.msg-time {
+  position: absolute;
+  bottom: 6px;
+  font-size: 10px;
+  color: #8e8e93;
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity .15s ease;
+  pointer-events: none;
+}
+.msg-user .msg-time { right: calc(100% + 8px); }
+.msg-assistant .msg-time, .msg-rollback .msg-time { left: calc(100% + 8px); }
+.msg:hover .msg-time { opacity: 1; }
 .msg-assistant {
   align-self: flex-start;
   background: #2c2c2e;
