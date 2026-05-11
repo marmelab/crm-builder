@@ -74,6 +74,16 @@ See `.claude/rules/validation-commands.md`. Focus on what hooks can't check:
 
 ---
 
+## Step 0 — Acceptance criteria checklist (required)
+
+Read every item in `acceptance_criteria` from the ticket JSON. For each one:
+- **Behavior-verifiable** (requires runtime rendering — visual output, reachability, state transitions): verify in Steps 1–2, mark `[PASS]` or `[FAIL]`.
+- **Code-verifiable** (source structure — types, routes, props, file presence): mark `[→ qr]`, skip.
+
+Any `[FAIL]` → RED. Omitting a criterion from the list is itself a bug.
+
+---
+
 ## Step 1 — Integration check (read-only, required)
 
 Router / App registration:
@@ -93,11 +103,18 @@ Any failure → RED or blocking issue.
 
 ---
 
-## Step 2 — Optional Playwright screenshots (skip if auth required)
+## Step 2 — Playwright screenshots
 
-Only if the feature is reachable **without authentication**, take headless chromium screenshots to confirm rendering + locale. Routes behind login can't be screenshotted in this sandbox — skip and say so.
+**Skip entirely** if no acceptance criterion is behavior-verifiable. Takes 5–10s — don't run it for purely structural tickets.
 
-Do NOT run `npx playwright install --with-deps` (heavy network + sudo).
+**Run when** at least one behavior-verifiable criterion exists and the route is reachable without auth. Do NOT run `npx playwright install --with-deps`.
+
+Capture what the criterion requires — no more. Examples of minimal targeted shots:
+- A criterion about a label or title: screenshot the relevant page, read the text in the image.
+- A criterion about visual appearance in dark mode: force dark class, screenshot the relevant component, check legibility of text on its background and at hover state.
+- A criterion about a feature being present: navigate to its route, screenshot to confirm it renders.
+
+Read each screenshot you take. Legibility failure (text invisible on its background in any theme or interaction state) → RED.
 
 ---
 
@@ -113,11 +130,13 @@ Execution is the `run-e2e-tests.sh` hook's job (full mode only). You only verify
 
 | Condition | Verdict |
 |---|---|
+| Any `[FAIL]` in acceptance criteria checklist (Step 0) | RED |
 | Integration missing (Step 1) | RED |
+| Contrast / legibility failure in screenshots (Step 2) | RED |
 | All steps clean | GREEN |
-| Steps 1 + 3 clean, Step 2 skipped (auth/no display) | GREEN_WITH_SANDBOX_LIMITATIONS |
+| Steps 0 + 1 + 3 clean, Step 2 skipped (auth/no display) | GREEN_WITH_SANDBOX_LIMITATIONS |
 
-`GREEN_WITH_SANDBOX_LIMITATIONS` is normal when screenshots aren't feasible — team-lead treats it as approval.
+`GREEN_WITH_SANDBOX_LIMITATIONS` is normal when screenshots aren't feasible — team-lead treats it as approval. It must NOT be used when the ticket has visual acceptance criteria that require screenshot verification.
 
 Typecheck/unit/e2e failures are caught by hooks before you run. If DEVELOPER reached you, those passed. Don't include them in your verdict.
 

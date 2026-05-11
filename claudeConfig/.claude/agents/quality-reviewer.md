@@ -74,9 +74,20 @@ Run `npm audit --audit-level=high` ONLY if `package.json` / `package-lock.json` 
 ## Part A — Code review
 
 ### A.1 Spec compliance (BLOCKING)
-- All acceptance criteria from `${TICKETS_DIR}/TASK-XXX.json` covered
+
+Read every item in `acceptance_criteria` from the ticket JSON. For each one:
+- **Code-verifiable** (source confirms it — prop present, file deleted, type defined, variable set): verify now, mark `[PASS]` or `[FAIL]`.
+- **Behavior-verifiable** (requires runtime rendering to confirm): mark `[→ tv]` and skip — this is test-validator's responsibility.
+
+Any `[FAIL]` → BLOCKED. Omitting a criterion from the list is itself a bug.
+
 - Implementation stays within ticket scope
 - Non-functional requirements addressed
+
+### Visual theming (BLOCKING when diff touches CSS / theme / colors)
+
+- Grep for hardcoded color literals — they bypass the theme system and break contrast in at least one mode.
+- Verify interactive states (hover, focus, disabled) use theme variables, not hardcoded values. A hardcoded foreground color on a themed background will be invisible in the opposite color mode.
 
 ### A.2 Reuse (BLOCKING)
 - Reuse registry from ARCHITECT respected

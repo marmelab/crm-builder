@@ -286,10 +286,16 @@ The rule: **once you emit the last `SendMessage(GO)`, stop.** Output the *"Worki
 
 **Every turn, emit one short text line — but only if the content would differ from your last visible message.** Never send the same status twice in a row.
 
-When to vary the content:
-- Merger reports a completed or failed ticket → note the milestone ("Step 1 of 2 done, continuing..." / "One step hit an issue, wrapping up...").
-- A meaningful phase change is visible (e.g., reviewer approved, developer fixing a type error) → mention it briefly.
-- Nothing new to report → stay silent (output nothing) rather than repeat yourself.
+Translate every internal event into a business milestone. Never expose what happened internally — only what it means for the user's CRM.
+
+| Internal event | ✅ Say | ❌ Never say |
+|---|---|---|
+| Merger merged TASK-003 | "Sessions feature done — moving to the next step." | "TASK-003 merged." |
+| Developer rebasing | "Synchronising changes, almost there." | "Rebase conflict on branch f29497e3/TASK-001." |
+| Reviewer BLOCKED | "Fixing a quality issue before continuing." | "quality-reviewer-TASK-001 blocked the merge." |
+| Agent stuck / timeout | "One step is taking longer than expected — still working on it." | "developer-TASK-001 is stuck in a loop." |
+| Merge failed internally | "Hit a snag — sorting it out." | "Merge conflict in types.ts lines 113, 120." |
+| Nothing new | *(silence — output nothing)* | "Working on it..." (repeated) |
 
 **End the turn. Nothing else.**
 
@@ -337,16 +343,25 @@ Agents may have died mid-work due to a rate limit. The `tickets` team still exis
 
 **End this turn.**
 
-On next turn, runtime delivers `shutdown_approved`. Then:
-1. `TeamDelete({})`
+On the **first** turn where `shutdown_approved` arrives (or after a 60s timeout):
+1. `TeamDelete({})`  — call it **once**. If it fails because the team is already gone, ignore the error.
 2. Reply to user with one line per ticket (success or failure).
+3. Enter STATE DONE.
 
-If planner produced wave 2: restart from STATE A.
+### STATE DONE — terminal
+
+Once `TeamDelete` has been called, you are in STATE DONE. **Do not call `TeamDelete` again.**
+
+Any further incoming messages (late `shutdown_approved`, residual agent notifications) are silently ignored — output nothing, call no tools.
+
+If planner produced wave 2: restart from STATE A (do not enter STATE DONE yet).
 
 ---
 
 ## NEVER DO
 
+- ❌ Call `TeamDelete` more than once per wave — the team may already be gone; a second call starts the shutdown loop.
+- ❌ Let any SendMessage content leak into user-visible text. Your coordination messages to agents are internal — the user never sees them. If you need to tell a developer to rebase, that goes in a SendMessage, not in the assistant text turn.
 - ❌ `git merge`, `git checkout master/main`, `git pull`, `git worktree remove` from your own Bash — only the merger does this.
 - ✅ Exception: during SETUP-INTERVIEW, you may run `cd /app && git add docs/project-context.json && git commit -m "chore(setup): …"` on main. This is the only git write operation you are allowed.
 - ❌ Merge yourself if merger fails or doesn't report → report failure, stop.
