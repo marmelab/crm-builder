@@ -152,6 +152,11 @@ export function assignHookExecsToPhases(events, phases, hookAggregates) {
   }
   for (const list of devPhasesByWorktree.values()) {
     list.sort((a, b) => (a.startTs || '').localeCompare(b.startTs || ''));
+    // Interrupted phases (endTs=null) would match [startTs, Infinity] and swallow
+    // all hooks from later resume iterations. Cap them at the next phase's startTs.
+    for (let i = 0; i < list.length - 1; i++) {
+      if (!list[i].endTs) list[i].effectiveEnd = list[i + 1].startTs;
+    }
   }
 
   // Find the developer phase whose time window contains hookTs. When the
@@ -166,7 +171,7 @@ export function assignHookExecsToPhases(events, phases, hookAggregates) {
       if (!Number.isNaN(t)) {
         for (const dp of devPhases) {
           const s = dp.startTs ? new Date(dp.startTs).getTime() : -Infinity;
-          const e = dp.endTs ? new Date(dp.endTs).getTime() : Infinity;
+          const e = (dp.endTs ?? dp.effectiveEnd) ? new Date(dp.endTs ?? dp.effectiveEnd).getTime() : Infinity;
           if (t >= s && t <= e) return dp.phaseId;
         }
         // Hook timestamp falls in a gap between runs — pick the nearest phase.
