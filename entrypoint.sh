@@ -272,6 +272,27 @@ else
   SUPERVISOR_CONF=/etc/supervisor/conf.d/full.conf
 fi
 
+# Commit the App.tsx variant so `git reset --hard HEAD` in the merger restores
+# the correct data-provider wiring instead of the upstream stub. Same pattern
+# as the CLAUDE.md commit above — idempotent, no-op when content already matches.
+if [ -d /app/.git ]; then
+  su developer -c '
+    set -e
+    cd /app
+    BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null || true)
+    if [ -z "$BRANCH" ]; then
+      exit 0  # detached HEAD or mid-rebase — skip
+    fi
+    if git diff --quiet HEAD -- src/App.tsx 2>/dev/null; then
+      exit 0  # already up to date
+    fi
+    git add src/App.tsx
+    git -c user.name="Atomic CRM Builder" \
+        -c user.email="builder@atomic-crm.local" \
+        commit -m "chore: pin App.tsx to data-provider variant" --quiet
+  ' || echo -e "${YELLOW}Could not commit App.tsx (non-fatal)${NC}"
+fi
+
 # ── URL summary ───────────────────────────────────────────────
 echo ""
 echo -e "  ${BLUE}🌐  CRM              →  http://localhost:5173${NC}"
