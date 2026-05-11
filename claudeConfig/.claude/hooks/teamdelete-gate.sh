@@ -1,16 +1,17 @@
 #!/bin/bash
 # PreToolUse hook for TeamDelete tool.
 #
-# Blocks TeamDelete if any non-lead member has not been gracefully shut down.
-# Replaces the bare runtime error ("Use requestShutdown to terminate teammates
-# first") with explicit guidance pointing to the agent-team skill's Phase 3
-# teardown protocol — preventing the lead from killing in-progress work.
+# Two guards, checked in order:
 #
-# State model (see agent-team skill Phase 3):
-#   A member is ready for cleanup iff team-lead's inbox has a `shutdown_approved`
-#   message from that member with `read: true`. read:true means the lead consumed
-#   the <teammate-message> block in the previous user turn — i.e. it actually
-#   yielded the turn between SendMessage(shutdown_request) and TeamDelete.
+# 1. Circuit-breaker: if PostToolUse already flagged that the last TeamDelete
+#    found no team ("No team name found, nothing to clean up"), block immediately
+#    with a STATE DONE message. This prevents the orchestrator from looping in
+#    STATE DONE after all waves are complete.
+#    Flag file: /tmp/teamdelete-empty-<session_hash> (written by teamdelete-cleanup.sh)
+#    Cleared when a real team deletion succeeds (for multi-wave sessions).
+#
+# 2. Member shutdown check: blocks TeamDelete if any non-lead member has not
+#    been gracefully shut down. Points to the agent-team skill Phase 3 protocol.
 #
 # Behavior:
 #   - exit 0 → allow TeamDelete
@@ -47,6 +48,21 @@ try {
 TEAM_NAME=$(echo "$INPUT_PARSED" | node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(0)).teamName || "")' 2>/dev/null)
 SESSION_ID=$(echo "$INPUT_PARSED" | node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(0)).sessionId || "")' 2>/dev/null)
 
+# Guard 1 — circuit-breaker: block if the previous TeamDelete already found no team.
+if [ -n "$SESSION_ID" ]; then
+  SESSION_HASH=$(echo -n "$SESSION_ID" | sha1sum | cut -c1-16)
+  EMPTY_FLAG="/tmp/teamdelete-empty-${SESSION_HASH}"
+  if [ -f "$EMPTY_FLAG" ]; then
+    hook_log "teamdelete-gate BLOCK circuit-breaker session_hash=${SESSION_HASH}"
+    {
+      echo "TeamDelete blocked: the previous call already returned 'no team found'."
+      echo "You are in STATE DONE — do not call TeamDelete again."
+      echo "The session's work is complete. Report done to the user and stop."
+    } >&2
+    exit 2
+  fi
+fi
+
 TEAMS_DIR="${HOME:-/home/developer}/.claude/teams"
 [ -d "$TEAMS_DIR" ] || exit 0
 
@@ -68,7 +84,9 @@ try {
     fi
   done)
   count=$(printf '%s\n' "$matches" | grep -c . || true)
-  # 0 → no team for this session, runtime will respond.
+  # 0 → no team for this session; guard 1 (circuit-breaker) handles the loop
+  #     case. Here we just allow — runtime will return "nothing to clean up"
+  #     and the PostToolUse hook will set the flag for the NEXT call.
   # 2+ → ambiguous, runtime will respond.
   # 1 → use it.
   if [ "$count" != "1" ]; then exit 0; fi
