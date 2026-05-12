@@ -90,11 +90,74 @@ export function tokenBreakdownText(breakdown, opts = {}) {
 // Wrap a label element with a CSS-styled hover tooltip carrying the token
 // breakdown. The returned `<span class="tk-host">` displays `labelEl` and
 // reveals a `.tk-tip` child on hover. CSS in chat.css does the heavy lifting.
+// `tipClass` lets callers add `.tk-tip-above` when the host sits at the
+// bottom of the viewport (e.g. the inline ticker).
 export function withBreakdownTooltip(labelText, breakdown, opts = {}) {
   const host = el('span', { className: 'tk-host' }, labelText);
   if (!breakdown) return host;
-  const tip = el('span', { className: 'tk-tip' });
+  const tip = el('span', { className: opts.tipClass || 'tk-tip' });
   tip.textContent = tokenBreakdownText(breakdown, opts);
+  host.appendChild(tip);
+  return host;
+}
+
+// Strip `claude-` prefix and trailing date stamp for compact table headers
+// (`claude-haiku-4-5-20251001` → `haiku-4-5`).
+function shortModel(name) {
+  return String(name || '?').replace(/^claude-/, '').replace(/-\d{8}$/, '');
+}
+
+function fmtN(n) { return Number(n || 0).toLocaleString('en-US'); }
+function fmtUsd(n, p = 4) { return `$${Number(n || 0).toFixed(p)}`; }
+
+// Build a monospace, right-aligned table mapping models → token breakdown +
+// approximate per-model cost. `costTotal` is the SDK-reported authoritative
+// total displayed at the bottom (the per-model figures are best-effort and
+// may not sum to it exactly — pricing tables drift).
+export function tokensByModelText(rows, costTotal) {
+  if (!rows || rows.length === 0) return '(no per-model data yet)';
+  const headers = ['model', 'input', 'cache-cr', 'output', 'cache-rd', 'cost'];
+  const data = rows.map((r) => [
+    shortModel(r.model),
+    fmtN(r.breakdown?.input),
+    fmtN(r.breakdown?.cacheCreate),
+    fmtN(r.breakdown?.output),
+    fmtN(r.breakdown?.cacheRead),
+    fmtUsd(r.costUsd, 4),
+  ]);
+  // Totals row (sum each column except model).
+  const sums = [0, 0, 0, 0, 0];
+  for (const r of rows) {
+    sums[0] += r.breakdown?.input       || 0;
+    sums[1] += r.breakdown?.cacheCreate || 0;
+    sums[2] += r.breakdown?.output      || 0;
+    sums[3] += r.breakdown?.cacheRead   || 0;
+    sums[4] += r.costUsd                || 0;
+  }
+  const totalRow = ['total', fmtN(sums[0]), fmtN(sums[1]), fmtN(sums[2]), fmtN(sums[3]), fmtUsd(sums[4], 4)];
+  // Column widths: max of header + all cells.
+  const cols = headers.map((h, i) => {
+    const cells = [h, ...data.map((row) => row[i]), totalRow[i]];
+    return Math.max(...cells.map((s) => s.length));
+  });
+  // First column left-aligned; rest right-aligned (numbers + money).
+  const fmtRow = (row) => row.map((v, i) =>
+    i === 0 ? v.padEnd(cols[i]) : v.padStart(cols[i])).join('  ');
+  const sep = '─'.repeat(cols.reduce((a, b) => a + b, 0) + (cols.length - 1) * 2);
+  const lines = [fmtRow(headers), sep, ...data.map(fmtRow), sep, fmtRow(totalRow)];
+  if (typeof costTotal === 'number' && Math.abs(costTotal - sums[4]) > 0.01) {
+    lines.push('');
+    const sdkLabel = 'SDK reported total';
+    lines.push(`${sdkLabel.padEnd(cols[0] + 2 + cols[1] + 2 + cols[2] + 2 + cols[3] + 2 + cols[4])}  ${fmtUsd(costTotal, 4).padStart(cols[5])}`);
+  }
+  return lines.join('\n');
+}
+
+// Returns a `.tk-host` span carrying the cost-by-model table on hover.
+export function withCostTooltip(labelText, rows, costTotal, opts = {}) {
+  const host = el('span', { className: 'tk-host' }, labelText);
+  const tip = el('span', { className: opts.tipClass || 'tk-tip' });
+  tip.textContent = tokensByModelText(rows || [], costTotal);
   host.appendChild(tip);
   return host;
 }

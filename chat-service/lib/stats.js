@@ -168,6 +168,7 @@ export async function aggregateSession({ sessionLogPath, hooksLogPath, sessionId
       opsCount: s.opsCount,
       tokensTotal: s.tokensTotal,
       tokensBreakdown: s.tokensBreakdown,
+      tokensByModel: s.tokensByModel,
       costUsd: s.costUsd,
       errorsCount: errors.length,
       retriesCount: retries.length,

@@ -1,4 +1,6 @@
-import { el, formatTokens, tokenBreakdownText } from './lib/dom.js';
+import {
+  el, formatTokens, tokenBreakdownText, tokensByModelText,
+} from './lib/dom.js';
 import { renderStatsPanel, initStatsRefresh } from './lib/stats/index.js';
 import { initConnection, initDisplay, initHistory, openConfirmModal, initRecentPopup } from './lib/sessions/index.js';
 import { renderInlineMarkdown } from './lib/markdown.js';
@@ -287,25 +289,30 @@ function handleWsMessage(event) {
     const agents = msg.activeAgents || 0;
     const agentsPart = agents > 0 ? `🤖 ${agents} · ` : '';
     const total = (typeof msg.tokensTotal === 'number') ? msg.tokensTotal : msg.tokensUsed;
-    // CSS-styled hover tooltip: monospace + right-aligned numbers via the
-    // `.tk-host` / `.tk-tip` pair (chat.css). Native `title=` is sans-serif
-    // and can't align columns reliably.
+    // CSS-styled hover tooltips: tokens host shows the 4-way breakdown,
+    // cost host shows the per-model table. Both flip UPWARD (`.tk-tip-above`)
+    // because the ticker sits at the bottom of the chat panel.
     stats.replaceChildren();
     stats.removeAttribute('title');
-    const label = `${agentsPart}${formatTokens(total)} tokens · $${msg.costUsd.toFixed(3)}`;
+    if (agentsPart) stats.appendChild(document.createTextNode(agentsPart));
+
+    const tokensHost = el('span', { className: 'tk-host' }, `${formatTokens(total)} tokens`);
     if (msg.tokensBreakdown) {
-      const host = el('span', { className: 'tk-host' }, label);
-      const tip = el('span', { className: 'tk-tip' });
-      tip.textContent = tokenBreakdownText(msg.tokensBreakdown, {
-        totalLabel: 'total',
-        costUsd: msg.costUsd,
-        costPrecision: 4,
-      });
-      host.appendChild(tip);
-      stats.appendChild(host);
-    } else {
-      stats.textContent = label;
+      const tip = el('span', { className: 'tk-tip tk-tip-above' });
+      tip.textContent = tokenBreakdownText(msg.tokensBreakdown, { totalLabel: 'total' });
+      tokensHost.appendChild(tip);
     }
+    stats.appendChild(tokensHost);
+    stats.appendChild(document.createTextNode(' · '));
+
+    const costHost = el('span', { className: 'tk-host' }, `$${msg.costUsd.toFixed(3)}`);
+    if (msg.tokensByModel && msg.tokensByModel.length > 0) {
+      const tip = el('span', { className: 'tk-tip tk-tip-above' });
+      tip.textContent = tokensByModelText(msg.tokensByModel, msg.costUsd);
+      costHost.appendChild(tip);
+    }
+    stats.appendChild(costHost);
+
     if (statsMode) statsRefresh.schedule();
     return;
   }

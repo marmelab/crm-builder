@@ -42,6 +42,14 @@ export function createRuntime(session) {
       // tokensBreakdownCurrentSpawn = latest snapshot from this spawn's
       // modelUsage (cumulative-within-spawn → replace, not add).
       tokensBreakdownCurrentSpawn: emptyBreakdown(),
+      // Per-model committed totals + current spawn snapshot. Drives the
+      // cost-by-model tooltip in the live ticker.
+      tokensByModel: session.stats?.tokensByModel ? session.stats.tokensByModel.map((row) => ({
+        model: row.model,
+        breakdown: { ...row.breakdown },
+        costUsd: row.costUsd,
+      })) : [],
+      tokensByModelCurrentSpawn: new Map(),
       // costUsd = committed cost from finished spawns
       costUsd: session.stats?.costUsd || 0,
       // costUsdCurrentSpawn = cumulative total_cost_usd from the in-progress spawn

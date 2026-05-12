@@ -86,20 +86,23 @@ function renderPhaseRow(phase, relLabel) {
   }
   // Tokens column: visible label is the grand total (input + cache_create +
   // output + cache_read). Hovering reveals the right-aligned 4-way breakdown
-  // (monospace CSS tooltip, see chat.css `.tk-tip`). Phases without per-
-  // component data (local_agent, only task_notification.usage.total_tokens)
-  // display the single number with no breakdown tip.
+  // when per-component data is available. local_agent phases (planner,
+  // simple-developer) only get `task_notification.usage.total_tokens` — no
+  // breakdown — so they fall back to `phase.tokensTotal` for the headline
+  // and skip the tooltip. Without that fallback they used to render "0 tok".
   const bk = phase.tokensBreakdown;
-  const grandTokens = bk
+  const bkSum = bk
     ? (bk.input || 0) + (bk.cacheCreate || 0) + (bk.output || 0) + (bk.cacheRead || 0)
-    : (phase.tokensTotal || 0);
+    : 0;
+  const hasBreakdown = bkSum > 0;
+  const grandTokens = hasBreakdown ? bkSum : (phase.tokensTotal || 0);
   const statsHead = `${activeFmt} · ${phase.opsCount} ops · ${formatTokens(grandTokens)} tok`;
   const stats = el('span', {
     className: 'phase-stats tk-host',
     title:
       `active ${activeFmt} · wall ${formatDuration(phase.wallDurationMs ?? phase.durationMs ?? 0)} · ${phase.opsCount} ops${orchHint}`,
   }, statsHead);
-  if (bk) {
+  if (hasBreakdown) {
     const tip = el('span', { className: 'tk-tip' });
     tip.textContent = tokenBreakdownText(bk, { totalLabel: 'total' });
     stats.appendChild(tip);

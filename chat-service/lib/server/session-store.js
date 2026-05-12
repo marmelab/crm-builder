@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { LOG_DIR, UUID_RE, ALLOWED_STATES } from './config.js';
 import {
   emptyBreakdown, addBreakdown, breakdownFromModelUsage, breakdownFromUsage,
+  costFromBreakdown,
 } from '../stats/io.js';
 
 // ─── Session persistence ──────────────────────────────────────
@@ -33,6 +34,11 @@ export function digestLog(logText) {
   let tokensUsed = 0;
   let costUsd = 0;
   let tokensBreakdown = emptyBreakdown();
+  // Per-model accumulator: map<model, breakdown>. modelUsage is cumulative
+  // within a spawn → keep the current snapshot, commit the latest into the
+  // cross-spawn totals when the spawn ends.
+  const tokensByModelMap = new Map();
+  let currentSpawnByModel = new Map();
   // Spawn boundaries: every `user_message` in the log starts a new `claude -p`
   // (chat-service spawns one CLI process per user turn). We commit the prior
   // spawn's cumulative cost/tokens on each user_message instead of relying on
@@ -49,12 +55,20 @@ export function digestLog(logText) {
     costUsd += currentSpawnMax;
     if (currentSpawnSawModelUsage) {
       tokensBreakdown = addBreakdown(tokensBreakdown, currentSpawnBreakdown);
+      for (const [model, mb] of currentSpawnByModel) {
+        const prev = tokensByModelMap.get(model) || { breakdown: emptyBreakdown(), costUsd: 0 };
+        tokensByModelMap.set(model, {
+          breakdown: addBreakdown(prev.breakdown, mb.breakdown),
+          costUsd: prev.costUsd + (mb.costUsd || 0),
+        });
+      }
     } else {
       tokensBreakdown = addBreakdown(tokensBreakdown, currentSpawnFallback);
     }
     currentSpawnMax = 0;
     currentSpawnBreakdown = emptyBreakdown();
     currentSpawnFallback = emptyBreakdown();
+    currentSpawnByModel = new Map();
     currentSpawnSawModelUsage = false;
   };
 
@@ -90,6 +104,20 @@ export function digestLog(logText) {
         currentSpawnMax = Math.max(currentSpawnMax, c);
         if (entry.event.modelUsage && Object.keys(entry.event.modelUsage).length > 0) {
           currentSpawnBreakdown = breakdownFromModelUsage(entry.event.modelUsage);
+          // Replace per-model snapshot (cumulative-within-spawn). Capture
+          // both the token breakdown AND the SDK's authoritative costUSD.
+          currentSpawnByModel = new Map();
+          for (const [model, mu] of Object.entries(entry.event.modelUsage)) {
+            currentSpawnByModel.set(model, {
+              breakdown: {
+                input:       mu?.inputTokens               || 0,
+                cacheCreate: mu?.cacheCreationInputTokens  || 0,
+                output:      mu?.outputTokens              || 0,
+                cacheRead:   mu?.cacheReadInputTokens      || 0,
+              },
+              costUsd: typeof mu?.costUSD === 'number' ? mu.costUSD : null,
+            });
+          }
           currentSpawnSawModelUsage = true;
           sawModelUsage = true;
         }
@@ -125,7 +153,12 @@ export function digestLog(logText) {
       else recentDebug.push({ type: 'debug', tool: it.tool, input: it.input, agent: it.agent });
     }
   }
-  return { messages, recentDebug, timeline: cleanTimeline, stats: { tokensUsed, tokensBreakdown, costUsd } };
+  const tokensByModel = [...tokensByModelMap].map(([model, v]) => ({
+    model,
+    breakdown: v.breakdown,
+    costUsd: v.costUsd != null ? v.costUsd : costFromBreakdown(model, v.breakdown),
+  })).sort((a, b) => b.costUsd - a.costUsd);
+  return { messages, recentDebug, timeline: cleanTimeline, stats: { tokensUsed, tokensBreakdown, tokensByModel, costUsd } };
 }
 
 export async function readDigest(id) {
@@ -133,7 +166,7 @@ export async function readDigest(id) {
     const raw = await readFile(`${LOG_DIR}/${id}/log.jsonl`, 'utf8');
     return digestLog(raw);
   } catch {
-    return { messages: [], recentDebug: [], timeline: [], stats: { tokensUsed: 0, tokensBreakdown: emptyBreakdown(), costUsd: 0 } };
+    return { messages: [], recentDebug: [], timeline: [], stats: { tokensUsed: 0, tokensBreakdown: emptyBreakdown(), tokensByModel: [], costUsd: 0 } };
   }
 }
 
@@ -149,7 +182,7 @@ export async function openSession(requestedId) {
   let messages = [];
   let recentDebug = [];
   let timeline = [];
-  let stats = { tokensUsed: 0, tokensBreakdown: emptyBreakdown(), costUsd: 0 };
+  let stats = { tokensUsed: 0, tokensBreakdown: emptyBreakdown(), tokensByModel: [], costUsd: 0 };
 
   if (id) {
     try {

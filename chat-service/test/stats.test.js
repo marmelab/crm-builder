@@ -462,6 +462,38 @@ test('computeSummary: user_message events mark spawn boundaries (regression: cos
   assert.equal(tokensTotal, 622);
 });
 
+test('computeSummary: tokensByModel sums per-model costUSD across spawns (SDK authoritative)', () => {
+  // modelUsage[m].costUSD is the per-model cost the SDK has already computed.
+  // Their sum within a result event equals total_cost_usd; across spawns, the
+  // per-model committed costs should sum to summary.costUsd.
+  const r = (ts, cost, modelUsage) => ({
+    type: 'debug_raw', ts,
+    event: { type: 'result', total_cost_usd: cost, modelUsage },
+  });
+  const um = (ts) => ({ type: 'user_message', ts, content: 'x' });
+  const events = [
+    um('2026-05-12T10:00:00Z'),
+    r('2026-05-12T10:00:30Z', 0.50, {
+      'claude-sonnet-4-6': { inputTokens: 100, outputTokens: 50, costUSD: 0.30 },
+      'claude-opus-4-6':   { inputTokens: 10,  outputTokens: 5,  costUSD: 0.20 },
+    }),
+    um('2026-05-12T10:01:00Z'),
+    r('2026-05-12T10:01:30Z', 0.10, {
+      'claude-sonnet-4-6': { inputTokens: 20, outputTokens: 10, costUSD: 0.10 },
+    }),
+  ];
+  const { costUsd, tokensByModel } = computeSummary(events);
+  assert.ok(Math.abs(costUsd - 0.60) < 1e-9);
+  const sumPerModel = tokensByModel.reduce((s, r) => s + r.costUsd, 0);
+  assert.ok(Math.abs(sumPerModel - costUsd) < 1e-9,
+    `per-model sum $${sumPerModel} should equal total $${costUsd}`);
+  // Sonnet got two spawns (0.30 + 0.10), Opus got one (0.20).
+  const sonnet = tokensByModel.find((r) => r.model === 'claude-sonnet-4-6');
+  const opus   = tokensByModel.find((r) => r.model === 'claude-opus-4-6');
+  assert.ok(Math.abs(sonnet.costUsd - 0.40) < 1e-9);
+  assert.ok(Math.abs(opus.costUsd - 0.20) < 1e-9);
+});
+
 test('computeSummary: cost-decrease fallback still works when no user_message events present (legacy fixtures)', () => {
   // Synthetic event list (no user_message markers) — the multi-spawn test
   // higher up depends on this fallback path. Re-asserting here so the dual

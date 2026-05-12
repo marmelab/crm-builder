@@ -105,11 +105,68 @@ export function spawnBoundaryTimestamps(events) {
   return out;
 }
 
+// Per-million-tokens USD rates by model. Used to derive an approximate
+// per-model cost breakdown from `modelUsage`. The SDK's `total_cost_usd` is
+// always the authoritative total; these rates exist only to attribute that
+// total across models for the cost tooltip. Numbers track Anthropic's current
+// published standard pricing — they may drift; the derived per-model figures
+// are best-effort and may not sum to the SDK total to the penny.
+export const MODEL_RATES = {
+  'claude-opus-4-6':           { input: 15,  cacheCreate: 18.75, cacheRead: 1.5,  output: 75 },
+  'claude-opus-4-5':           { input: 15,  cacheCreate: 18.75, cacheRead: 1.5,  output: 75 },
+  'claude-sonnet-4-6':         { input: 3,   cacheCreate: 3.75,  cacheRead: 0.3,  output: 15 },
+  'claude-sonnet-4-5':         { input: 3,   cacheCreate: 3.75,  cacheRead: 0.3,  output: 15 },
+  'claude-haiku-4-5-20251001': { input: 1,   cacheCreate: 1.25,  cacheRead: 0.1,  output: 5 },
+  'claude-haiku-4-5':          { input: 1,   cacheCreate: 1.25,  cacheRead: 0.1,  output: 5 },
+};
+
+// Short label for the cost-tooltip header. Strips the `claude-` prefix and
+// any trailing date stamp so `claude-haiku-4-5-20251001` reads `haiku-4-5`.
+export function shortModelName(name) {
+  return String(name || '?')
+    .replace(/^claude-/, '')
+    .replace(/-\d{8}$/, '');
+}
+
+export function costFromBreakdown(model, b) {
+  const r = MODEL_RATES[model] || MODEL_RATES['claude-sonnet-4-6'];
+  return (
+    (b?.input       || 0) * r.input +
+    (b?.cacheCreate || 0) * r.cacheCreate +
+    (b?.cacheRead   || 0) * r.cacheRead +
+    (b?.output      || 0) * r.output
+  ) / 1_000_000;
+}
+
+function breakdownFromOneModelUsage(mu) {
+  return {
+    input:       mu?.inputTokens               || 0,
+    cacheCreate: mu?.cacheCreationInputTokens  || 0,
+    output:      mu?.outputTokens              || 0,
+    cacheRead:   mu?.cacheReadInputTokens      || 0,
+  };
+}
+
+// Read the SDK-provided authoritative per-model cost. `costFromBreakdown`
+// (using the local rates table) is a best-effort fallback for when the SDK
+// hasn't populated this field — the sum of all `costUSD` across models in a
+// single result event equals that event's `total_cost_usd`, so this IS the
+// right number to attribute per model.
+export function costFromModelUsage(mu) {
+  return typeof mu?.costUSD === 'number' ? mu.costUSD : null;
+}
+
 export function computeSummary(events) {
   let opsCount = 0;
   let costUsd = 0;
   let tokensBreakdown = emptyBreakdown();
   let tokensTotal = 0;  // legacy: input + cache_create + output (excludes cache_read)
+  // Per-model accumulator. modelUsage is cumulative within a spawn so we
+  // replace the running per-model snapshot on each result event, then add
+  // the final spawn snapshot to the cross-session map on commit. The cost
+  // is the SDK-authoritative `costUSD` field (also cumulative-within-spawn).
+  const tokensByModelMap = new Map(); // model → { breakdown, costUsd }
+  let currentSpawnByModel = new Map();
 
   const boundaries = spawnBoundaryTimestamps(events);
   let nextBoundaryIdx = 0;
@@ -125,12 +182,20 @@ export function computeSummary(events) {
       const b = breakdownFromModelUsage(currentSpawnModelUsage);
       tokensBreakdown = addBreakdown(tokensBreakdown, b);
       tokensTotal += b.input + b.cacheCreate + b.output;
+      for (const [model, mb] of currentSpawnByModel) {
+        const prev = tokensByModelMap.get(model) || { breakdown: emptyBreakdown(), costUsd: 0 };
+        tokensByModelMap.set(model, {
+          breakdown: addBreakdown(prev.breakdown, mb.breakdown),
+          costUsd: prev.costUsd + (mb.costUsd || 0),
+        });
+      }
     } else {
       // No modelUsage seen for this spawn: keep its fallback contribution.
       fallbackBreakdown = addBreakdown(fallbackBreakdown, currentSpawnFallback);
     }
     currentSpawnMaxCost = 0;
     currentSpawnModelUsage = null;
+    currentSpawnByModel = new Map();
     currentSpawnFallback = emptyBreakdown();
   };
 
@@ -156,6 +221,15 @@ export function computeSummary(events) {
       currentSpawnMaxCost = Math.max(currentSpawnMaxCost, c);
       if (ev.modelUsage && Object.keys(ev.modelUsage).length > 0) {
         currentSpawnModelUsage = ev.modelUsage;
+        // Replace per-model snapshot (cumulative-within-spawn). Pull both the
+        // 4-way token breakdown AND the SDK's authoritative costUSD per model.
+        currentSpawnByModel = new Map();
+        for (const [model, mu] of Object.entries(ev.modelUsage)) {
+          currentSpawnByModel.set(model, {
+            breakdown: breakdownFromOneModelUsage(mu),
+            costUsd: typeof mu?.costUSD === 'number' ? mu.costUSD : null,
+          });
+        }
         sawAnyModelUsage = true;
       }
       // Fallback per-spawn accumulator: needed when modelUsage is absent.
@@ -169,5 +243,13 @@ export function computeSummary(events) {
     tokensBreakdown = fallbackBreakdown;
     tokensTotal = fallbackBreakdown.input + fallbackBreakdown.cacheCreate + fallbackBreakdown.output;
   }
-  return { opsCount, tokensTotal, tokensBreakdown, costUsd };
+  const tokensByModel = [...tokensByModelMap].map(([model, v]) => ({
+    model,
+    breakdown: v.breakdown,
+    // Prefer the SDK-reported per-model cost (sum of costUSD across models in
+    // a single result event equals total_cost_usd). Fall back to local rate
+    // table if the SDK didn't populate costUSD (older/synthetic events).
+    costUsd: v.costUsd != null ? v.costUsd : costFromBreakdown(model, v.breakdown),
+  })).sort((a, b) => b.costUsd - a.costUsd);
+  return { opsCount, tokensTotal, tokensBreakdown, tokensByModel, costUsd };
 }

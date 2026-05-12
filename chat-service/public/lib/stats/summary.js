@@ -1,4 +1,6 @@
-import { el, formatDuration, formatTokens, withBreakdownTooltip } from '../dom.js';
+import {
+  el, formatDuration, formatTokens, withBreakdownTooltip, withCostTooltip,
+} from '../dom.js';
 
 // Per-task figures (agents / duration / errors) used to live here as a flat
 // pill row. They now live alongside each ticket card in the dependency-waves
@@ -14,14 +16,23 @@ export function renderSummarySection(data) {
 
   const tokensLabel = `🪙 ${formatTokens(grandTotal)} tokens`;
   const tokensSpan = bk
-    ? withBreakdownTooltip(tokensLabel, bk, { totalLabel: 'total', costUsd: data.summary.costUsd, costPrecision: 4 })
+    ? withBreakdownTooltip(tokensLabel, bk, { totalLabel: 'total' })
     : el('span', null, tokensLabel);
+
+  // Cost tooltip: per-model 4-way breakdown + approximate per-model cost.
+  // Falls through to a plain span when the aggregator didn't produce
+  // per-model data (e.g. legacy fixtures).
+  const costLabel = `💵 $${data.summary.costUsd.toFixed(3)}`;
+  const byModel = data.summary.tokensByModel;
+  const costSpan = (byModel && byModel.length > 0)
+    ? withCostTooltip(costLabel, byModel, data.summary.costUsd)
+    : el('span', null, costLabel);
 
   const kpi = el('div', { className: 'stats-kpi-line' },
     el('span', null, `⏱️ ${formatDuration(data.summary.totalMs)} total`),
     el('span', null, `🤖 ${data.summary.agentsCount} agents`),
     tokensSpan,
-    el('span', null, `💵 $${data.summary.costUsd.toFixed(3)}`),
+    costSpan,
     el('span', { className: `kpi-spacer${data.summary.errorsCount ? ' kpi-warn' : ''}` }, `⚠️ ${data.summary.errorsCount} errors`),
     el('span', data.summary.retriesCount ? { className: 'kpi-warn' } : null, `🔁 ${data.summary.retriesCount} retries`),
   );

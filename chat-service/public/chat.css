@@ -431,15 +431,18 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
   border-top: 1px solid #2c2c2e;
 }
 
-/* Hover tooltip for the 4-way token breakdown (input / cache-create / output
-   / cache-read). Native `title=` tooltips don't honour CSS, so anything that
-   needs monospace alignment uses `.tk-host` with a child `.tk-tip` instead. */
+/* Hover tooltip for the token / cost breakdowns. Native `title=` tooltips
+   don't honour CSS, so anything that needs monospace alignment uses
+   `.tk-host` with a child `.tk-tip` instead. Default: drop DOWN from the
+   host (works inside scroll containers where the host is near the top).
+   Use `.tk-tip-above` for hosts at the bottom of a viewport (inline ticker)
+   where dropping down would land off-screen. */
 .tk-host { position: relative; cursor: help; }
 .tk-tip {
   display: none;
   position: absolute;
   z-index: 300;
-  bottom: calc(100% + 6px);
+  top: calc(100% + 6px);
   right: 0;
   padding: 8px 12px;
   background: #2c2c2e;
@@ -453,6 +456,12 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
   box-shadow: 0 6px 20px rgba(0,0,0,.5);
   pointer-events: none;
   letter-spacing: 0;
+  max-width: min(640px, calc(100vw - 32px));
+  overflow: hidden;
+}
+.tk-tip-above {
+  top: auto;
+  bottom: calc(100% + 6px);
 }
 .tk-host:hover > .tk-tip,
 .tk-host:focus-visible > .tk-tip { display: block; }

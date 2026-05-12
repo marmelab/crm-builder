@@ -7,7 +7,9 @@ import { runtimes, transitionState } from './runtime.js';
 import { snapshotTickets, sendProgress } from './ticket-progress.js';
 import { spawnClaude, extractText, extractToolUses, friendlyError } from './claude-spawn.js';
 import { endsWithQuestion } from './session-store.js';
-import { emptyBreakdown, addBreakdown, breakdownFromModelUsage } from '../stats/io.js';
+import {
+  emptyBreakdown, addBreakdown, breakdownFromModelUsage, costFromBreakdown,
+} from '../stats/io.js';
 
 export async function processMessage(runtime, prompt) {
   if (!runtime) return;
@@ -111,6 +113,20 @@ export async function processMessage(runtime, prompt) {
           // summing under-counts by 10× because it misses sub-agent messages.)
           if (event.modelUsage && Object.keys(event.modelUsage).length > 0) {
             runtime.stats.tokensBreakdownCurrentSpawn = breakdownFromModelUsage(event.modelUsage);
+            // Per-model cumulative snapshot for the current spawn. Cleared on
+            // commit. Cumulative-within-spawn → replace, not add.
+            runtime.stats.tokensByModelCurrentSpawn = new Map();
+            for (const [model, mu] of Object.entries(event.modelUsage)) {
+              runtime.stats.tokensByModelCurrentSpawn.set(model, {
+                breakdown: {
+                  input:       mu?.inputTokens               || 0,
+                  cacheCreate: mu?.cacheCreationInputTokens  || 0,
+                  output:      mu?.outputTokens              || 0,
+                  cacheRead:   mu?.cacheReadInputTokens      || 0,
+                },
+                costUsd: typeof mu?.costUSD === 'number' ? mu.costUSD : null,
+              });
+            }
           }
           // cost: total_cost_usd is cumulative within the current spawn — replace,
           // don't add (summing cumulative values inflates massively).
@@ -187,6 +203,23 @@ export async function processMessage(runtime, prompt) {
     const bk = runtime.stats.tokensBreakdown;
     runtime.stats.tokensUsed = bk.input + bk.cacheCreate + bk.output;
     runtime.stats.tokensBreakdownCurrentSpawn = emptyBreakdown();
+    // Fold the spawn's per-model snapshot into the committed totals. Prefer
+    // the SDK's per-model `costUSD` (cumulative-within-spawn → just add) and
+    // fall back to deriving from the local rate table when the SDK didn't
+    // populate the field.
+    const byModelIdx = new Map(runtime.stats.tokensByModel.map((r) => [r.model, r]));
+    for (const [model, mb] of runtime.stats.tokensByModelCurrentSpawn) {
+      const prev = byModelIdx.get(model);
+      const mergedBreakdown = prev
+        ? addBreakdown(prev.breakdown, mb.breakdown)
+        : { ...mb.breakdown };
+      const addCost = mb.costUsd != null ? mb.costUsd : costFromBreakdown(model, mb.breakdown);
+      const mergedCost = (prev?.costUsd || 0) + addCost;
+      if (prev) { prev.breakdown = mergedBreakdown; prev.costUsd = mergedCost; }
+      else byModelIdx.set(model, { model, breakdown: mergedBreakdown, costUsd: mergedCost });
+    }
+    runtime.stats.tokensByModel = [...byModelIdx.values()].sort((a, b) => b.costUsd - a.costUsd);
+    runtime.stats.tokensByModelCurrentSpawn = new Map();
     runtime.currentProc = null;
     sendStats(runtime);
 

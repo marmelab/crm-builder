@@ -33,10 +33,33 @@ export function sendStats(runtime) {
   const tokensTotal =
     tokensBreakdown.input + tokensBreakdown.cacheCreate +
     tokensBreakdown.output + tokensBreakdown.cacheRead;
+  // Per-model live view = committed per-model + current spawn snapshot. The
+  // current snapshot replaces the committed entry for that model (it's
+  // cumulative within the spawn), but other models keep their committed
+  // values untouched. `costUsd` for the in-flight spawn comes straight from
+  // the SDK's `modelUsage[model].costUSD` snapshot.
+  const byModelIdx = new Map(
+    runtime.stats.tokensByModel.map((row) => [row.model, { ...row, breakdown: { ...row.breakdown } }]),
+  );
+  for (const [model, mb] of runtime.stats.tokensByModelCurrentSpawn) {
+    const prev = byModelIdx.get(model);
+    const mergedBreakdown = prev
+      ? {
+        input:       (prev.breakdown.input       || 0) + (mb.breakdown.input       || 0),
+        cacheCreate: (prev.breakdown.cacheCreate || 0) + (mb.breakdown.cacheCreate || 0),
+        output:      (prev.breakdown.output      || 0) + (mb.breakdown.output      || 0),
+        cacheRead:   (prev.breakdown.cacheRead   || 0) + (mb.breakdown.cacheRead   || 0),
+      }
+      : { ...mb.breakdown };
+    const mergedCost = (prev?.costUsd || 0) + (mb.costUsd || 0);
+    byModelIdx.set(model, { model, breakdown: mergedBreakdown, costUsd: mergedCost });
+  }
+  const tokensByModel = [...byModelIdx.values()].sort((a, b) => b.costUsd - a.costUsd);
   broadcast(runtime, {
     type: 'stats',
     tokensTotal,
     tokensBreakdown,
+    tokensByModel,
     // Legacy field (excludes cache_read) — kept so older clients keep working.
     tokensUsed: tokensBreakdown.input + tokensBreakdown.cacheCreate + tokensBreakdown.output,
     costUsd: runtime.stats.costUsd + runtime.stats.costUsdCurrentSpawn,
