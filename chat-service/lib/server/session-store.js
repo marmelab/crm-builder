@@ -2,6 +2,9 @@ import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
 import { createWriteStream } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { LOG_DIR, UUID_RE, ALLOWED_STATES } from './config.js';
+import {
+  emptyBreakdown, addBreakdown, breakdownFromModelUsage, breakdownFromUsage,
+} from '../stats/io.js';
 
 // ─── Session persistence ──────────────────────────────────────
 // Single source of truth = log.jsonl (append-only stream of ws in/out events).
@@ -29,6 +32,31 @@ export function digestLog(logText) {
   let droppedAny = false;
   let tokensUsed = 0;
   let costUsd = 0;
+  let tokensBreakdown = emptyBreakdown();
+  // Spawn boundaries: every `user_message` in the log starts a new `claude -p`
+  // (chat-service spawns one CLI process per user turn). We commit the prior
+  // spawn's cumulative cost/tokens on each user_message instead of relying on
+  // the older "cost decrease" heuristic, which silently absorbed a spawn
+  // whenever its successor's first cost event landed above its own max.
+  let userMessageCount = 0;
+  let currentSpawnMax = 0;
+  let currentSpawnBreakdown = emptyBreakdown();
+  let currentSpawnFallback = emptyBreakdown();
+  let currentSpawnSawModelUsage = false;
+  let sawModelUsage = false;
+
+  const commitSpawn = () => {
+    costUsd += currentSpawnMax;
+    if (currentSpawnSawModelUsage) {
+      tokensBreakdown = addBreakdown(tokensBreakdown, currentSpawnBreakdown);
+    } else {
+      tokensBreakdown = addBreakdown(tokensBreakdown, currentSpawnFallback);
+    }
+    currentSpawnMax = 0;
+    currentSpawnBreakdown = emptyBreakdown();
+    currentSpawnFallback = emptyBreakdown();
+    currentSpawnSawModelUsage = false;
+  };
 
   const trackDebug = () => {
     debugSlots.push(timeline.length - 1);
@@ -44,6 +72,8 @@ export function digestLog(logText) {
     let entry;
     try { entry = JSON.parse(line); } catch { continue; }
     if (entry.dir === 'in' && entry.type === 'user_message') {
+      if (userMessageCount > 0) commitSpawn();
+      userMessageCount++;
       timeline.push({ kind: 'message', role: 'user', content: entry.display || entry.content || '', ts: entry.ts });
     } else if (entry.dir === 'out' && entry.type === 'message' && entry.role === 'assistant') {
       const item = { kind: 'message', role: 'assistant', content: entry.content || '', ts: entry.ts };
@@ -51,13 +81,23 @@ export function digestLog(logText) {
       timeline.push(item);
     } else if (entry.dir === 'out' && entry.type === 'debug_raw') {
       if (entry.event?.type === 'result') {
-        // usage is per-spawn (one result per claude -p invocation) — sum is correct.
-        // total_cost_usd is cumulative across the entire Claude session (monotonically
-        // increasing across all spawns). Summing it over N result events inflates by N×.
-        // Take the running max instead: the last value is the true session total.
-        const u = entry.event.usage || {};
-        tokensUsed += (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.output_tokens || 0);
-        costUsd = Math.max(costUsd, entry.event.total_cost_usd || 0);
+        // total_cost_usd / modelUsage are cumulative WITHIN a spawn. Keep the
+        // spawn's running max for cost, and replace the running modelUsage
+        // breakdown with the latest snapshot. Cost-decrease is still used as
+        // a safety net for sessions that predate user_message logging.
+        const c = entry.event.total_cost_usd || 0;
+        if (userMessageCount === 0 && c < currentSpawnMax) commitSpawn();
+        currentSpawnMax = Math.max(currentSpawnMax, c);
+        if (entry.event.modelUsage && Object.keys(entry.event.modelUsage).length > 0) {
+          currentSpawnBreakdown = breakdownFromModelUsage(entry.event.modelUsage);
+          currentSpawnSawModelUsage = true;
+          sawModelUsage = true;
+        }
+        // Fallback accumulator: per-turn usage summing (used only when this
+        // spawn never emitted modelUsage).
+        if (!currentSpawnSawModelUsage) {
+          currentSpawnFallback = addBreakdown(currentSpawnFallback, breakdownFromUsage(entry.event.usage));
+        }
       }
       timeline.push({ kind: 'debug', type: 'debug_raw', event: entry.event });
       trackDebug();
@@ -67,6 +107,11 @@ export function digestLog(logText) {
     }
   }
 
+  // Commit the trailing spawn.
+  commitSpawn();
+  tokensUsed = tokensBreakdown.input + tokensBreakdown.cacheCreate + tokensBreakdown.output;
+  // Suppress unused-warning for sawModelUsage (kept for diagnostics).
+  void sawModelUsage;
   const cleanTimeline = droppedAny ? timeline.filter((x) => x !== null) : timeline;
   // Back-compat views — same data, just split by kind. Existing callers
   // (readMessages, runtime stats hydration, tests) keep working unchanged.
@@ -80,7 +125,7 @@ export function digestLog(logText) {
       else recentDebug.push({ type: 'debug', tool: it.tool, input: it.input, agent: it.agent });
     }
   }
-  return { messages, recentDebug, timeline: cleanTimeline, stats: { tokensUsed, costUsd } };
+  return { messages, recentDebug, timeline: cleanTimeline, stats: { tokensUsed, tokensBreakdown, costUsd } };
 }
 
 export async function readDigest(id) {
@@ -88,7 +133,7 @@ export async function readDigest(id) {
     const raw = await readFile(`${LOG_DIR}/${id}/log.jsonl`, 'utf8');
     return digestLog(raw);
   } catch {
-    return { messages: [], recentDebug: [], timeline: [], stats: { tokensUsed: 0, costUsd: 0 } };
+    return { messages: [], recentDebug: [], timeline: [], stats: { tokensUsed: 0, tokensBreakdown: emptyBreakdown(), costUsd: 0 } };
   }
 }
 
@@ -104,7 +149,7 @@ export async function openSession(requestedId) {
   let messages = [];
   let recentDebug = [];
   let timeline = [];
-  let stats = { tokensUsed: 0, costUsd: 0 };
+  let stats = { tokensUsed: 0, tokensBreakdown: emptyBreakdown(), costUsd: 0 };
 
   if (id) {
     try {

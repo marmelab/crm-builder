@@ -49,6 +49,9 @@ export function spawnClaude(userMessage, claudeSessionId, sessionDir) {
     '--output-format', 'stream-json',
     '--verbose',
     '--dangerously-skip-permissions',
+    // The orchestrator never calls MCP tools directly — it routes via Agent/Teams.
+    // Loading 13+ claude.ai "needs-auth" servers wastes ~8K tokens per spawn.
+    '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
   ];
   if (orchestratorModel) args.push('--model', orchestratorModel);
   if (claudeSessionId) args.push('--resume', claudeSessionId);

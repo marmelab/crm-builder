@@ -18,7 +18,7 @@ function previewFromBuffer(buf) {
     : joined;
 }
 
-export async function populateChildrenAndCounts(events, phases, orchestrator, claudeSessionId) {
+export async function populateChildrenAndCounts(events, phases, orchestrator, subagentsDir) {
   const agentPhases = phases.filter((p) => p.kind === 'agent');
   const phaseByToolUseId = buildPhaseOwnerMap(events, agentPhases);
   const toolResultTsByToolUseId = buildToolResultMap(events);
@@ -108,8 +108,8 @@ export async function populateChildrenAndCounts(events, phases, orchestrator, cl
     lastToolResultTsByPhase.set(owner.phaseId, maxToolResultTsThisMsg ?? rec.ts);
   }
 
-  if (claudeSessionId) {
-    await enrichSubagentChildren(phases, claudeSessionId, toolCounts, allToolCalls);
+  if (subagentsDir) {
+    await enrichSubagentChildren(phases, subagentsDir, toolCounts, allToolCalls);
   }
 
   for (const c of allToolCalls) delete c._toolUseId;

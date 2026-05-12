@@ -532,7 +532,7 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
 .phase-time { font-variant-numeric: tabular-nums; color: #8e8e93; font-size: 11px; }
 .phase-icon { font-size: 13px; }
 .phase-name { font-weight: 600; color: #f2f2f7; }
-.phase-desc { color: #8e8e93; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.phase-cost { color: #34c759; font-size: 11px; font-variant-numeric: tabular-nums; font-weight: 600; }
 .phase-stats { color: #8e8e93; font-size: 11px; font-variant-numeric: tabular-nums; }
 .phase-warn { color: #f59e0b; font-size: 11px; }
 .phase-team { border: 1px solid; padding: 1px 6px; border-radius: 10px; font-size: 10px; font-weight: 600; }

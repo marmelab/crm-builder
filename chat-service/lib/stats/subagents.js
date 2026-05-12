@@ -1,8 +1,27 @@
 import { readFile, readdir, stat } from 'node:fs/promises';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { readJsonl, msBetween } from './io.js';
+import {
+  readJsonl, msBetween, emptyBreakdown, addBreakdown, breakdownFromUsage,
+} from './io.js';
 import { toolDetail, sendMessageVerdictFromInput } from './tools.js';
+
+// Prices per million tokens (input / cache_creation / cache_read / output).
+// Used to estimate per-sub-agent cost from their local JSONL usage fields.
+const MODEL_USD_PER_M = {
+  'claude-opus-4-6':           { inp: 15,  cc: 3.75, cr: 1.5,  out: 75 },
+  'claude-sonnet-4-6':         { inp: 3,   cc: 0.75, cr: 0.3,  out: 15 },
+  'claude-haiku-4-5-20251001': { inp: 0.8, cc: 0.2,  cr: 0.08, out: 4  },
+  'claude-haiku-4-5':          { inp: 0.8, cc: 0.2,  cr: 0.08, out: 4  },
+};
+function tokensToUsd(model, u) {
+  const p = MODEL_USD_PER_M[model] || MODEL_USD_PER_M['claude-sonnet-4-6'];
+  return (
+    (u.input_tokens || 0) * p.inp +
+    (u.cache_creation_input_tokens || 0) * p.cc +
+    (u.cache_read_input_tokens || 0) * p.cr +
+    (u.output_tokens || 0) * p.out
+  ) / 1_000_000;
+}
 
 // Tool calls excluded from per-phase children. Keep dispatch-control verbs
 // (Agent/Task/TeamCreate/TeamDelete) visible in the orchestrator timeline —
@@ -14,11 +33,8 @@ const SKIP_CHILD = new Set();
 // tool calls — those live in `~/.claude/projects/-app/<claudeSessionId>/subagents/agent-<task_id>.jsonl`,
 // never streamed into the orchestrator's main log. Without this, every
 // COMPLEX agent phase shows up empty in the stats UI.
-export async function enrichSubagentChildren(phases, claudeSessionId, toolCounts, allToolCalls) {
-  // The Claude CLI stores per-subagent transcripts under ~/.claude/projects/
-  // The project dir is derived from cwd ('/app' → '-app'). Hardcoding '-app'
-  // matches our container layout (chat-service spawns claude with cwd=/app).
-  const baseDir = join(homedir(), '.claude', 'projects', '-app', claudeSessionId, 'subagents');
+export async function enrichSubagentChildren(phases, subagentsDir, toolCounts, allToolCalls) {
+  const baseDir = subagentsDir;
 
   // Only target COMPLEX team members. Local agents (planner, simple-developer)
   // already have their tool_uses in the main stream via parent_tool_use_id —
@@ -125,6 +141,15 @@ async function appendSubagentToolUses(file, phase, toolCounts, allToolCalls) {
     }
   }
 
+  // Defensive reset before refilling from the subagent JSONL (the authoritative
+  // source for in_process_teammate phases). task_notification.usage is
+  // currently null for in_process_teammate so phase.tokensTotal / opsCount
+  // arrive at 0 from extractPhases — but if the SDK ever populates those
+  // fields, summing here would double-count. Same for the breakdown.
+  phase.tokensTotal = 0;
+  phase.opsCount = 0;
+  phase.tokensBreakdown = emptyBreakdown();
+
   // Per-message dedup for tokens: each tool_use generates two assistant events
   // sharing the same `message.id` — once we decide to use a tool, then again
   // after streaming. Only the second carries the final usage; both can have
@@ -138,13 +163,17 @@ async function appendSubagentToolUses(file, phase, toolCounts, allToolCalls) {
     const msgId = e.message?.id;
     if (u && msgId && !tokensByMessageId.has(msgId)) {
       tokensByMessageId.add(msgId);
-      // Same formula as chat-service stats: input + cache_creation + output.
-      // cache_read is intentionally excluded — cheap rehydration, not billed
-      // against the user's working set.
-      const t = (u.input_tokens || 0)
-        + (u.cache_creation_input_tokens || 0)
-        + (u.output_tokens || 0);
-      phase.tokensTotal = (phase.tokensTotal || 0) + t;
+      // Track the full breakdown (input + cache_creation + output + cache_read)
+      // so the per-phase tooltip can show the same 4-way split as the global
+      // summary. tokensTotal is the legacy sum (cache_read excluded) kept for
+      // back-compat with any code still reading that field.
+      const b = breakdownFromUsage(u);
+      phase.tokensBreakdown = addBreakdown(phase.tokensBreakdown, b);
+      phase.tokensTotal += b.input + b.cacheCreate + b.output;
+      // costUsd: include cache_read (billed at a lower rate but still real cost).
+      if (e.message.model) {
+        phase.costUsd = (phase.costUsd || 0) + tokensToUsd(e.message.model, u);
+      }
     }
 
     for (const b of e.message.content) {

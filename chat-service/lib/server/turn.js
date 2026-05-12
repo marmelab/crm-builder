@@ -1,10 +1,13 @@
 import { createInterface } from 'node:readline';
-import { LOG_DIR } from './config.js';
+import { cp, copyFile, mkdir } from 'node:fs/promises';
+import { join } from 'node:path';
+import { LOG_DIR, CLAUDE_HOME, CWD } from './config.js';
 import { broadcast, sendStats } from './ws-bus.js';
 import { runtimes, transitionState } from './runtime.js';
 import { snapshotTickets, sendProgress } from './ticket-progress.js';
 import { spawnClaude, extractText, extractToolUses, friendlyError } from './claude-spawn.js';
 import { endsWithQuestion } from './session-store.js';
+import { emptyBreakdown, addBreakdown, breakdownFromModelUsage } from '../stats/io.js';
 
 export async function processMessage(runtime, prompt) {
   if (!runtime) return;
@@ -102,14 +105,13 @@ export async function processMessage(runtime, prompt) {
 
         if (event.type === 'result') {
           if (event.is_error) resultError = true;
-          const u = event.usage || {};
-          // tokens: usage is per-turn, sum is correct. Exclude cache_read — it's
-          // re-hydrated cached context, billed 10× less and not "consumed"
-          // against the user's limit.
-          runtime.stats.tokensUsed +=
-            (u.input_tokens || 0) +
-            (u.cache_creation_input_tokens || 0) +
-            (u.output_tokens || 0);
+          // tokens: derived from modelUsage which is cumulative within the spawn
+          // and includes sub-agent token consumption. Replace, don't add — the
+          // value is the running spawn total. (Falling back to result.usage
+          // summing under-counts by 10× because it misses sub-agent messages.)
+          if (event.modelUsage && Object.keys(event.modelUsage).length > 0) {
+            runtime.stats.tokensBreakdownCurrentSpawn = breakdownFromModelUsage(event.modelUsage);
+          }
           // cost: total_cost_usd is cumulative within the current spawn — replace,
           // don't add (summing cumulative values inflates massively).
           runtime.stats.costUsdCurrentSpawn = event.total_cost_usd || 0;
@@ -171,9 +173,20 @@ export async function processMessage(runtime, prompt) {
       await runtime.session?.recordMessage('assistant', errText).catch(() => {});
     }
   } finally {
-    // Commit this spawn's cumulative cost into the runtime total, reset for next spawn
+    // Commit this spawn's cumulative cost and tokens into the runtime totals,
+    // reset for next spawn (each new spawn starts fresh at 0).
     runtime.stats.costUsd += runtime.stats.costUsdCurrentSpawn;
     runtime.stats.costUsdCurrentSpawn = 0;
+    runtime.stats.tokensBreakdown = addBreakdown(
+      runtime.stats.tokensBreakdown,
+      runtime.stats.tokensBreakdownCurrentSpawn,
+    );
+    // Refresh the legacy headline (input + cache_creation + output, excludes
+    // cache_read) from the breakdown so consumers reading `tokensUsed` directly
+    // still get the historical semantic.
+    const bk = runtime.stats.tokensBreakdown;
+    runtime.stats.tokensUsed = bk.input + bk.cacheCreate + bk.output;
+    runtime.stats.tokensBreakdownCurrentSpawn = emptyBreakdown();
     runtime.currentProc = null;
     sendStats(runtime);
 
@@ -205,5 +218,21 @@ export async function processMessage(runtime, prompt) {
         runtimes.delete(runtime.session.id);
       }
     }
+
+    snapshotClaudeSession(runtime.claudeSessionId, runtime.session?.id).catch(() => {});
+  }
+}
+
+async function snapshotClaudeSession(claudeSessionId, sessionId) {
+  if (!claudeSessionId || !sessionId) return;
+  const slug = CWD.replace(/\//g, '-');
+  const projectDir = join(CLAUDE_HOME, '.claude', 'projects', slug);
+  const srcDir = join(projectDir, claudeSessionId);
+  const destDir = join(LOG_DIR, sessionId, 'claude');
+
+  await mkdir(destDir, { recursive: true });
+  await copyFile(join(projectDir, `${claudeSessionId}.jsonl`), join(destDir, 'transcript.jsonl')).catch(() => {});
+  for (const subdir of ['subagents', 'tool-results']) {
+    await cp(join(srcDir, subdir), join(destDir, subdir), { recursive: true }).catch(() => {});
   }
 }

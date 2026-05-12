@@ -286,7 +286,23 @@ function handleWsMessage(event) {
   if (msg.type === 'stats') {
     const agents = msg.activeAgents || 0;
     const agentsPart = agents > 0 ? `🤖 ${agents} · ` : '';
-    stats.textContent = `${agentsPart}${formatTokens(msg.tokensUsed)} tokens · $${msg.costUsd.toFixed(3)}`;
+    const total = (typeof msg.tokensTotal === 'number') ? msg.tokensTotal : msg.tokensUsed;
+    stats.textContent = `${agentsPart}${formatTokens(total)} tokens · $${msg.costUsd.toFixed(3)}`;
+    // Hover breakdown: input / cache-create / output / cache-read. Lets the
+    // user inspect what's behind the headline without cluttering the bar.
+    const b = msg.tokensBreakdown;
+    if (b) {
+      const fmt = (n) => Number(n || 0).toLocaleString('en-US');
+      stats.title =
+        `Tokens: ${fmt(total)}\n` +
+        `  input          ${fmt(b.input)}\n` +
+        `  cache-creation ${fmt(b.cacheCreate)}\n` +
+        `  output         ${fmt(b.output)}\n` +
+        `  cache-read     ${fmt(b.cacheRead)}\n` +
+        `Cost: $${msg.costUsd.toFixed(4)}`;
+    } else {
+      stats.title = `Tokens and cost used in this session`;
+    }
     if (statsMode) statsRefresh.schedule();
     return;
   }

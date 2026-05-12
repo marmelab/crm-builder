@@ -6,8 +6,9 @@
 // The pipeline is sequenced top-down in `aggregateSession` below; each step
 // lives in its own module under ./stats/ to keep concerns isolated.
 
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { CLAUDE_HOME, CWD } from './server/config.js';
 
 import { readJsonl, msBetween, computeSummary } from './stats/io.js';
 import { extractTeams } from './stats/teams.js';
@@ -46,12 +47,21 @@ export async function aggregateSession({ sessionLogPath, hooksLogPath, sessionId
   const endTs = substantive[substantive.length - 1]?.ts ?? events[events.length - 1]?.ts ?? null;
   const durationMs = startTs && endTs ? msBetween(startTs, endTs) : 0;
 
-  // Read claudeSessionId from meta.json (sibling of log.jsonl) — needed to
-  // locate per-subagent transcripts under ~/.claude/projects/-app/<id>/subagents/.
-  let claudeSessionId = null;
+  // Locate per-subagent transcripts. Prefer the local snapshot copied at turn
+  // end (sessions/<id>/claude/subagents/); fall back to the live Claude CLI
+  // path (~/.claude/projects/<slug>/<claudeSessionId>/subagents/) for sessions
+  // that predate the snapshot feature or where the copy hasn't landed yet.
+  let subagentsDir = null;
   try {
     const meta = JSON.parse(await readFile(join(dirname(sessionLogPath), 'meta.json'), 'utf8'));
-    claudeSessionId = meta.claudeSessionId ?? null;
+    const claudeSessionId = meta.claudeSessionId ?? null;
+    if (claudeSessionId) {
+      const localDir = join(dirname(sessionLogPath), 'claude', 'subagents');
+      const slug = CWD.replace(/\//g, '-');
+      const remoteDir = join(CLAUDE_HOME, '.claude', 'projects', slug, claudeSessionId, 'subagents');
+      // Prefer local snapshot; fall back to live ~/.claude path.
+      subagentsDir = await readdir(localDir).then(() => localDir).catch(() => remoteDir);
+    }
   } catch { /* meta missing or unreadable — subagent enrichment will be skipped */ }
 
   const s = computeSummary(events);
@@ -73,7 +83,7 @@ export async function aggregateSession({ sessionLogPath, hooksLogPath, sessionId
 
   // Build phase children, tool counts, and leaderboards.
   // Must run before workMs/timeBreakdown so children are populated.
-  const { toolCounts, allToolCalls } = await populateChildrenAndCounts(events, phases, orchestrator, claudeSessionId);
+  const { toolCounts, allToolCalls } = await populateChildrenAndCounts(events, phases, orchestrator, subagentsDir);
 
   // Derive workMs (active-work time) per phase from the tool_use children.
   // For COMPLEX team members, durationMs includes long idle waits — workMs
@@ -93,19 +103,20 @@ export async function aggregateSession({ sessionLogPath, hooksLogPath, sessionId
 
   const timeBreakdown = agentPhases.length > 0 ? buildTimeBreakdown(orchestrator, agentPhases) : [];
 
-  // Add the COMPLEX subagents' tokens/ops to the session-level summary.
-  // computeSummary only sees the orchestrator's main log; subagent transcripts
-  // (loaded by enrichSubagentChildren) carry the bulk of the work for COMPLEX
-  // runs and must be added so the dashboard totals match reality.
-  let extraOps = 0, extraTokens = 0;
+  // summary.tokensTotal already includes sub-agent token consumption: it's
+  // derived from result.modelUsage which is cumulative-within-spawn and
+  // captures all model calls regardless of which agent made them. Do NOT
+  // re-add in_process_teammate phase tokens; that would double-count.
+  //
+  // opsCount is different: in_process_teammate tool_uses live in their own
+  // subagent JSONL files, not the orchestrator's main stream. computeSummary
+  // sees only orchestrator + local_agent ops, so we add the COMPLEX-team
+  // ops back in here.
+  let extraOps = 0;
   for (const p of agentPhases) {
-    if (p.taskType === 'in_process_teammate') {
-      extraOps += p.opsCount || 0;
-      extraTokens += p.tokensTotal || 0;
-    }
+    if (p.taskType === 'in_process_teammate') extraOps += p.opsCount || 0;
   }
   s.opsCount += extraOps;
-  s.tokensTotal += extraTokens;
 
   // Only keep phases if orchestrator has children or if there are agent phases
   const hasOrchestratorWork = orchestrator.children.length > 0;
@@ -156,6 +167,7 @@ export async function aggregateSession({ sessionLogPath, hooksLogPath, sessionId
       agentsCount: agentPhases.length,
       opsCount: s.opsCount,
       tokensTotal: s.tokensTotal,
+      tokensBreakdown: s.tokensBreakdown,
       costUsd: s.costUsd,
       errorsCount: errors.length,
       retriesCount: retries.length,

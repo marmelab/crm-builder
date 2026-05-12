@@ -84,16 +84,38 @@ function renderPhaseRow(phase, relLabel) {
   if (phase.kind === 'orchestrator' && phase.userWaitMs > 0) {
     orchHint = ` · excl. ${formatDuration(phase.userWaitMs)} user wait`;
   }
+  // Token tooltip: 4-way breakdown (input / cache-create / output / cache-read)
+  // when available. Falls back to the single legacy figure for phases that
+  // never received per-component data (e.g. local_agent phases that only
+  // expose task_notification.usage.total_tokens).
+  const bk = phase.tokensBreakdown;
+  const grandTokens = bk
+    ? (bk.input || 0) + (bk.cacheCreate || 0) + (bk.output || 0) + (bk.cacheRead || 0)
+    : (phase.tokensTotal || 0);
+  const fmtN = (n) => Number(n || 0).toLocaleString('en-US');
+  const tokenLine = bk
+    ? `Tokens: ${fmtN(grandTokens)}\n` +
+      `  input          ${fmtN(bk.input)}\n` +
+      `  cache-creation ${fmtN(bk.cacheCreate)}\n` +
+      `  output         ${fmtN(bk.output)}\n` +
+      `  cache-read     ${fmtN(bk.cacheRead)}`
+    : `Tokens: ${fmtN(grandTokens)}`;
   const stats = el('span', {
     className: 'phase-stats',
-    title: `active ${activeFmt} · wall ${formatDuration(phase.wallDurationMs ?? phase.durationMs ?? 0)} · ${phase.opsCount} ops · ${formatTokens(phase.tokensTotal || 0)} tokens${orchHint}`,
-  }, `${activeFmt} active · ${phase.opsCount} ops · ${formatTokens(phase.tokensTotal || 0)} tok`);
+    title:
+      `active ${activeFmt} · wall ${formatDuration(phase.wallDurationMs ?? phase.durationMs ?? 0)} · ${phase.opsCount} ops${orchHint}\n` +
+      tokenLine,
+  }, `${activeFmt} · ${phase.opsCount} ops · ${formatTokens(grandTokens)} tok`);
+
+  const costBadge = phase.costUsd != null
+    ? el('span', { className: 'phase-cost' }, `$${phase.costUsd.toFixed(3)}`)
+    : null;
 
   det.appendChild(el('summary', null,
     el('span', { className: 'phase-time' }, relLabel(phase.startTs)),
     el('span', { className: 'phase-icon' }, dot),
     el('span', { className: 'phase-name' }, phase.agentType || phase.kind),
-    el('span', { className: 'phase-desc' }, phase.description),
+    costBadge,
     stats,
     bands, warn, retry, taskBadge,
   ));

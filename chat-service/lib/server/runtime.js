@@ -1,4 +1,5 @@
 import { sendToWs, broadcast } from './ws-bus.js';
+import { emptyBreakdown } from '../stats/io.js';
 
 // One runtime per open session. Multiple WebSockets (tabs, reconnects
 // after navigating away and back) share the same runtime — so a turn that
@@ -29,10 +30,18 @@ export function createRuntime(session) {
     currentProc: null,
     clients: new Set(),
     stats: {
-      // tokensUsed = fresh input + cache_creation + output (cache_read excluded:
-      // it's re-hydrated cached context, not "burned" from the user's budget).
+      // tokensUsed = legacy headline (input + cache_creation + output). Kept as
+      // a derived number so older consumers keep working. The authoritative
+      // per-type detail lives in `tokensBreakdown` (input/cacheCreate/output/
+      // cacheRead). Tokens come from modelUsage (cumulative within a spawn,
+      // includes sub-agent consumption), not result.usage which is per-turn
+      // and misses sub-agent activity.
       // Seeded from the log digest so the ticker survives a runtime teardown.
       tokensUsed: session.stats?.tokensUsed || 0,
+      tokensBreakdown: session.stats?.tokensBreakdown || emptyBreakdown(),
+      // tokensBreakdownCurrentSpawn = latest snapshot from this spawn's
+      // modelUsage (cumulative-within-spawn → replace, not add).
+      tokensBreakdownCurrentSpawn: emptyBreakdown(),
       // costUsd = committed cost from finished spawns
       costUsd: session.stats?.costUsd || 0,
       // costUsdCurrentSpawn = cumulative total_cost_usd from the in-progress spawn

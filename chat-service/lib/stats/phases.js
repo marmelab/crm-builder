@@ -1,4 +1,6 @@
-import { msBetween, mergeIntervals } from './io.js';
+import {
+  msBetween, mergeIntervals, emptyBreakdown, addBreakdown, breakdownFromUsage,
+} from './io.js';
 import { extractToolUsesFromAssistant, isAgentTaskStart } from './events.js';
 
 function subagentTypeFromAgentToolUse(toolUseId, agentTypeByToolId) {
@@ -64,6 +66,7 @@ export function extractPhases(events, agentToolIdToTeam) {
           teamName: agentToolIdToTeam.get(ev.tool_use_id) ?? null,
           startTs: rec.ts,
           endTs: null, durationMs: 0, opsCount: 0, tokensTotal: 0,
+          tokensBreakdown: emptyBreakdown(),
           errorsCount: 0, retriesCount: 0, children: [],
           activations: [{
             startTs: rec.ts, endTs: null, durationMs: 0,
@@ -124,7 +127,7 @@ export function buildOrchestratorPhase(events, agentPhases, startTs, endTs, user
   const merged = mergeIntervals(intervals);
   const agentCoverageMs = merged.reduce((a, [s, e]) => a + (e - s), 0);
   let opsCount = 0;
-  let tokensTotal = 0;
+  let tokensBreakdown = emptyBreakdown();
   const skip = new Set(['Agent', 'Task', 'TeamCreate', 'TeamDelete']);
   for (const rec of events) {
     if (rec.type !== 'debug_raw' || !rec.event) continue;
@@ -139,15 +142,14 @@ export function buildOrchestratorPhase(events, agentPhases, startTs, endTs, user
         opsCount++;
       }
     } else if (ev.type === 'result') {
-      // result.usage carries this turn's token cost (cache_read excluded —
-      // it's cheap rehydration, not billed against the working set).
-      const u = ev.usage || {};
-      tokensTotal += (u.input_tokens || 0)
-        + (u.cache_creation_input_tokens || 0)
-        + (u.output_tokens || 0);
+      // result.usage carries this turn's token cost. All four components
+      // (input, cache_creation, output, cache_read) are accumulated so the
+      // panel can show the breakdown on hover.
+      tokensBreakdown = addBreakdown(tokensBreakdown, breakdownFromUsage(ev.usage));
     }
   }
   const wallDurationMs = Math.max(0, totalMs - agentCoverageMs);
+  const tokensTotal = tokensBreakdown.input + tokensBreakdown.cacheCreate + tokensBreakdown.output;
   return {
     phaseId: 'orchestrator', kind: 'orchestrator', agentType: 'orchestrator',
     description: 'Orchestrator', teamName: null,
@@ -155,7 +157,8 @@ export function buildOrchestratorPhase(events, agentPhases, startTs, endTs, user
     durationMs: Math.max(0, wallDurationMs - userWaitMs),
     wallDurationMs,
     userWaitMs,
-    opsCount, tokensTotal, errorsCount: 0, retriesCount: 0, children: [],
+    opsCount, tokensTotal, tokensBreakdown,
+    errorsCount: 0, retriesCount: 0, children: [],
   };
 }
 
