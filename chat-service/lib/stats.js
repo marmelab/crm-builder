@@ -14,7 +14,7 @@ import { readJsonl, msBetween, computeSummary } from './stats/io.js';
 import { extractTeams } from './stats/teams.js';
 import {
   extractPhases, buildOrchestratorPhase, buildTimeBreakdown, computePhaseWorkMs,
-  computeUserWaitMs, accumulatePerPhaseTokens,
+  computeUserWaitMs, accumulatePerPhaseTokens, calibratePhaseCostsToSdk,
 } from './stats/phases.js';
 import { populateChildrenAndCounts } from './stats/children.js';
 import { readHooksLog, aggregateHooks, assignHookExecsToPhases } from './stats/hooks.js';
@@ -91,7 +91,19 @@ export async function aggregateSession({ sessionLogPath, hooksLogPath, sessionId
 
   // Build phase children, tool counts, and leaderboards.
   // Must run before workMs/timeBreakdown so children are populated.
+  // Side effect: `enrichSubagentChildren` (called inside) populates
+  // `tokensByModel` + `costUsd` for in_process_teammate phases.
   const { toolCounts, allToolCalls } = await populateChildrenAndCounts(events, phases, orchestrator, subagentsDir);
+
+  // Reconcile per-phase costs with the SDK total. Phase costs are derived
+  // from a local rate table (best-effort) which can over- or under-shoot the
+  // SDK's billed amount. Without this calibration, sum(phase.costUsd) for
+  // the bar tooltip + chronology rows would NOT match summary.costUsd —
+  // observed on the Art Studio session ($164 + $305 = $469 vs $366 SDK).
+  // The calibration preserves per-phase RELATIVE shares (which come from
+  // real per-message usage) and only rescales each model bucket so its
+  // contributions sum to the SDK total for that model.
+  calibratePhaseCostsToSdk(phases, s.tokensByModel);
 
   // Derive workMs (active-work time) per phase from the tool_use children.
   // For COMPLEX team members, durationMs includes long idle waits — workMs

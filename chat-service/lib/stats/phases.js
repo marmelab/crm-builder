@@ -299,6 +299,52 @@ export function accumulatePerPhaseTokens(events, phases) {
   }
 }
 
+// Reconcile per-phase costs with the SDK's authoritative per-model total.
+//
+// Per-phase costs are derived locally from a rate table (see MODEL_RATES in
+// io.js) applied to each phase's token breakdown. The SDK's
+// `modelUsage[model].costUSD` is the source of truth at the SPAWN/MODEL
+// level. Our rate table tends to over- or under-shoot Claude Code's actual
+// billed prices because the published Anthropic rates don't always match
+// what the CLI is billed (subscription / batch tiers).
+//
+// This pass keeps the RELATIVE split between phases intact (it's based on
+// real per-message usage) but SCALES each phase's per-model cost so the sum
+// over all phases of model M equals the SDK total for model M. After this
+// pass, sum(phase.costUsd for phase) === summary.costUsd (modulo phases for
+// models that don't appear in summary.tokensByModel, which we leave alone).
+export function calibratePhaseCostsToSdk(phases, sdkTokensByModel) {
+  if (!Array.isArray(sdkTokensByModel) || sdkTokensByModel.length === 0) return;
+  const sdkCostByModel = new Map(sdkTokensByModel.map((r) => [r.model, r.costUsd || 0]));
+
+  // Estimated cost per model across all phases (rate table).
+  const estByModel = new Map();
+  for (const p of phases) {
+    for (const r of p.tokensByModel || []) {
+      estByModel.set(r.model, (estByModel.get(r.model) || 0) + (r.costUsd || 0));
+    }
+  }
+
+  // Correction factor per model. Skip when the rate-table sum is zero
+  // (nothing to scale) or the SDK reports no cost for that model.
+  const factorByModel = new Map();
+  for (const [model, est] of estByModel) {
+    const sdk = sdkCostByModel.get(model);
+    if (sdk != null && est > 0) factorByModel.set(model, sdk / est);
+  }
+
+  for (const p of phases) {
+    if (!p.tokensByModel || p.tokensByModel.length === 0) continue;
+    let newTotal = 0;
+    for (const r of p.tokensByModel) {
+      const f = factorByModel.get(r.model);
+      if (f != null) r.costUsd = (r.costUsd || 0) * f;
+      newTotal += r.costUsd || 0;
+    }
+    p.costUsd = newTotal;
+  }
+}
+
 export function buildPhaseOwnerMap(events, agentPhases) {
   const phaseByToolUseId = new Map();
   for (const p of agentPhases) if (p._toolUseId) phaseByToolUseId.set(p._toolUseId, p);

@@ -545,8 +545,11 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
 .stats-kpi-line .kpi-warn { color: #f59e0b; }
 
 .stats-breakdown {
+  /* `overflow: visible` so segment tooltips can escape the bar. The rounded
+     look is delegated to the first/last segments below — keeping it on the
+     parent would force overflow:hidden and clip the tooltips. */
   display: flex; margin-top: 12px; height: 22px;
-  border-radius: 6px; overflow: hidden; background: #2c2c2e;
+  border-radius: 6px; overflow: visible; background: #2c2c2e;
 }
 .stats-breakdown-seg {
   display: flex; align-items: center; justify-content: center;
@@ -556,6 +559,8 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
      label inside (.breakdown-label) is what actually clips the text. */
   white-space: nowrap; overflow: visible; position: relative;
 }
+.stats-breakdown-seg:first-child { border-top-left-radius: 6px; border-bottom-left-radius: 6px; }
+.stats-breakdown-seg:last-child  { border-top-right-radius: 6px; border-bottom-right-radius: 6px; border-right: none; }
 .breakdown-label {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   flex: 1 1 auto; text-align: center; min-width: 0;

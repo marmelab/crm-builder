@@ -1,3 +1,74 @@
+// Hover tooltip positioning. CSS handles show/hide (`.tk-host:hover > .tk-tip`);
+// JS only repositions the visible tooltip into the viewport using `position:
+// fixed`, which sidesteps any `overflow: hidden` ancestor (panel, stats bar,
+// per-phase row) that would otherwise clip it. The default CSS anchor
+// (top: 100%; left: 0) handles the common case where the host is in the
+// upper-left of the viewport — JS kicks in only when the tip would overflow
+// the right edge (most common cause of clipping reported by users) or the
+// bottom edge.
+function positionTip(host) {
+  const tip = host.querySelector(':scope > .tk-tip');
+  if (!tip) return;
+  // Reset inline overrides so the natural width measurement is accurate.
+  tip.style.position = '';
+  tip.style.left = tip.style.right = tip.style.top = tip.style.bottom = '';
+  tip.style.visibility = 'hidden';
+  // Force layout while still display:none → can't measure. Temporarily flip
+  // to block via inline so getBoundingClientRect returns real values.
+  tip.style.display = 'block';
+  const tr = tip.getBoundingClientRect();
+  const hr = host.getBoundingClientRect();
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const m = 8;
+  // Prefer dropping below the host; flip above if it doesn't fit; clamp to
+  // bottom of viewport as a last resort.
+  let top = hr.bottom + 6;
+  if (top + tr.height > vh - m) {
+    const aboveTop = hr.top - tr.height - 6;
+    top = aboveTop >= m ? aboveTop : Math.max(m, vh - tr.height - m);
+  }
+  // Horizontal: anchor at host's left edge; flip flush-right if it would
+  // clip; clamp to viewport edges.
+  let left = hr.left;
+  if (left + tr.width > vw - m) left = vw - tr.width - m;
+  if (left < m) left = m;
+  tip.style.position = 'fixed';
+  tip.style.top = `${top}px`;
+  tip.style.left = `${left}px`;
+  tip.style.display = '';     // hand back display control to the CSS hover rule
+  tip.style.visibility = '';
+}
+
+function clearTipPosition(host) {
+  const tip = host.querySelector(':scope > .tk-tip');
+  if (!tip) return;
+  tip.style.position = '';
+  tip.style.left = tip.style.right = tip.style.top = tip.style.bottom = '';
+  tip.style.display = '';
+  tip.style.visibility = '';
+}
+
+if (typeof document !== 'undefined' && !document._tkTipsInit) {
+  document._tkTipsInit = true;
+  // Delegated handlers — one listener for the whole document covers every
+  // `.tk-host` past, present and future, including tooltips rendered after
+  // re-mounts (each /api/stats refresh rebuilds the panel).
+  document.addEventListener('mouseover', (e) => {
+    const host = e.target.closest && e.target.closest('.tk-host');
+    if (!host) return;
+    // Skip child traversal noise — only fire when entering from OUTSIDE host.
+    if (host.contains(e.relatedTarget)) return;
+    positionTip(host);
+  });
+  document.addEventListener('mouseout', (e) => {
+    const host = e.target.closest && e.target.closest('.tk-host');
+    if (!host) return;
+    if (host.contains(e.relatedTarget)) return;
+    clearTipPosition(host);
+  });
+}
+
 export function el(tag, props, ...children) {
   const e = document.createElement(tag);
   if (props) {
