@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
-import { msBetween } from './io.js';
-import { extractToolUsesFromAssistant, extractWorktreeFromAgentPrompt } from './events.js';
+import { msBetween, toUnixMs } from './io.js';
+import { extractToolUsesFromAssistant, extractWorktreeFromAgentPrompt, isDebugRaw, isDebugRawAssistant } from './events.js';
 
 const HOOK_NAME_MAP = {
   'typecheck': 'typecheck-on-commit.sh',
@@ -43,12 +43,12 @@ export async function readHooksLog(path, winStart, winEnd) {
   const raw = await readFile(path, 'utf8').catch(() => '');
   const lines = raw.split('\n').filter(Boolean);
   const out = [];
-  const ws = winStart ? new Date(winStart).getTime() : 0;
-  const we = winEnd ? new Date(winEnd).getTime() : Infinity;
+  const ws = winStart ? toUnixMs(winStart) : 0;
+  const we = winEnd ? toUnixMs(winEnd) : Infinity;
   for (const l of lines) {
     const p = parseHookLine(l);
     if (!p) continue;
-    const t = new Date(p.ts).getTime();
+    const t = toUnixMs(p.ts);
     if (Number.isNaN(t) || t < ws || t > we) continue;
     out.push(p);
   }
@@ -78,7 +78,6 @@ export function aggregateHooks(hookLines) {
         worktree: line.worktree ?? null,
         durationMs: msBetween(startTs, line.ts),
         exitCode: line.kind === 'ok' ? 0 : (line.exitCode ?? 2),
-        tail: null,
       });
     } else if (line.kind === 'exit') {
       const start = openByName.get(line.shortName);
@@ -88,12 +87,12 @@ export function aggregateHooks(hookLines) {
         execsByName.get(fullName).push({
           ts: startTs, worktree: line.worktree ?? null,
           durationMs: msBetween(startTs, line.ts),
-          exitCode: line.exitCode, tail: null,
+          exitCode: line.exitCode,
         });
       }
     } else if (line.kind === 'skip') {
       execsByName.get(fullName).push({
-        ts: line.ts, worktree: line.worktree, durationMs: 0, exitCode: null, skip: true, tail: null,
+        ts: line.ts, worktree: line.worktree, durationMs: 0, exitCode: null, skip: true,
       });
     }
   }
@@ -119,7 +118,7 @@ export function assignHookExecsToPhases(events, phases, hookAggregates) {
   const worktreeByPhaseId = new Map();
   const toolUseIdToWorktree = new Map();
   for (const rec of events) {
-    if (rec.type !== 'debug_raw' || rec.event?.type !== 'assistant') continue;
+    if (!isDebugRawAssistant(rec)) continue;
     for (const b of extractToolUsesFromAssistant(rec.event)) {
       if ((b.name === 'Agent' || b.name === 'Task') && b.input?.prompt) {
         const wt = extractWorktreeFromAgentPrompt(b.input.prompt);
@@ -128,7 +127,7 @@ export function assignHookExecsToPhases(events, phases, hookAggregates) {
     }
   }
   for (const rec of events) {
-    if (rec.type !== 'debug_raw' || !rec.event) continue;
+    if (!isDebugRaw(rec)) continue;
     const ev = rec.event;
     if (ev.type === 'system' && ev.subtype === 'task_started' && ev.tool_use_id && toolUseIdToWorktree.has(ev.tool_use_id)) {
       worktreeByPhaseId.set(ev.task_id, toolUseIdToWorktree.get(ev.tool_use_id));
@@ -167,18 +166,18 @@ export function assignHookExecsToPhases(events, phases, hookAggregates) {
     const devPhases = devPhasesByWorktree.get(worktree);
     if (devPhases?.length) {
       if (devPhases.length === 1) return devPhases[0].phaseId;
-      const t = hookTs ? new Date(hookTs).getTime() : NaN;
+      const t = hookTs ? toUnixMs(hookTs) : NaN;
       if (!Number.isNaN(t)) {
         for (const dp of devPhases) {
-          const s = dp.startTs ? new Date(dp.startTs).getTime() : -Infinity;
-          const e = (dp.endTs ?? dp.effectiveEnd) ? new Date(dp.endTs ?? dp.effectiveEnd).getTime() : Infinity;
+          const s = dp.startTs ? toUnixMs(dp.startTs) : -Infinity;
+          const e = (dp.endTs ?? dp.effectiveEnd) ? toUnixMs(dp.endTs ?? dp.effectiveEnd) : Infinity;
           if (t >= s && t <= e) return dp.phaseId;
         }
         // Hook timestamp falls in a gap between runs — pick the nearest phase.
         let best = devPhases[0];
-        let bestDist = Math.abs(t - new Date(best.startTs || 0).getTime());
+        let bestDist = Math.abs(t - toUnixMs(best.startTs || 0));
         for (const dp of devPhases.slice(1)) {
-          const dist = Math.abs(t - new Date(dp.startTs || 0).getTime());
+          const dist = Math.abs(t - toUnixMs(dp.startTs || 0));
           if (dist < bestDist) { best = dp; bestDist = dist; }
         }
         return best.phaseId;

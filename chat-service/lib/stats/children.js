@@ -1,6 +1,6 @@
 import { msBetween } from './io.js';
 import {
-  buildEventTsIndex, countEventsStrictlyBetween, buildToolResultMap,
+  buildEventTsIndex, countEventsStrictlyBetween, buildToolResultMap, isDebugRawAssistant,
 } from './events.js';
 import { toolDetail, sendMessageVerdictFromInput } from './tools.js';
 import { buildPhaseOwnerMap, resolvePhase } from './phases.js';
@@ -20,7 +20,7 @@ function previewFromBuffer(buf) {
 
 export async function populateChildrenAndCounts(events, phases, orchestrator, subagentsDir) {
   const agentPhases = phases.filter((p) => p.kind === 'agent');
-  const phaseByToolUseId = buildPhaseOwnerMap(events, agentPhases);
+  const phaseByToolUseId = buildPhaseOwnerMap(agentPhases);
   const toolResultTsByToolUseId = buildToolResultMap(events);
   const eventTsIndex = buildEventTsIndex(events);
   const toolCounts = new Map();
@@ -29,7 +29,7 @@ export async function populateChildrenAndCounts(events, phases, orchestrator, su
   const thinkingBufferByPhase = new Map();
 
   for (const rec of events) {
-    if (rec.type !== 'debug_raw' || rec.event?.type !== 'assistant') continue;
+    if (!isDebugRawAssistant(rec)) continue;
     const owner = resolvePhase(rec.event, phaseByToolUseId) ?? orchestrator;
     if (!owner) continue;
     const blocks = rec.event.message?.content || [];
