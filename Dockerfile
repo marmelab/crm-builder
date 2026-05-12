@@ -6,6 +6,11 @@
 # ─────────────────────────────────────────────────────────────
 FROM node:22-bookworm-slim
 
+# ── Version pins — update when upgrading tools ────────────────
+ARG TTYD_VERSION=1.7.7
+ARG SUPABASE_CLI_VERSION=v2.98.2
+ARG CLAUDE_CODE_VERSION=2.1.98
+
 ENV DEBIAN_FRONTEND=noninteractive \
     APP_DIR=/app \
     CI=true \
@@ -25,7 +30,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ── ttyd (not in Debian repos, GitHub binary) ────────────────
-RUN curl -L https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.x86_64 \
+RUN curl -L https://github.com/tsl0922/ttyd/releases/download/${TTYD_VERSION}/ttyd.x86_64 \
     -o /usr/local/bin/ttyd \
     && chmod +x /usr/local/bin/ttyd
 
@@ -42,11 +47,14 @@ RUN install -m 0755 -d /etc/apt/keyrings \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Supabase CLI (used only in MODE=full) ────────────────────
-RUN curl -fsSL https://github.com/supabase/cli/releases/latest/download/supabase_linux_amd64.tar.gz \
+RUN curl -fsSL https://github.com/supabase/cli/releases/download/${SUPABASE_CLI_VERSION}/supabase_linux_amd64.tar.gz \
     | tar -xz -C /usr/local/bin supabase
 
 # ── Claude Code ───────────────────────────────────────────────
-RUN npm install -g @anthropic-ai/claude-code
+RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
+
+# ── TypeScript language server (required by typescript-lsp plugin for agents)
+RUN npm install -g typescript-language-server typescript
 
 # ── Download project (zip from main branch) ──────────────────
 # GitHub automatically generates a zip for any branch at:
@@ -66,27 +74,21 @@ RUN npm install
 RUN npx playwright install chromium-headless-shell \
     && chmod -R a+rwx /ms-playwright
 
-# TypeScript language server (required by typescript-lsp plugin for agents)
-RUN npm install -g typescript-language-server typescript
-
 # ── Git initialisation ────────────────────────────────────────
-# Required for agents to create worktrees:
-#   git worktree add /app/worktrees/my-feature feature/my-feature
-# Each worktree = isolated directory for one agent + its Vite dev server.
-# /app/worktrees/ is gitignored at runtime (entrypoint.sh).
+# node_modules is tracked so `git worktree add` includes them automatically —
+# each worktree gets isolated deps without an extra install step, enabling
+# parallel agent runs without vitest cache conflicts.
 RUN git config --global user.email "claude@atomic-crm.dev" \
     && git config --global user.name "Claude Code" \
     && git init \
     && git add . \
     && git commit -m "Initial commit (from marmelab/atomic-crm main)"
 
-# ── Integrate crm-builder (from local directory) ──────────────
-COPY claudeConfig/.claude/ /root/.claude/
-
 # ── Non-root user for Claude Code ────────────────────────────
-# --dangerously-skip-permissions is rejected when running as root
+# --dangerously-skip-permissions is rejected when running as root.
+# Note: .claude is copied in the final layer so agent config changes
+# don't invalidate this expensive step.
 RUN useradd -m -s /bin/bash developer \
-    && cp -r /root/.claude /home/developer/.claude \
     && cp /root/.gitconfig /home/developer/.gitconfig \
     && chown -R developer:developer /home/developer \
     && chown -R developer:developer /app \
@@ -123,6 +125,12 @@ RUN cd /chat-service && npm ci \
 # ── Entrypoint ────────────────────────────────────────────────
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
+
+# ── Agent config — most volatile, kept last ───────────────────
+# Changing agents/skills/hooks only invalidates these two steps.
+COPY claudeConfig/.claude/ /root/.claude/
+RUN cp -r /root/.claude /home/developer/.claude \
+    && chown -R developer:developer /home/developer/.claude
 
 # 5173  → CRM (Vite)
 # 54321 → Supabase API  (MODE=full only)

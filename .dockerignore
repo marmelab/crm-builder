@@ -1,1 +1,9 @@
-chat-service/node_modules
+.git
+sessions/
+sessions*/
+old-sessions/
+.env
+.worktrees/
+chat-service/node_modules/
+chat-service/tests/results/run-*.json
+.devcontainer/claude-seed/

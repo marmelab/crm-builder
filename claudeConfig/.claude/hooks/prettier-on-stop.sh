@@ -13,8 +13,11 @@ cd "$REPO" || { echo "[$(date -Iseconds)] prettier EXIT=0 cd_failed" >> "$LOG"; 
 # Only check ACTIVE feature worktrees under /app/worktrees/. See typecheck hook
 # for the rationale (skip main repo — pre-existing state is not our concern).
 # VALIDATE_WORKTREE narrows to one worktree (set by validate-before-review.sh).
+SESSION_SHORT=$(basename "${CHAT_SESSION_DIR:-}" | cut -d'-' -f1)
 if [ -n "${VALIDATE_WORKTREE:-}" ] && [ -d "$VALIDATE_WORKTREE" ]; then
   WORKTREES="$VALIDATE_WORKTREE"
+elif [ -n "$SESSION_SHORT" ]; then
+  WORKTREES=$(git worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2}' | grep "^/app/worktrees/${SESSION_SHORT}/" || true)
 else
   WORKTREES=$(git worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2}' | grep "^/app/worktrees/" || true)
 fi
@@ -36,7 +39,9 @@ for WT in $WORKTREES; do
     continue
   fi
 
-  OUTPUT=$(npm run prettier 2>&1)
+  # Scope to src/ only — avoids false positives on docs/ files created by
+  # the planner (e.g. project-context.json) that the developer didn't touch.
+  OUTPUT=$(npx prettier --check 'src/**/*.{ts,tsx,js,jsx,css,json,html}' 2>&1)
   EXIT_CODE=$?
   if [ $EXIT_CODE -ne 0 ]; then
     FAILED=1

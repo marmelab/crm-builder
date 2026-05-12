@@ -27,11 +27,62 @@
 
 set -u
 
-LOG=/chat-service/logs/hooks.log
+LOG="${CHAT_SESSION_DIR:-/chat-service/logs}/hooks.log"
 mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
 
+# Emit EXIT=N line on every exit so stats.js can build a proper execution record.
+# When exit code is 2 AND _LOG_WT is set (i.e. we reached actual validation, not
+# an early skip), also write a fail-cache so sibling SendMessages for the same
+# SHA fail instantly instead of re-running the full chain.
+_LOG_WT=""
+trap 'code=$?;
+  echo "[$(date -Iseconds)] validate-before-review EXIT=$code wt=$_LOG_WT" >> "$LOG" 2>/dev/null || true;
+  if [ "$code" = "2" ] && [ -n "$_LOG_WT" ]; then
+    _FAIL_SHA=$(git -C "$_LOG_WT" rev-parse HEAD 2>/dev/null || echo "");
+    if [ -n "$_FAIL_SHA" ]; then
+      printf "%s" "$_FAIL_SHA" > "/tmp/validate-cache-$(echo "$_LOG_WT" | tr "/" "_").bad.sha" 2>/dev/null || true;
+    fi;
+  fi' EXIT
+
+# Read stdin once — must happen before any exit that skips stdin.
 STDIN=$(cat)
 if [ -z "$STDIN" ]; then
+  exit 0
+fi
+
+# (A) Only gate when a developer agent is the caller. The orchestrator also
+# sends to merger (bare name) — without this check, its shutdown batch and
+# merge-forward messages get fully validated, wasting ~60s each.
+#
+# Detection order:
+#  1. CLAUDE_AGENT_NAME env var matches "developer-*" (preferred when set).
+#  2. agent_type field in hook input JSON: for in_process_teammates, the runtime
+#     sets agent_type to the FULL agent name including the TASK suffix, e.g.
+#     "developer-TASK-001". Match with "developer|developer-*" to cover both
+#     the bare subagent_type and the suffixed in_process_teammate form.
+CALLER_IS_DEVELOPER=0
+case "${CLAUDE_AGENT_NAME:-}" in
+  developer-*) CALLER_IS_DEVELOPER=1 ;;
+esac
+_AGENT_TYPE=$(node -e '
+try {
+  const i = JSON.parse(process.argv[1] || "{}");
+  process.stdout.write(i.agent_type || "");
+} catch { process.stdout.write(""); }
+' "$STDIN" 2>/dev/null || echo "")
+_RECV=$(node -e '
+try {
+  const i = JSON.parse(process.argv[1] || "{}");
+  process.stdout.write((i.tool_input && i.tool_input.to) || "");
+} catch { process.stdout.write(""); }
+' "$STDIN" 2>/dev/null || echo "")
+echo "[$(date -Iseconds)] validate-before-review INVOKE agent_env='${CLAUDE_AGENT_NAME:-}' agent_type='$_AGENT_TYPE' to='$_RECV'" >> "$LOG" 2>/dev/null || true
+if [ "$CALLER_IS_DEVELOPER" = "0" ]; then
+  case "$_AGENT_TYPE" in
+    developer|developer-*) CALLER_IS_DEVELOPER=1 ;;
+  esac
+fi
+if [ "$CALLER_IS_DEVELOPER" = "0" ]; then
   exit 0
 fi
 
@@ -57,6 +108,20 @@ case "$TO" in
     ;;
 esac
 
+# (B) Skip validation for shutdown_request messages — teardown messages
+# carry no diff to validate, and running all 5 scripts per shutdown (up to
+# 14 in one batch) wastes ~60s with 0 benefit.
+MSG_BODY=$(node -e '
+try {
+  const i = JSON.parse(process.argv[1] || "{}");
+  const m = (i.tool_input && i.tool_input.message) || "";
+  process.stdout.write(typeof m === "string" ? m : JSON.stringify(m));
+} catch { process.stdout.write(""); }
+' "$STDIN" 2>/dev/null || echo "")
+if echo "$MSG_BODY" | grep -q "shutdown_request"; then
+  exit 0
+fi
+
 # Derive the caller's worktree so chained scripts validate only that one.
 # Cross-worktree validation made one dev's broken tests block all parallel
 # devs' SendMessages — see chronology of session 1055d1b5… for the exact
@@ -78,14 +143,53 @@ try {
 ' "$STDIN" 2>/dev/null || echo "")
 fi
 
+# Derive SESSION_SHORT from CHAT_SESSION_DIR for session-scoped paths and flags.
+# Scoping prevents stale /tmp flags from a previous stopped session from
+# unblocking reviewers in a new session for the same TASK-XXX name.
+SESSION_SHORT=$(basename "${CHAT_SESSION_DIR:-}" | cut -d'-' -f1)
+
 if [ -n "$TASK_ID" ]; then
-  # The chained scripts re-check that this dir exists before using it; if the
-  # worktree has been removed (e.g. post-merge), they fall back to scanning
-  # all active worktrees, which will be a no-op when none remain.
-  export VALIDATE_WORKTREE="/app/worktrees/$TASK_ID"
+  # Worktrees are per-session: /app/worktrees/<session_short>/<TASK_ID>
+  if [ -n "$SESSION_SHORT" ]; then
+    export VALIDATE_WORKTREE="/app/worktrees/$SESSION_SHORT/$TASK_ID"
+    FLAG_QR="/tmp/notified-qr-${SESSION_SHORT}-${TASK_ID}"
+    FLAG_TV="/tmp/notified-tv-${SESSION_SHORT}-${TASK_ID}"
+    FLAG_MERGER="/tmp/notified-merger-${SESSION_SHORT}-${TASK_ID}"
+  else
+    # Fallback: no session context (e.g. manual hook test) — scan all worktrees.
+    export VALIDATE_WORKTREE="/app/worktrees/$TASK_ID"
+    FLAG_QR="/tmp/notified-qr-${TASK_ID}"
+    FLAG_TV="/tmp/notified-tv-${TASK_ID}"
+    FLAG_MERGER="/tmp/notified-merger-${TASK_ID}"
+  fi
+fi
+_LOG_WT="${VALIDATE_WORKTREE:-}"
+
+# (F) Enforce that the developer notifies BOTH reviewers before reaching the
+# merger. Flags are written at the end of this hook on successful validation
+# for quality-reviewer-* and test-validator-* destinations.
+if [ -n "$TASK_ID" ]; then
+  case "$TO" in
+    merger|merger-*)
+      MISSING=""
+      [ ! -f "${FLAG_QR:-/tmp/notified-qr-$TASK_ID}" ] && MISSING="${MISSING}quality-reviewer-$TASK_ID "
+      [ ! -f "${FLAG_TV:-/tmp/notified-tv-$TASK_ID}" ] && MISSING="${MISSING}test-validator-$TASK_ID "
+      if [ -n "$MISSING" ]; then
+        echo "[validate-before-review] Blocked: cannot message merger for $TASK_ID before notifying all reviewers. Missing: $MISSING" >&2
+        echo "Send \"ready, please review\" to both quality-reviewer-$TASK_ID AND test-validator-$TASK_ID first." >&2
+        exit 2
+      fi
+      # COMPLEX mode: both reviewer flags exist, meaning the full validation chain already
+      # ran and passed when the developer first notified the reviewers. Skip re-running it
+      # for the merger — the reviewer approval is the trust anchor.
+      echo "[$(date -Iseconds)] validate-before-review COMPLEX-SKIP to=merger $TASK_ID (both reviewer flags present)" >> "$LOG" 2>/dev/null || true
+      touch "${FLAG_MERGER:-/tmp/notified-merger-$TASK_ID}" 2>/dev/null || true
+      exit 0
+      ;;
+  esac
 fi
 
-echo "[$(date -Iseconds)] validate-before-review START to=$TO worktree=${VALIDATE_WORKTREE:-<all>}" >> "$LOG" 2>/dev/null || true
+echo "[$(date -Iseconds)] validate-before-review START to=$TO wt=${VALIDATE_WORKTREE:-}" >> "$LOG" 2>/dev/null || true
 
 # SHA cache: skip the validation chain if HEAD of any active worktree matches
 # the SHA we last validated successfully. The cache invalidates as soon as the
@@ -95,9 +199,18 @@ ACTIVE_WORKTREES=$(git -C /app worktree list --porcelain 2>/dev/null \
   | awk '/^worktree /{print $2}' \
   | grep "^/app/worktrees/" || true)
 
-if [ -n "$ACTIVE_WORKTREES" ]; then
+# (C) Scope the SHA cache to the specific worktree when VALIDATE_WORKTREE is
+# set. Using ALL active worktrees caused spurious cache misses: an unrelated
+# worktree committing invalidated the cache for the current one, triggering a
+# full 60s re-validation even though nothing changed for this task.
+CACHE_WORKTREES="${VALIDATE_WORKTREE:-}"
+if [ -z "$CACHE_WORKTREES" ]; then
+  CACHE_WORKTREES="$ACTIVE_WORKTREES"
+fi
+
+if [ -n "$CACHE_WORKTREES" ]; then
   ALL_CACHED=1
-  for WT in $ACTIVE_WORKTREES; do
+  for WT in $CACHE_WORKTREES; do
     HEAD_SHA=$(git -C "$WT" rev-parse HEAD 2>/dev/null || echo "")
     if [ -z "$HEAD_SHA" ]; then ALL_CACHED=0; break; fi
     CACHE_FILE="/tmp/validate-cache-$(echo "$WT" | tr '/' '_').sha"
@@ -105,8 +218,35 @@ if [ -n "$ACTIVE_WORKTREES" ]; then
     if [ "$HEAD_SHA" != "$LAST_SHA" ]; then ALL_CACHED=0; break; fi
   done
   if [ "$ALL_CACHED" = "1" ]; then
-    echo "[$(date -Iseconds)] validate-before-review CACHE HIT to=$TO (all worktrees at last-validated SHA)" >> "$LOG" 2>/dev/null || true
+    echo "[$(date -Iseconds)] validate-before-review CACHE HIT to=$TO (worktree at last-validated SHA)" >> "$LOG" 2>/dev/null || true
+    if [ -n "$TASK_ID" ]; then
+      case "$TO" in
+        quality-reviewer-*) touch "${FLAG_QR:-/tmp/notified-qr-$TASK_ID}" 2>/dev/null || true ;;
+        test-validator-*)   touch "${FLAG_TV:-/tmp/notified-tv-$TASK_ID}" 2>/dev/null || true ;;
+        merger|merger-*)    touch "${FLAG_MERGER:-/tmp/notified-merger-$TASK_ID}" 2>/dev/null || true ;;
+      esac
+    fi
     exit 0
+  fi
+fi
+
+# Fail cache: if the current HEAD already failed a previous validation run on
+# the same SHA, fail instantly (<1s) instead of re-running the full 30-60s
+# chain. This avoids the double-run when the developer sends to quality-reviewer
+# and test-validator simultaneously and both hooks fire on the same broken commit.
+if [ -n "$CACHE_WORKTREES" ]; then
+  ALL_FAILED=1
+  for WT in $CACHE_WORKTREES; do
+    HEAD_SHA=$(git -C "$WT" rev-parse HEAD 2>/dev/null || echo "")
+    if [ -z "$HEAD_SHA" ]; then ALL_FAILED=0; break; fi
+    BAD_FILE="/tmp/validate-cache-$(echo "$WT" | tr '/' '_').bad.sha"
+    BAD_SHA=$(cat "$BAD_FILE" 2>/dev/null || echo "")
+    if [ "$HEAD_SHA" != "$BAD_SHA" ]; then ALL_FAILED=0; break; fi
+  done
+  if [ "$ALL_FAILED" = "1" ]; then
+    echo "[$(date -Iseconds)] validate-before-review FAIL-CACHE HIT to=$TO (SHA already failed)" >> "$LOG" 2>/dev/null || true
+    echo "This commit already failed validation. Fix the issue and make a new commit before messaging the reviewer." >&2
+    exit 2
   fi
 fi
 
@@ -124,6 +264,26 @@ case "${VALIDATE_DRY_RUN:-}" in
     exit 2
     ;;
 esac
+
+# Auto-apply prettier before running the validation chain.
+# If prettier --write fails (e.g. syntax error in a source file), exit early
+# with the actual error so the developer knows what to fix instead of seeing a
+# cryptic "prettier check failed" later in the chain.
+if [ -n "${VALIDATE_WORKTREE:-}" ] && [ -d "$VALIDATE_WORKTREE" ]; then
+  PRETTIER_OUT=$( (cd "$VALIDATE_WORKTREE" && npx prettier --write 'src/**/*.{ts,tsx,js,jsx,css,json,html}') 2>&1 )
+  PRETTIER_EXIT=$?
+  if [ $PRETTIER_EXIT -ne 0 ]; then
+    echo "[$(date -Iseconds)] validate-before-review auto-prettier FAILED exit=$PRETTIER_EXIT wt=$VALIDATE_WORKTREE" >> "$LOG" 2>/dev/null || true
+    echo "Prettier could not format one or more files (likely a syntax error). Fix the issue and commit before sending to reviewer." >&2
+    printf '%s\n' "$PRETTIER_OUT" >&2
+    exit 2
+  fi
+  if ! git -C "$VALIDATE_WORKTREE" diff --quiet 2>/dev/null; then
+    git -C "$VALIDATE_WORKTREE" add -A 2>/dev/null || true
+    git -C "$VALIDATE_WORKTREE" commit -m "style($TASK_ID): auto-apply prettier" 2>/dev/null || true
+    echo "[$(date -Iseconds)] validate-before-review auto-prettier wt=$VALIDATE_WORKTREE committed" >> "$LOG" 2>/dev/null || true
+  fi
+fi
 
 HOOK_DIR="$(dirname "$0")"
 
@@ -159,15 +319,35 @@ done
 echo "[$(date -Iseconds)] validate-before-review ALL OK to=$TO" >> "$LOG" 2>/dev/null || true
 
 # Cache the SHA(s) we just validated so subsequent SendMessages on the same
-# commit can short-circuit instantly.
-if [ -n "$ACTIVE_WORKTREES" ]; then
-  for WT in $ACTIVE_WORKTREES; do
+# commit can short-circuit instantly. Also clear the fail cache so a future
+# fix+commit isn't incorrectly blocked by a stale bad-SHA entry.
+if [ -n "$CACHE_WORKTREES" ]; then
+  for WT in $CACHE_WORKTREES; do
     HEAD_SHA=$(git -C "$WT" rev-parse HEAD 2>/dev/null || echo "")
     if [ -n "$HEAD_SHA" ]; then
       CACHE_FILE="/tmp/validate-cache-$(echo "$WT" | tr '/' '_').sha"
       printf '%s' "$HEAD_SHA" > "$CACHE_FILE"
+      rm -f "/tmp/validate-cache-$(echo "$WT" | tr '/' '_').bad.sha" 2>/dev/null || true
     fi
   done
+fi
+
+# (F) Record that this reviewer/validator/merger was successfully notified for TASK_ID.
+# member-idle-gate reads these flags to unblock each agent type.
+# Flags are session-scoped (SESSION_SHORT prefix) to prevent stale flags from a
+# previous session from unblocking reviewers in a new one.
+if [ -n "$TASK_ID" ]; then
+  case "$TO" in
+    quality-reviewer-*)
+      touch "${FLAG_QR:-/tmp/notified-qr-$TASK_ID}" 2>/dev/null || true
+      ;;
+    test-validator-*)
+      touch "${FLAG_TV:-/tmp/notified-tv-$TASK_ID}" 2>/dev/null || true
+      ;;
+    merger|merger-*)
+      touch "${FLAG_MERGER:-/tmp/notified-merger-$TASK_ID}" 2>/dev/null || true
+      ;;
+  esac
 fi
 
 exit 0

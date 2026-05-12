@@ -9,7 +9,13 @@ After all reviews are APPROVED, before SendMessaging the merger.
 
 ## Where
 
-`docs/reflections/TASK-XXX-reflection.md`
+`/app/docs/reflections/<SESSION_SHORT_ID>/<TASK_ID>.md`
+
+Absolute path, outside any worktree, on the shared volume (`crm-docs`).
+`SESSION_SHORT_ID` is the first path segment of `WORKTREE_PATH`
+(e.g. `/app/worktrees/58c3f4c7/TASK-001` → `58c3f4c7`).
+One sub-folder per session avoids TASK-001 collisions across sessions.
+Create the directory if it does not exist yet.
 
 ## Format — KEEP IT SHORT
 

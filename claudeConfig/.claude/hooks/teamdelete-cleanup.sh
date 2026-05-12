@@ -1,17 +1,19 @@
 #!/bin/bash
 # PostToolUse hook for TeamDelete tool.
 #
-# Runs AFTER a successful TeamDelete to remove residual disk artifacts
-# (inboxes/, transcripts) that the runtime leaves behind. This replaces
-# the manual Phase 3e Bash rm step in the agent-team skill — which was
-# fragile (lead could forget) and blocked by the .claude/ permission gate
-# when invoked via the Bash tool.
+# Runs AFTER a successful TeamDelete to:
+#   1. Remove residual disk artifacts (inboxes/, transcripts).
+#   2. Write a circuit-breaker flag when TeamDelete found no team
+#      (response: "No team name found, nothing to clean up"). This flag
+#      is read by teamdelete-gate.sh (PreToolUse) to block the next call,
+#      preventing the orchestrator from looping in STATE DONE.
+#      The flag is cleared when a real team is deleted, so multi-wave
+#      sessions (each wave creates a new team) still work correctly.
 #
 # Behavior:
 #   - If tool_response.success is not true → no-op (let user investigate)
-#   - Extract team_name from tool_response.team_name (always present on success)
-#   - Validate the team_name strictly (alphanumeric, dash, underscore only)
-#   - rm -rf "$HOME/.claude/teams/<team_name>"
+#   - If success but no team_name → write empty-flag, skip disk cleanup
+#   - If success and team_name present → disk cleanup + clear empty-flag
 #   - Always exit 0 — this hook is informational, never blocks
 #
 # Safety: the team_name regex prevents path traversal. We only ever
@@ -33,7 +35,7 @@ if ! command -v node >/dev/null 2>&1; then
   exit 0
 fi
 
-# Parse the JSON input via node (extracts success flag + team_name in one call)
+# Parse the JSON input via node (extracts success flag + team_name + session_id)
 PARSED=$(node -e '
 try {
   const i = JSON.parse(process.argv[1] || "{}");
@@ -41,7 +43,8 @@ try {
   const ti = i.tool_input || {};
   process.stdout.write(JSON.stringify({
     success: tr.success === true ? "true" : "false",
-    teamName: tr.team_name || ti.team_name || ""
+    teamName: tr.team_name || ti.team_name || "",
+    sessionId: i.session_id || ""
   }));
 } catch { process.stdout.write("{}"); }
 ' "$STDIN" 2>/dev/null || echo "{}")
@@ -52,8 +55,21 @@ if [ "$SUCCESS" != "true" ]; then
   exit 0
 fi
 
+SESSION_ID=$(echo "$PARSED" | node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(0)).sessionId || "")' 2>/dev/null)
+SESSION_HASH=""
+if [ -n "$SESSION_ID" ]; then
+  SESSION_HASH=$(echo -n "$SESSION_ID" | sha1sum | cut -c1-16)
+fi
+EMPTY_FLAG="/tmp/teamdelete-empty-${SESSION_HASH:-default}"
+
 TEAM_NAME=$(echo "$PARSED" | node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(0)).teamName || "")' 2>/dev/null)
 if [ -z "$TEAM_NAME" ]; then
+  # TeamDelete found no team — write circuit-breaker flag so the gate
+  # blocks the next call and prevents a STATE DONE loop.
+  if [ -n "$SESSION_HASH" ]; then
+    touch "$EMPTY_FLAG" 2>/dev/null || true
+    hook_log "teamdelete-cleanup SET empty-flag session_hash=${SESSION_HASH}"
+  fi
   hook_log "teamdelete-cleanup SKIP no team_name"
   exit 0
 fi
@@ -80,6 +96,9 @@ esac
 if [ -d "$TARGET" ]; then
   rm -rf "$TARGET" 2>/dev/null
   hook_log "teamdelete-cleanup REMOVED $TARGET"
+  # Real deletion — clear the circuit-breaker flag so the next wave can
+  # call TeamCreate + TeamDelete again without being blocked.
+  rm -f "$EMPTY_FLAG" 2>/dev/null || true
 else
   hook_log "teamdelete-cleanup NOOP $TARGET (not present)"
 fi

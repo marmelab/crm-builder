@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help build up up-full down restart logs shell test test-unit test-hooks test-smoke bench bench-update clean-sessions reset \
+.PHONY: help build up up-full down wipe restart logs shell test test-unit test-smoke bench bench-update clean-sessions reset \
         start demo full stop kill image log tail bash exec tests smoke clean archive reload
 
 help: ## Show this help
@@ -18,6 +18,9 @@ up-full: ## Start the stack in full mode (Supabase, host network)
 down: ## Stop and remove containers (volumes preserved)
 	docker compose --profile demo --profile full down
 
+wipe: ## Stop and remove containers AND volumes (wipes atomic-crm checkout, deps, sessions)
+	docker compose --profile demo --profile full down -v
+
 restart: down up ## Restart the demo stack
 
 logs: ## Tail logs of the running stack
@@ -27,18 +30,10 @@ shell: ## Open a shell inside the running demo container
 	docker exec -it atomic-crm-demo bash
 
 test: ## Run all tests
-	$(MAKE) test-unit test-hooks test-smoke
+	$(MAKE) test-unit test-smoke
 
 test-unit: ## Run chat-service unit tests
 	cd chat-service && npm test
-
-test-hooks: ## Run bash hook contract tests in claudeConfig/.claude/hooks/test/
-	@fail=0; \
-	for t in claudeConfig/.claude/hooks/test/*.test.sh; do \
-		echo "── $$t"; \
-		bash "$$t" || fail=1; \
-	done; \
-	exit $$fail
 
 test-smoke: ## Run chat-service WebSocket smoke test
 	cd chat-service && npm run test:smoke

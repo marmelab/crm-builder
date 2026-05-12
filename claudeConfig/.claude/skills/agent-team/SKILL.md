@@ -80,32 +80,32 @@ Agent({subagent_type: "merger", name: "merger", team_name: "tickets", model: "ha
 Then in a second message: one `SendMessage(GO, …)` per developer:
 
 ```
-SendMessage({to: "developer-TASK-001", message: "GO — Implement TASK-001 (worktree=/app/worktrees/TASK-001, branch=<branch>). Ticket spec at <path>. COUNTERPARTS: reviewers=[quality-reviewer-TASK-001, test-validator-TASK-001], merger=merger."})
+SendMessage({to: "developer-TASK-001", message: "GO — Implement TASK-001 (worktree=/app/worktrees/<SESSION_SHORT_ID>/TASK-001, branch=<SESSION_SHORT_ID>/<branch>). Ticket spec at <path>. COUNTERPARTS: reviewers=[quality-reviewer-TASK-001, test-validator-TASK-001], merger=merger."})
 ```
 
 After GO: lead enters **passive wait**. It receives N final SendMessages from `merger` (one per ticket: `merged TASK-XXX, commit=<sha>` or `TASK-XXX merge failed: <reason>`). When count == N → Phase 3.
 
 ### Spawn prompt frames
 
-Each member's per-cycle WORKFLOW is in its own auto-loaded protocol skill
-(`developer-protocol`, `quality-review-protocol`, `test-validation-protocol`,
-`merge-protocol`). The spawn prompt only needs to set up the inputs.
+The WORKFLOW for each role is defined in their own agent file (developer.md,
+quality-reviewer.md, test-validator.md, merger.md). Spawn prompts only carry
+the per-ticket inputs; agents read their own file for the workflow.
 
 **developer-TASK-XXX**
 ```
 ROLE: developer
 TASK_ID: TASK-XXX
 TEAM: tickets
-WORKTREE: /app/worktrees/TASK-XXX
+WORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/TASK-XXX
+BRANCH_NAME: <SESSION_SHORT_ID>/feature/<branch>
 TICKET_FILE: <session_dir>/TASK-XXX.json
 COUNTERPARTS:
   - reviewers: [quality-reviewer-TASK-XXX, test-validator-TASK-XXX]
   - merger: merger   (shared singleton — bare name)
 TEAM_LEAD: team-lead
 
-Apply the WORKFLOW + TIMEOUTS from the developer-protocol skill (already in
-your context). Do NOT call `Skill({skill: "agent-team"})` — that's for the
-team-lead, not you.
+Follow the WORKFLOW in your agent file (developer.md). Do NOT call
+`Skill({skill: "agent-team"})` — that's for the team-lead, not you.
 ```
 
 **quality-reviewer-TASK-XXX** and **test-validator-TASK-XXX** share the same frame:
@@ -113,18 +113,17 @@ team-lead, not you.
 ROLE: <quality-reviewer | test-validator>
 TASK_ID: TASK-XXX
 TEAM: tickets
-WORKTREE: /app/worktrees/TASK-XXX
+WORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/TASK-XXX
 TICKET_FILE: <session_dir>/TASK-XXX.json
 COUNTERPART: developer-TASK-XXX
 TEAM_LEAD: team-lead
 
-Apply the WORKFLOW from your auto-loaded <quality-review-protocol |
-test-validation-protocol> skill. The detailed rubric / verdict matrix is in
-your agent's own prompt. Do NOT call `Skill({skill: "agent-team"})`.
+Follow the WORKFLOW in your agent file. Do NOT call any tool until
+`developer-TASK-XXX` sends you a "ready" message. Do NOT call
+`Skill({skill: "agent-team"})`.
 ```
 
-**merger** (singleton, no suffix — needs a small loop wrapper around the
-auto-loaded `merge-protocol`):
+**merger** (singleton, no suffix):
 ```
 ROLE: merger
 NAME: merger   (no suffix — single shared merger for the whole wave)
@@ -132,31 +131,9 @@ TEAM: tickets
 TICKETS_DIR: <session_dir>   (passed at spawn)
 TEAM_LEAD: team-lead
 
-INITIAL ACTION ON DISPATCH:
-**Stop immediately. Do NOT call any tool — including Skill. Idle until you
-receive your first SendMessage from a `developer-TASK-XXX`.** Your spawn
-context already has the merge-protocol skill loaded; do NOT call
+Follow the WORKFLOW in your agent file (merger.md). Do NOT call any tool
+until you receive a SendMessage from a developer-TASK-XXX. Do NOT call
 `Skill({skill: "agent-team"})` — it's for the team-lead, not you.
-
-WORKFLOW (loop until shutdown_request):
-Each incoming message from a developer-TASK-XXX MUST start with
-"ready: TASK-XXX, branch=<branch>". Process them serially (git lock makes it
-serial anyway).
-
-For each incoming message:
-1. Parse from: → derive TASK_ID (e.g. from="developer-TASK-006" → "TASK-006").
-2. Parse "branch=<branch>" (fallback: read ${TICKETS_DIR}/TASK-XXX.json,
-   pick branch_name).
-3. WORKTREE_PATH = /app/worktrees/TASK-XXX.
-4. Run the MERGE STEPS from the merge-protocol skill (already in your
-   context). Use the COMPLEX-mode branches at steps 5 (update ticket) and
-   6 (SendMessage report to team-lead).
-5. Idle for the next message — do NOT stop after one merge.
-6. On SendMessage(shutdown_request): reply shutdown_approved and stop.
-
-If unexpected sender or malformed message:
-SendMessage(team-lead, "merger received unexpected from <from>: <quote>")
-and idle.
 ```
 
 ---

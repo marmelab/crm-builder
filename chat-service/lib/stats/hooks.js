@@ -12,9 +12,11 @@ const HOOK_NAME_MAP = {
   'block-bash-validation': 'block-bash-validation.sh',
   'circuit-breaker':       'circuit-breaker.sh',
   'silent-mode-check':     'silent-mode-check.sh',
+  'validate-before-review': 'validate-before-review.sh',
 };
 const BLOCKING_HOOKS = new Set([
   'block-bash-file-write.sh','block-bash-validation.sh','circuit-breaker.sh','silent-mode-check.sh',
+  'validate-before-review.sh',
 ]);
 
 function parseHookLine(line) {
@@ -132,12 +134,64 @@ export function assignHookExecsToPhases(events, phases, hookAggregates) {
       worktreeByPhaseId.set(ev.task_id, toolUseIdToWorktree.get(ev.tool_use_id));
     }
   }
-  const phaseIdByWorktree = new Map();
-  for (const [phaseId, wt] of worktreeByPhaseId) phaseIdByWorktree.set(wt, phaseId);
+  // Build per-worktree lookup structures.
+  // developer phases: collected into a sorted list so hook executions can be
+  //   matched to the right resume iteration by timestamp rather than first-wins.
+  // fallback phases: first non-developer phase for worktrees with no developer.
+  const devPhasesByWorktree = new Map();  // wt → [{phaseId, startTs, endTs}]
+  const fallbackPhaseByWorktree = new Map(); // wt → phaseId
+  for (const [phaseId, wt] of worktreeByPhaseId) {
+    const phase = phases.find((p) => p.phaseId === phaseId);
+    if (!phase) continue;
+    if (phase.agentType === 'developer') {
+      if (!devPhasesByWorktree.has(wt)) devPhasesByWorktree.set(wt, []);
+      devPhasesByWorktree.get(wt).push({ phaseId, startTs: phase.startTs, endTs: phase.endTs });
+    } else if (!fallbackPhaseByWorktree.has(wt)) {
+      fallbackPhaseByWorktree.set(wt, phaseId);
+    }
+  }
+  for (const list of devPhasesByWorktree.values()) {
+    list.sort((a, b) => (a.startTs || '').localeCompare(b.startTs || ''));
+    // Interrupted phases (endTs=null) would match [startTs, Infinity] and swallow
+    // all hooks from later resume iterations. Cap them at the next phase's startTs.
+    for (let i = 0; i < list.length - 1; i++) {
+      if (!list[i].endTs) list[i].effectiveEnd = list[i + 1].startTs;
+    }
+  }
+
+  // Find the developer phase whose time window contains hookTs. When the
+  // developer was resumed (same worktree, multiple phases), each hook execution
+  // is attributed to the phase that was active at that point in time rather
+  // than all hooks being piled onto the first dispatch.
+  const resolvePhaseId = (worktree, hookTs) => {
+    const devPhases = devPhasesByWorktree.get(worktree);
+    if (devPhases?.length) {
+      if (devPhases.length === 1) return devPhases[0].phaseId;
+      const t = hookTs ? new Date(hookTs).getTime() : NaN;
+      if (!Number.isNaN(t)) {
+        for (const dp of devPhases) {
+          const s = dp.startTs ? new Date(dp.startTs).getTime() : -Infinity;
+          const e = (dp.endTs ?? dp.effectiveEnd) ? new Date(dp.endTs ?? dp.effectiveEnd).getTime() : Infinity;
+          if (t >= s && t <= e) return dp.phaseId;
+        }
+        // Hook timestamp falls in a gap between runs — pick the nearest phase.
+        let best = devPhases[0];
+        let bestDist = Math.abs(t - new Date(best.startTs || 0).getTime());
+        for (const dp of devPhases.slice(1)) {
+          const dist = Math.abs(t - new Date(dp.startTs || 0).getTime());
+          if (dist < bestDist) { best = dp; bestDist = dist; }
+        }
+        return best.phaseId;
+      }
+      return devPhases[devPhases.length - 1].phaseId;
+    }
+    return fallbackPhaseByWorktree.get(worktree) ?? null;
+  };
+
   for (const agg of hookAggregates) {
     for (const exec of agg.executions) {
       if (!exec.worktree) continue;
-      const phaseId = phaseIdByWorktree.get(exec.worktree);
+      const phaseId = resolvePhaseId(exec.worktree, exec.ts);
       if (!phaseId) continue;
       const phase = phases.find((p) => p.phaseId === phaseId);
       if (!phase) continue;

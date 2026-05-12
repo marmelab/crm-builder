@@ -27,11 +27,14 @@ export function toolDetail(toolName, input) {
 // renderer can colour-code rows (red BLOCKED, orange AWR, etc.).
 export function sendMessageVerdict(text) {
   if (/shutdown_request/i.test(text)) return 'shutdown';
-  // Order matters: AWR before plain APPROVED.
-  if (/^APPROVED\s+WITH\s+RESERVATIONS\b/i.test(text)) return 'awr';
-  if (/^APPROVED\b/i.test(text)) return 'approved';
-  if (/^BLOCKED\b/i.test(text) || /^RED\b/i.test(text)) return 'blocked';
-  if (/^GREEN\b/i.test(text)) return 'approved';
+  // Reviewers follow the agent-output-format rule: "Verdict: APPROVED / GREEN / etc."
+  // Support both bare ("APPROVED ...") and prefixed ("Verdict: APPROVED ...") forms.
+  const firstLine = text.split('\n')[0].trim();
+  const bare = firstLine.replace(/^Verdict:\s*/i, '');
+  if (/^APPROVED\s+WITH\s+RESERVATIONS\b/i.test(bare)) return 'awr';
+  if (/^APPROVED\b/i.test(bare)) return 'approved';
+  if (/^BLOCKED\b/i.test(bare) || /^RED\b/i.test(bare)) return 'blocked';
+  if (/^GREEN\b/i.test(bare)) return 'approved';
   if (/\bready\b.*\b(review|validate|merge)\b/i.test(text) || /^GO\b/.test(text)) return 'ready';
   if (/^merged\s+TASK-/i.test(text) || /merge\s+failed/i.test(text)) return 'merger-report';
   return null;

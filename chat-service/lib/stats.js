@@ -13,6 +13,7 @@ import { readJsonl, msBetween, computeSummary } from './stats/io.js';
 import { extractTeams } from './stats/teams.js';
 import {
   extractPhases, buildOrchestratorPhase, buildTimeBreakdown, computePhaseWorkMs,
+  computeUserWaitMs,
 } from './stats/phases.js';
 import { populateChildrenAndCounts } from './stats/children.js';
 import { readHooksLog, aggregateHooks, assignHookExecsToPhases } from './stats/hooks.js';
@@ -66,7 +67,8 @@ export async function aggregateSession({ sessionLogPath, hooksLogPath, sessionId
     }
   }
 
-  const orchestrator = buildOrchestratorPhase(events, agentPhases, startTs, endTs);
+  const userWaitMs = computeUserWaitMs(events);
+  const orchestrator = buildOrchestratorPhase(events, agentPhases, startTs, endTs, userWaitMs);
   const phases = [orchestrator, ...agentPhases].sort((a, b) => a.startTs.localeCompare(b.startTs));
 
   // Build phase children, tool counts, and leaderboards.
@@ -77,6 +79,17 @@ export async function aggregateSession({ sessionLogPath, hooksLogPath, sessionId
   // For COMPLEX team members, durationMs includes long idle waits — workMs
   // is the actual hands-on-keyboard time.
   for (const p of phases) p.workMs = computePhaseWorkMs(p);
+
+  // Last-resort fallback: phases that still have no endTs after enrichment
+  // (transcript files absent or unmatched) get session-end as an upper-bound
+  // estimate so the UI shows something instead of "—".
+  for (const p of agentPhases) {
+    if (!p.endTs && p.startTs && endTs) {
+      p.endTs = endTs;
+      p.durationMs = msBetween(p.startTs, endTs);
+      p.durationApprox = true;
+    }
+  }
 
   const timeBreakdown = agentPhases.length > 0 ? buildTimeBreakdown(orchestrator, agentPhases) : [];
 

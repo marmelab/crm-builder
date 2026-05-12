@@ -1,6 +1,7 @@
 import { el, formatTokens } from './lib/dom.js';
 import { renderStatsPanel, initStatsRefresh } from './lib/stats/index.js';
 import { initConnection, initDisplay, initHistory, openConfirmModal, initRecentPopup } from './lib/sessions/index.js';
+import { renderInlineMarkdown } from './lib/markdown.js';
 import { initRollback } from './lib/rollback/index.js';
 
 const widget   = document.getElementById('chat-widget');
@@ -391,6 +392,8 @@ function appendMessage(role, content, seqOrOpts = ++seqCounter) {
     body.className = 'msg-rollback-body';
     body.textContent = content;
     el.append(header, body);
+  } else if (role === 'assistant') {
+    el.innerHTML = renderInlineMarkdown(content);
   } else {
     el.textContent = content;
   }

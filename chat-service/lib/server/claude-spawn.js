@@ -24,14 +24,27 @@ export function extractToolUses(msg) {
   return blocks.filter((b) => b.type === 'tool_use');
 }
 
+// The chat UI's "Define your business" button sends `content: 'FULL_SETUP'`.
+// We rewrite it into an explicit `<intent>setup</intent>` marker the
+// orchestrator recognises (cohérent with `<mode>` / `<session_dir>` env tags).
+// Plain-text fallback is kept so any NL detection in the orchestrator still
+// has something to chew on.
+export function rewriteUserMessage(userMessage) {
+  if (userMessage === 'FULL_SETUP') {
+    return '<intent>setup</intent>\nUser clicked "Define your business" — start the project setup interview.';
+  }
+  return userMessage;
+}
+
 export function spawnClaude(userMessage, claudeSessionId, sessionDir) {
   const mode = process.env.MODE || 'demo';
   const env = `<mode>${mode}</mode>\n<session_dir>${sessionDir}</session_dir>`;
   const systemPrompt = getSystemPrompt();
   const orchestratorModel = getOrchestratorModel();
+  const finalUserMessage = rewriteUserMessage(userMessage);
   const prompt = systemPrompt
-    ? `<instructions>\n${systemPrompt}\n</instructions>\n\n${env}\n\n${userMessage}`
-    : `${env}\n\n${userMessage}`;
+    ? `<instructions>\n${systemPrompt}\n</instructions>\n\n${env}\n\n${finalUserMessage}`
+    : `${env}\n\n${finalUserMessage}`;
   const args = [
     '--output-format', 'stream-json',
     '--verbose',

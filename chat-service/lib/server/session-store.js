@@ -51,11 +51,13 @@ export function digestLog(logText) {
       timeline.push(item);
     } else if (entry.dir === 'out' && entry.type === 'debug_raw') {
       if (entry.event?.type === 'result') {
-        // Each result event is end-of-spawn; total_cost_usd is the cumulative cost
-        // for that spawn, so summing per-result is correct (one result per spawn).
+        // usage is per-spawn (one result per claude -p invocation) — sum is correct.
+        // total_cost_usd is cumulative across the entire Claude session (monotonically
+        // increasing across all spawns). Summing it over N result events inflates by N×.
+        // Take the running max instead: the last value is the true session total.
         const u = entry.event.usage || {};
         tokensUsed += (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.output_tokens || 0);
-        costUsd += entry.event.total_cost_usd || 0;
+        costUsd = Math.max(costUsd, entry.event.total_cost_usd || 0);
       }
       timeline.push({ kind: 'debug', type: 'debug_raw', event: entry.event });
       trackDebug();

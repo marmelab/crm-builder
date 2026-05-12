@@ -180,6 +180,18 @@ async function appendSubagentToolUses(file, phase, toolCounts, allToolCalls) {
       }
     }
   }
+
+  // If the phase never received a task_notification (endTs still null), derive
+  // timing from the subagent transcript's first/last event timestamps. This is
+  // more accurate than using session-end as a fallback.
+  if (!phase.endTs && events.length > 0) {
+    const lastTs = events[events.length - 1].timestamp;
+    if (lastTs) {
+      phase.endTs = lastTs;
+      phase.durationMs = msBetween(phase.startTs, lastTs);
+      phase.durationApprox = true;
+    }
+  }
 }
 
 export { SKIP_CHILD };

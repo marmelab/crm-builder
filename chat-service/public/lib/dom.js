@@ -24,17 +24,16 @@ export function formatTokens(n) {
 }
 
 export function formatDuration(ms) {
-  if (ms <= 0) return '0.00s';
-  if (ms <= 10) return '0.01s';
+  if (ms <= 0) return '—';
   const totalS = ms / 1000;
   const h = Math.floor(totalS / 3600);
   const m = Math.floor((totalS % 3600) / 60);
-  const s = totalS - h * 3600 - m * 60;
+  const s = Math.floor(totalS % 60);
   const pad = (n) => String(n).padStart(2, '0');
-  const padS = (n) => n.toFixed(2).padStart(5, '0');
-  if (h > 0) return `${h}h ${pad(m)}m ${padS(s)}s`;
-  if (m > 0) return `${m}m ${padS(s)}s`;
-  return `${s.toFixed(2)}s`;
+  if (h > 0) return `${h}h ${pad(m)}m ${pad(s)}s`;
+  if (m > 0) return `${m}m ${pad(s)}s`;
+  if (s === 0) return '<1s';
+  return `${s}s`;
 }
 
 export function escapeHtml(s) {

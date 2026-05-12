@@ -2,11 +2,11 @@
 
 Applies to: developer, quality-reviewer, test-validator. Any agent working on a specific ticket dispatched into the shared `tickets` team with a suffixed name (e.g. `developer-TASK-006`).
 
-Not applicable to: planner (searches /app/src/ for file discovery), merger (operates in /app to merge), chat-orchestrator (doesn't touch files).
+Not applicable to: planner (searches /app/src/ for file discovery), merger (operates in /app to merge), chat-orchestrator (doesn't touch files), project-manager (operates on /app/docs/project-context.json directly on main — config only, no code).
 
 ## Why
 
-Each ticket gets its own git worktree at `/app/worktrees/TASK-XXX/`, which is a **complete copy** of the base branch plus the feature branch's changes. Reading/editing `/app/src/...` while you have the same file at `/app/worktrees/TASK-XXX/src/...` is:
+Each ticket gets its own git worktree at `/app/worktrees/<SESSION_SHORT_ID>/TASK-XXX/` (session-scoped to prevent stale worktrees from a previous stopped session from interfering). Reading/editing `/app/src/...` while you have the same file at `<WORKTREE_PATH>/src/...` is:
 
 1. Duplicate work — same bytes, twice the token cost
 2. Incorrect — `/app` is on the base branch, missing the ticket's changes
@@ -16,7 +16,7 @@ Each ticket gets its own git worktree at `/app/worktrees/TASK-XXX/`, which is a 
 
 | Path prefix | Read | Write/Edit | Bash cwd |
 |---|---|---|---|
-| `/app/worktrees/TASK-XXX/**` | ✅ | ✅ | ✅ |
+| `<WORKTREE_PATH>/**` (i.e. `/app/worktrees/<SESSION_SHORT_ID>/TASK-XXX/`) | ✅ | ✅ | ✅ |
 | `${TICKETS_DIR}/TASK-XXX.json` (per-session folder, e.g. `/chat-service/logs/<uuid>/TASK-XXX.json`) | ✅ (ticket source of truth) | ⚠️ merger only, status field | — |
 | `/app/docs/reflections/**` | ✅ (learn from past) | ⚠️ only in Mode 2 reflection, only `/app/docs/reflections/TASK-XXX-reflection.md` | — |
 | `/home/developer/.claude/**` | ✅ (skills, rules) | ❌ | — |
@@ -25,37 +25,37 @@ Everything else under `/app/` — `/app/src/`, `/app/e2e/`, `/app/supabase/`, `/
 
 ## Bash — every call needs `cd`
 
-Bash tool invocations are **stateless shells**. `cd /app/worktrees/TASK-XXX` in one call does NOT persist to the next — the next call starts again in `/app` by default.
+Bash tool invocations are **stateless shells**. `cd <WORKTREE_PATH>` in one call does NOT persist to the next — the next call starts again in `/app` by default.
 
 **Mandatory prefix for every Bash when working inside a worktree:**
 
 ```bash
-cd /app/worktrees/TASK-XXX && <your command>
+cd <WORKTREE_PATH> && <your command>
 ```
 
-Replace `TASK-XXX` with your actual ticket ID (from `WORKTREE_PATH` in your prompt).
+`WORKTREE_PATH` is provided in your spawn prompt (e.g. `/app/worktrees/46bc14c5/TASK-XXX`).
 
 ## Violation examples
 
 ```
 Read("/app/src/components/atomic-crm/types.ts")
 ```
-❌ The worktree has this file at `/app/worktrees/TASK-XXX/src/components/atomic-crm/types.ts`. Read there instead.
+❌ The worktree has this file at `<WORKTREE_PATH>/src/components/atomic-crm/types.ts`. Read there instead.
 
 ```
 Bash("npm run typecheck")
 ```
-❌ Runs in `/app` (default cwd), not your worktree. Use `Bash("cd /app/worktrees/TASK-XXX && npm run typecheck")`.
+❌ Runs in `/app` (default cwd), not your worktree. Use `Bash("cd <WORKTREE_PATH> && npm run typecheck")`.
 
 ```
 Edit("/app/src/App.tsx", ...)
 ```
-❌ Never edit inside `/app/`. Always your worktree. If `App.tsx` genuinely belongs to the ticket, edit `/app/worktrees/TASK-XXX/src/App.tsx`.
+❌ Never edit inside `/app/`. Always your worktree. If `App.tsx` genuinely belongs to the ticket, edit `<WORKTREE_PATH>/src/App.tsx`.
 
 ```
 Bash("npm run prettier:apply")
 ```
-❌ No `cd` prefix → runs in `/app`, reformats the base branch. Use `Bash("cd /app/worktrees/TASK-XXX && npm run prettier:apply")`.
+❌ No `cd` prefix → runs in `/app`, reformats the base branch. Use `Bash("cd <WORKTREE_PATH> && npm run prettier:apply")`.
 
 ## When you genuinely need `/app` state
 

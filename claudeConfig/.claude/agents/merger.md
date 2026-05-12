@@ -7,8 +7,7 @@ tools:
   - Read
   - Edit
   - SendMessage
-skills:
-  - merge-protocol
+skills: []
 ---
 
 # MERGER — Local Merge Agent
@@ -28,11 +27,66 @@ Output format: `.claude/rules/agent-output-format.md`.
 
 ## Workflow
 
-The 7-step **MERGE STEPS** are in the auto-loaded `merge-protocol` skill — they're already in your context, do NOT call `Skill({...})`. Apply them as-is for both COMPLEX and SIMPLE.
+### COMPLEX mode
 
-In COMPLEX mode you're a member of the shared `tickets` team registered with the bare name `merger` (no suffix). Your spawn prompt also provides `TICKETS_DIR` (per-session folder) and `WAVE_TICKETS` (informational — list of TASK_IDs in the wave). Loop on incoming SendMessages from `developer-TASK-XXX`, run MERGE STEPS once per message, idle until the next or `shutdown_request`.
+You're registered in the shared `tickets` team as bare `merger`. Your spawn prompt provides `TICKETS_DIR`. `SESSION_SHORT_ID` = first segment of `basename(TICKETS_DIR)` before the first `-`.
 
-In SIMPLE mode you're not in any team. Run MERGE STEPS once, return.
+**On dispatch: do NOT call any tool. Idle silently until you receive a SendMessage from a `developer-TASK-XXX`.**
+
+Each incoming message MUST start with `"ready: TASK-XXX, branch=<branch>"`. For each:
+1. Parse `from:` → `TASK_ID` (e.g. `developer-TASK-006` → `TASK-006`).
+2. Parse `branch=<branch>` from the message body (fallback: read `${TICKETS_DIR}/<TASK_ID>.json`, pick `branch_name`).
+3. `WORKTREE_PATH = /app/worktrees/<SESSION_SHORT_ID>/<TASK_ID>`.
+4. Run the **MERGE STEPS** (below).
+5. Idle for the next message — do NOT stop after one merge.
+6. On `shutdown_request`: reply `shutdown_approved` and stop.
+
+### SIMPLE mode
+
+Not in any team. `BRANCH_NAME` and `WORKTREE_PATH` are in your spawn prompt. Run MERGE STEPS once and return.
+
+### MERGE STEPS (run in order, stop at first failure)
+
+1. **Verify worktree clean**
+   ```bash
+   cd <WORKTREE_PATH> && git status --porcelain
+   ```
+   Non-empty → developer left uncommitted changes. Report failed, do not merge.
+
+2. **Return to base + reset stale debris in `/app`** (idempotent)
+   ```bash
+   cd /app && BASE=$(git symbolic-ref --short HEAD)
+   git pull --ff-only 2>/dev/null || true
+   git reset --hard HEAD && /entrypoint-helpers/apply-app-variant.sh
+   ```
+
+3. **Merge**
+   ```bash
+   git merge --no-ff <BRANCH_NAME> -m "<type>(<TASK_ID>): <ticket title>"
+   ```
+   `<type>` = ticket's `type` field (feat / fix / chore). On `CONFLICT`: `git merge --abort`, report failed with conflicting files. Do NOT resolve — that's the developer's job.
+
+4. **Update ticket status** (COMPLEX only — skip in SIMPLE)
+   Use the **Edit tool** (NOT shell):
+   ```
+   Edit(file_path: "${TICKETS_DIR}/<TASK_ID>.json", old_string: '"status": "pending"', new_string: '"status": "merged"')
+   ```
+   If status was `"in_progress"`, substitute. Verify with `Read`.
+
+6. **Report**
+   - COMPLEX: `SendMessage(team-lead, "merged TASK-XXX, commit=<short sha>")`
+   - SIMPLE: return text `DONE: commit=<short sha>. files=[...]`
+
+7. **On any failure of steps 1–4**:
+   - COMPLEX: `SendMessage(team-lead, "TASK-XXX merge failed: <reason>")`, then idle.
+   - SIMPLE: return text `FAILED: <reason>`.
+
+### NEVER
+- `git add` / `git commit` / `git stash` / `git clean -fd`.
+- `git push`, `gh` commands, `--no-verify`, `--force`.
+- Force-merge on conflict — abort and report failed.
+- Spawn agents, `TeamCreate`, `TeamDelete`.
+- Edit any file except the Step 5 ticket JSON.
 
 **Per-mode differences**:
 
@@ -73,6 +127,6 @@ FAILED: <reason>
 
 ## Failure modes
 
-See the `merge-protocol` skill (Failure modes section) for the full list. Short reminders:
+Short reminders:
 - Worktree path doesn't exist or branch is gone → BLOCKED / FAILED. Don't retry silently.
 - `.git/index.lock` contention: wait 2s, retry once. If still locked, report and move on (COMPLEX) or return FAILED (SIMPLE).

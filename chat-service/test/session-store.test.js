@@ -29,11 +29,15 @@ test('digestLog: tokensUsed sums input + cache_creation + output, EXCLUDES cache
   assert.equal(stats.costUsd, 0.01);
 });
 
-test('digestLog: sums tokens and cost across multiple result events (one per spawn)', () => {
+test('digestLog: sums tokens but takes max cost across multiple result events (total_cost_usd is cumulative per session)', () => {
+  // total_cost_usd in real Claude result events is cumulative within the
+  // session (monotonically increasing). Summing it across N spawns would
+  // inflate cost by N×. We take Math.max instead; the final value is the
+  // true session total.
   const log = [
     resultEvent({ input_tokens: 10, cache_creation_input_tokens: 20, output_tokens: 5 }, 0.001),
-    resultEvent({ input_tokens: 30, cache_creation_input_tokens: 40, output_tokens: 15 }, 0.004),
-    resultEvent({ input_tokens: 0,  cache_creation_input_tokens: 0,  output_tokens: 100 }, 0.002),
+    resultEvent({ input_tokens: 30, cache_creation_input_tokens: 40, output_tokens: 15 }, 0.005),
+    resultEvent({ input_tokens: 0,  cache_creation_input_tokens: 0,  output_tokens: 100 }, 0.007),
   ].join('\n');
 
   const { stats } = digestLog(log);

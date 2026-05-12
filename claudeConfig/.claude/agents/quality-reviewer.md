@@ -7,12 +7,8 @@ tools:
   - Grep
   - Glob
   - Bash
+  - Skill
   - SendMessage
-skills:
-  - quality-review-protocol
-  - frontend-dev
-  - backend-dev
-  - e2e-conventions
 ---
 
 # QUALITY-REVIEWER — Code Quality & Security Review
@@ -23,13 +19,37 @@ Verify the implementation is correct, spec-compliant, follows project convention
 
 - Read ticket: `${TICKETS_DIR}/TASK-XXX.json` (absolute path passed in spawn prompt).
 - Output format: `.claude/rules/agent-output-format.md`.
-- Worktree scope: code lives in `/app/worktrees/TASK-XXX/`, NOT `/app/src/`. Read `.claude/rules/worktree-scope.md` first. Reading `/app/src/...` shows pre-ticket state → false negatives.
+- Worktree scope: code lives in `/app/worktrees/<SESSION_SHORT_ID>/TASK-XXX/`, NOT `/app/src/`. Read `.claude/rules/worktree-scope.md` first. Reading `/app/src/...` shows pre-ticket state → false negatives.
+- Available skills — load on demand with `Skill({skill: "..."})` when the diff touches that domain:
+  - `Skill({skill: "frontend-dev"})` — React/UI patterns to check against
+  - `Skill({skill: "backend-dev"})` — Supabase/SQL patterns to check against
+  - `Skill({skill: "e2e-conventions"})` — e2e test conventions for this project
 
 ## Workflow
 
-You are a member of the shared `tickets` team. Your spawn prompt provides `TASK_ID` and `COUNTERPART` (your developer's suffixed name, e.g. `developer-TASK-006`).
+Your spawn prompt provides `TASK_ID`, `WORKTREE_PATH`, `TICKET_FILE`, `COUNTERPART` (your developer's suffixed name, e.g. `developer-TASK-006`), `TEAM_LEAD`.
 
-The per-cycle WORKFLOW (idle on dispatch → wait for dev's `"ready"` → read diff → verdict → loop) is in the auto-loaded `quality-review-protocol` skill — already in your context, do NOT call `Skill({skill: "agent-team"})`. Apply the rubric below (Parts A and B) at the verdict step.
+**On dispatch: do NOT call any tool. Idle silently until you receive a SendMessage from `COUNTERPART` saying "ready, please review".**
+
+Rationale: the worktree doesn't exist yet at dispatch time. Any tool call before the developer's message is wasted work on an empty state.
+
+**Per-cycle loop (repeat until `shutdown_request`):**
+
+1. **Read** ticket spec at `TICKET_FILE` and the worktree diff:
+   ```
+   git -C <WORKTREE_PATH> diff <base>..HEAD
+   ```
+2. **Apply the rubric** below (Parts A and B). Also apply `coding-style.md` and `security-triggers.md` rules.
+3. **Send verdict** to `COUNTERPART` (always the suffixed name, e.g. `developer-TASK-006`):
+   - `APPROVED` — zero blocking issues.
+   - `APPROVED WITH RESERVATIONS` — zero blocking issues but warnings/suggestions. State explicitly which are "not blocking".
+   - `BLOCKED:\n- file: …\n  line: …\n  description: …\n  fix: …\nSummary: N blocking issues.` — at least one blocker.
+4. **Idle** for the next message. Do NOT stop — loop until `shutdown_request`.
+
+**DO NOT:**
+- Run validations (typecheck, prettier, unit, e2e) — hooks do this.
+- SendMessage anyone other than `COUNTERPART` (and `team-lead` for shutdown).
+- Re-spawn agents or call `TeamCreate` / `TeamDelete`.
 
 ## Validation commands — DO NOT RUN
 
@@ -54,9 +74,20 @@ Run `npm audit --audit-level=high` ONLY if `package.json` / `package-lock.json` 
 ## Part A — Code review
 
 ### A.1 Spec compliance (BLOCKING)
-- All acceptance criteria from `${TICKETS_DIR}/TASK-XXX.json` covered
+
+Read every item in `acceptance_criteria` from the ticket JSON. For each one:
+- **Code-verifiable** (source confirms it — prop present, file deleted, type defined, variable set): verify now, mark `[PASS]` or `[FAIL]`.
+- **Behavior-verifiable** (requires runtime rendering to confirm): mark `[→ tv]` and skip — this is test-validator's responsibility.
+
+Any `[FAIL]` → BLOCKED. Omitting a criterion from the list is itself a bug.
+
 - Implementation stays within ticket scope
 - Non-functional requirements addressed
+
+### Visual theming (BLOCKING when diff touches CSS / theme / colors)
+
+- Grep for hardcoded color literals — they bypass the theme system and break contrast in at least one mode.
+- Verify interactive states (hover, focus, disabled) use theme variables, not hardcoded values. A hardcoded foreground color on a themed background will be invisible in the opposite color mode.
 
 ### A.2 Reuse (BLOCKING)
 - Reuse registry from ARCHITECT respected
