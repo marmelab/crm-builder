@@ -1,3 +1,0 @@
-{"ts":"2026-04-23T14:00:00.000Z","dir":"in","type":"user_message","content":"test"}
-{"ts":"2026-04-23T14:00:00.5", this is not valid JSON at all
-{"ts":"2026-04-23T14:00:01.000Z","dir":"out","type":"debug_raw","event":{"type":"result","subtype":"success","is_error":false,"duration_ms":1000,"num_turns":1,"session_id":"sess-malformed","total_cost_usd":0.0005,"usage":{"input_tokens":2,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":1}}}

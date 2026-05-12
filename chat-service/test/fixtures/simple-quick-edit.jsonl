@@ -1,7 +1,0 @@
-{"ts":"2026-04-23T12:00:00.000Z","dir":"in","type":"user_message","content":"Rename foo to bar"}
-{"ts":"2026-04-23T12:00:00.100Z","dir":"out","type":"status","working":true}
-{"ts":"2026-04-23T12:00:01.000Z","dir":"out","type":"debug_raw","event":{"type":"system","subtype":"init","cwd":"/app","session_id":"00000000-0000-0000-0000-000000000002","tools":["Task","Bash","Read","Edit"]}}
-{"ts":"2026-04-23T12:00:02.000Z","dir":"out","type":"debug_raw","event":{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_001","name":"Read","input":{"file_path":"/app/src/foo.ts"}}]},"session_id":"00000000-0000-0000-0000-000000000002"}}
-{"ts":"2026-04-23T12:00:02.500Z","dir":"out","type":"debug_raw","event":{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_002","name":"Edit","input":{"file_path":"/app/src/foo.ts","old_string":"foo","new_string":"bar"}}]},"session_id":"00000000-0000-0000-0000-000000000002"}}
-{"ts":"2026-04-23T12:00:03.000Z","dir":"out","type":"debug_raw","event":{"type":"result","subtype":"success","is_error":false,"duration_ms":3000,"num_turns":1,"session_id":"00000000-0000-0000-0000-000000000002","total_cost_usd":0.01,"usage":{"input_tokens":100,"cache_creation_input_tokens":200,"cache_read_input_tokens":500,"output_tokens":50}}}
-{"ts":"2026-04-23T12:00:03.100Z","dir":"out","type":"status","working":false}

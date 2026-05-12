@@ -1,0 +1,5 @@
+User-Agent: *
+Allow: /
+
+Host: https://marmelab.github.io/crm-builder-landing-page
+Sitemap: https://marmelab.github.io/crm-builder-landing-page/sitemap.xml
