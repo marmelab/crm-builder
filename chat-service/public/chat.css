@@ -105,6 +105,20 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
 #history-recent-btn svg { display: block; }
 #chat-history-panel.collapsed #history-recent-btn { display: flex; }
 
+#history-download-btn {
+  display: none;
+  align-items: center; justify-content: center;
+  width: 100%; padding: 10px 0;
+  background: none; border: none;
+  border-bottom: 1px solid #2c2c2e;
+  color: #8e8e93; cursor: pointer;
+  text-decoration: none;
+  transition: background .15s, color .15s;
+}
+#history-download-btn:hover { background: #2c2c2e; color: #fff; }
+#history-download-btn svg { display: block; }
+#chat-history-panel.collapsed #history-download-btn { display: flex; }
+
 #history-recent-popup {
   position: fixed; z-index: 300;
   left: calc(var(--sidebar-width) + 6px);

@@ -1,6 +1,6 @@
 import { readFile, appendFile, stat } from 'node:fs/promises';
 import { extname, join } from 'node:path';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { CWD, LOG_DIR, ALLOWED_STATES, MIME_TYPES, UUID_RE } from './config.js';
 import { listSessions, getSession, patchSession } from './session-store.js';
@@ -258,8 +258,30 @@ async function handleSessionRollbackRequest(req, res, sessionId) {
   }
 }
 
+function handleDownloadBundleRequest(req, res) {
+  const date = new Date().toISOString().slice(0, 10);
+  res.writeHead(200, {
+    'Content-Type': 'application/octet-stream',
+    'Content-Disposition': `attachment; filename="crm-${date}.bundle"`,
+  });
+  const proc = spawn('git', ['-C', CWD, 'bundle', 'create', '-', '--all']);
+  proc.stdout.pipe(res);
+  proc.stderr.on('data', (d) => console.error('[bundle]', d.toString().trim()));
+  proc.on('error', (err) => {
+    console.error('[bundle] spawn error:', err);
+    if (!res.headersSent) { res.writeHead(500); res.end('bundle failed'); }
+  });
+  proc.on('close', (code) => {
+    if (code !== 0) console.warn(`[bundle] git bundle exited with code ${code}`);
+  });
+}
+
+
 export function createRequestHandler({ publicDir }) {
   return async (req, res) => {
+    if (req.url === '/api/download/bundle' && req.method === 'GET') {
+      return handleDownloadBundleRequest(req, res);
+    }
     if (req.url?.startsWith('/api/stats')) return handleStatsRequest(req, res);
 
     const commitsMatch = req.url?.match(/^\/api\/sessions\/([0-9a-f-]+)\/commits$/i);
