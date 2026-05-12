@@ -1,4 +1,4 @@
-import { el, formatTokens } from './lib/dom.js';
+import { el, formatTokens, tokenBreakdownText } from './lib/dom.js';
 import { renderStatsPanel, initStatsRefresh } from './lib/stats/index.js';
 import { initConnection, initDisplay, initHistory, openConfirmModal, initRecentPopup } from './lib/sessions/index.js';
 import { renderInlineMarkdown } from './lib/markdown.js';
@@ -287,21 +287,24 @@ function handleWsMessage(event) {
     const agents = msg.activeAgents || 0;
     const agentsPart = agents > 0 ? `🤖 ${agents} · ` : '';
     const total = (typeof msg.tokensTotal === 'number') ? msg.tokensTotal : msg.tokensUsed;
-    stats.textContent = `${agentsPart}${formatTokens(total)} tokens · $${msg.costUsd.toFixed(3)}`;
-    // Hover breakdown: input / cache-create / output / cache-read. Lets the
-    // user inspect what's behind the headline without cluttering the bar.
-    const b = msg.tokensBreakdown;
-    if (b) {
-      const fmt = (n) => Number(n || 0).toLocaleString('en-US');
-      stats.title =
-        `Tokens: ${fmt(total)}\n` +
-        `  input          ${fmt(b.input)}\n` +
-        `  cache-creation ${fmt(b.cacheCreate)}\n` +
-        `  output         ${fmt(b.output)}\n` +
-        `  cache-read     ${fmt(b.cacheRead)}\n` +
-        `Cost: $${msg.costUsd.toFixed(4)}`;
+    // CSS-styled hover tooltip: monospace + right-aligned numbers via the
+    // `.tk-host` / `.tk-tip` pair (chat.css). Native `title=` is sans-serif
+    // and can't align columns reliably.
+    stats.replaceChildren();
+    stats.removeAttribute('title');
+    const label = `${agentsPart}${formatTokens(total)} tokens · $${msg.costUsd.toFixed(3)}`;
+    if (msg.tokensBreakdown) {
+      const host = el('span', { className: 'tk-host' }, label);
+      const tip = el('span', { className: 'tk-tip' });
+      tip.textContent = tokenBreakdownText(msg.tokensBreakdown, {
+        totalLabel: 'total',
+        costUsd: msg.costUsd,
+        costPrecision: 4,
+      });
+      host.appendChild(tip);
+      stats.appendChild(host);
     } else {
-      stats.title = `Tokens and cost used in this session`;
+      stats.textContent = label;
     }
     if (statsMode) statsRefresh.schedule();
     return;

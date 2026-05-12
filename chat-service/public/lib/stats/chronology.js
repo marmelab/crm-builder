@@ -1,4 +1,4 @@
-import { el, formatDuration, formatTokens } from '../dom.js';
+import { el, formatDuration, formatTokens, tokenBreakdownText } from '../dom.js';
 
 export function relLabelFactory(baseTs) {
   const base = baseTs ? new Date(baseTs).getTime() : 0;
@@ -84,28 +84,26 @@ function renderPhaseRow(phase, relLabel) {
   if (phase.kind === 'orchestrator' && phase.userWaitMs > 0) {
     orchHint = ` · excl. ${formatDuration(phase.userWaitMs)} user wait`;
   }
-  // Token tooltip: 4-way breakdown (input / cache-create / output / cache-read)
-  // when available. Falls back to the single legacy figure for phases that
-  // never received per-component data (e.g. local_agent phases that only
-  // expose task_notification.usage.total_tokens).
+  // Tokens column: visible label is the grand total (input + cache_create +
+  // output + cache_read). Hovering reveals the right-aligned 4-way breakdown
+  // (monospace CSS tooltip, see chat.css `.tk-tip`). Phases without per-
+  // component data (local_agent, only task_notification.usage.total_tokens)
+  // display the single number with no breakdown tip.
   const bk = phase.tokensBreakdown;
   const grandTokens = bk
     ? (bk.input || 0) + (bk.cacheCreate || 0) + (bk.output || 0) + (bk.cacheRead || 0)
     : (phase.tokensTotal || 0);
-  const fmtN = (n) => Number(n || 0).toLocaleString('en-US');
-  const tokenLine = bk
-    ? `Tokens: ${fmtN(grandTokens)}\n` +
-      `  input          ${fmtN(bk.input)}\n` +
-      `  cache-creation ${fmtN(bk.cacheCreate)}\n` +
-      `  output         ${fmtN(bk.output)}\n` +
-      `  cache-read     ${fmtN(bk.cacheRead)}`
-    : `Tokens: ${fmtN(grandTokens)}`;
+  const statsHead = `${activeFmt} · ${phase.opsCount} ops · ${formatTokens(grandTokens)} tok`;
   const stats = el('span', {
-    className: 'phase-stats',
+    className: 'phase-stats tk-host',
     title:
-      `active ${activeFmt} · wall ${formatDuration(phase.wallDurationMs ?? phase.durationMs ?? 0)} · ${phase.opsCount} ops${orchHint}\n` +
-      tokenLine,
-  }, `${activeFmt} · ${phase.opsCount} ops · ${formatTokens(grandTokens)} tok`);
+      `active ${activeFmt} · wall ${formatDuration(phase.wallDurationMs ?? phase.durationMs ?? 0)} · ${phase.opsCount} ops${orchHint}`,
+  }, statsHead);
+  if (bk) {
+    const tip = el('span', { className: 'tk-tip' });
+    tip.textContent = tokenBreakdownText(bk, { totalLabel: 'total' });
+    stats.appendChild(tip);
+  }
 
   const costBadge = phase.costUsd != null
     ? el('span', { className: 'phase-cost' }, `$${phase.costUsd.toFixed(3)}`)

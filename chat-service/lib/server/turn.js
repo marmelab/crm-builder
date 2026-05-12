@@ -1,5 +1,5 @@
 import { createInterface } from 'node:readline';
-import { cp, copyFile, mkdir } from 'node:fs/promises';
+import { cp, copyFile, mkdir, chmod, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { LOG_DIR, CLAUDE_HOME, CWD } from './config.js';
 import { broadcast, sendStats } from './ws-bus.js';
@@ -231,8 +231,23 @@ async function snapshotClaudeSession(claudeSessionId, sessionId) {
   const destDir = join(LOG_DIR, sessionId, 'claude');
 
   await mkdir(destDir, { recursive: true });
-  await copyFile(join(projectDir, `${claudeSessionId}.jsonl`), join(destDir, 'transcript.jsonl')).catch(() => {});
+  await copyFile(join(projectDir, `${claudeSessionId}.jsonl`), join(destDir, 'transcript.jsonl'))
+    .then(() => chmod(join(destDir, 'transcript.jsonl'), 0o644))
+    .catch(() => {});
   for (const subdir of ['subagents', 'tool-results']) {
-    await cp(join(srcDir, subdir), join(destDir, subdir), { recursive: true }).catch(() => {});
+    const src = join(srcDir, subdir);
+    const dst = join(destDir, subdir);
+    await cp(src, dst, { recursive: true })
+      .then(() => chmodDir(dst, 0o644, 0o755))
+      .catch(() => {});
+  }
+}
+
+async function chmodDir(dir, fileMode, dirMode) {
+  await chmod(dir, dirMode).catch(() => {});
+  for (const entry of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) await chmodDir(full, fileMode, dirMode);
+    else await chmod(full, fileMode).catch(() => {});
   }
 }

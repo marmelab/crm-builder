@@ -431,6 +431,32 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
   border-top: 1px solid #2c2c2e;
 }
 
+/* Hover tooltip for the 4-way token breakdown (input / cache-create / output
+   / cache-read). Native `title=` tooltips don't honour CSS, so anything that
+   needs monospace alignment uses `.tk-host` with a child `.tk-tip` instead. */
+.tk-host { position: relative; cursor: help; }
+.tk-tip {
+  display: none;
+  position: absolute;
+  z-index: 300;
+  bottom: calc(100% + 6px);
+  right: 0;
+  padding: 8px 12px;
+  background: #2c2c2e;
+  border: 1px solid #48484a;
+  border-radius: 6px;
+  color: #f2f2f7;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre;
+  box-shadow: 0 6px 20px rgba(0,0,0,.5);
+  pointer-events: none;
+  letter-spacing: 0;
+}
+.tk-host:hover > .tk-tip,
+.tk-host:focus-visible > .tk-tip { display: block; }
+
 #chat-stats-btn {
   display: inline-flex; align-items: center; justify-content: center;
   background: none; border: none; color: #636366;
