@@ -2,26 +2,9 @@ import { readFile, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   readJsonl, msBetween, emptyBreakdown, addBreakdown, breakdownFromUsage,
+  costFromBreakdown,
 } from './io.js';
 import { toolDetail, sendMessageVerdictFromInput } from './tools.js';
-
-// Prices per million tokens (input / cache_creation / cache_read / output).
-// Used to estimate per-sub-agent cost from their local JSONL usage fields.
-const MODEL_USD_PER_M = {
-  'claude-opus-4-6':           { inp: 15,  cc: 3.75, cr: 1.5,  out: 75 },
-  'claude-sonnet-4-6':         { inp: 3,   cc: 0.75, cr: 0.3,  out: 15 },
-  'claude-haiku-4-5-20251001': { inp: 0.8, cc: 0.2,  cr: 0.08, out: 4  },
-  'claude-haiku-4-5':          { inp: 0.8, cc: 0.2,  cr: 0.08, out: 4  },
-};
-function tokensToUsd(model, u) {
-  const p = MODEL_USD_PER_M[model] || MODEL_USD_PER_M['claude-sonnet-4-6'];
-  return (
-    (u.input_tokens || 0) * p.inp +
-    (u.cache_creation_input_tokens || 0) * p.cc +
-    (u.cache_read_input_tokens || 0) * p.cr +
-    (u.output_tokens || 0) * p.out
-  ) / 1_000_000;
-}
 
 // Tool calls excluded from per-phase children. Keep dispatch-control verbs
 // (Agent/Task/TeamCreate/TeamDelete) visible in the orchestrator timeline —
@@ -172,11 +155,8 @@ async function appendSubagentToolUses(file, phase, toolCounts, allToolCalls) {
       const b = breakdownFromUsage(u);
       phase.tokensBreakdown = addBreakdown(phase.tokensBreakdown, b);
       phase.tokensTotal += b.input + b.cacheCreate + b.output;
-      // costUsd: include cache_read (billed at a lower rate but still real cost).
       if (e.message.model) {
-        phase.costUsd = (phase.costUsd || 0) + tokensToUsd(e.message.model, u);
-        // Also keep a per-model breakdown so the cost badge tooltip can show
-        // the same compact table as the global KPI does.
+        phase.costUsd = (phase.costUsd || 0) + costFromBreakdown(e.message.model, b);
         const prev = tokensByModelMap.get(e.message.model) || emptyBreakdown();
         tokensByModelMap.set(e.message.model, addBreakdown(prev, b));
       }
@@ -218,12 +198,7 @@ async function appendSubagentToolUses(file, phase, toolCounts, allToolCalls) {
 
   // Materialise the per-model rows used by the cost-badge tooltip.
   phase.tokensByModel = [...tokensByModelMap].map(([model, breakdown]) => ({
-    model, breakdown, costUsd: tokensToUsd(model, {
-      input_tokens: breakdown.input,
-      cache_creation_input_tokens: breakdown.cacheCreate,
-      output_tokens: breakdown.output,
-      cache_read_input_tokens: breakdown.cacheRead,
-    }),
+    model, breakdown, costUsd: costFromBreakdown(model, breakdown),
   })).sort((a, b) => b.costUsd - a.costUsd);
 
   // If the phase never received a task_notification (endTs still null), derive
