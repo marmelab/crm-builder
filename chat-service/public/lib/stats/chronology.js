@@ -162,15 +162,18 @@ function renderPhaseRow(phase, relLabel) {
     bands, warn, retry, taskBadge,
   );
 
+  // DOM order matters: badges sit between name and the cost block. Cost has
+  // `margin-left: auto` (CSS), so everything from cost onward is flushed
+  // right; everything before it (time/icon/name/badges) stays at the left.
   det.appendChild(el('summary', null,
     el('span', { className: 'phase-time' }, relLabel(phase.startTs)),
     el('span', { className: 'phase-icon' }, dot),
     el('span', { className: 'phase-name' }, phase.agentType || phase.kind),
+    badges,
     costBadge,
     activeSpan,
     opsSpan,
     tokensSpan,
-    badges,
   ));
 
   // Skipped hooks (no actual run — e.g. SHA cache hit, or no changes in the

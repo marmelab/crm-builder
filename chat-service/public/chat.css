@@ -552,7 +552,13 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
   display: flex; align-items: center; justify-content: center;
   font-size: 10px; color: #1c1c1e; font-weight: 600;
   background: #3b82f6; border-right: 1px solid #1c1c1e;
-  white-space: nowrap; overflow: hidden;
+  /* `overflow: visible` lets the .tk-tip child escape the segment bounds; the
+     label inside (.breakdown-label) is what actually clips the text. */
+  white-space: nowrap; overflow: visible; position: relative;
+}
+.breakdown-label {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  flex: 1 1 auto; text-align: center; min-width: 0;
 }
 .stats-breakdown-seg:nth-child(2n) { background: #8b5cf6; }
 .stats-breakdown-seg:nth-child(3n) { background: #f97316; }
@@ -564,30 +570,47 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
 .phase-row { margin-bottom: 4px; border-radius: 8px; background: #2c2c2e; }
 .phase-row summary {
   list-style: none; padding: 8px 10px;
-  /* Fixed-width columns so cost/active/ops/tokens line up vertically across
-     every phase row regardless of which badges are present. The grid is:
-       [chevron via ::before] time icon name(flex) cost active ops tokens badges
-     `minmax(140px, 1fr)` lets the name column absorb leftover width but caps
-     short names from stealing space from the numeric columns. */
-  display: grid;
-  grid-template-columns: 14px 48px 20px minmax(140px, 1fr) 64px 56px 60px 72px auto;
-  gap: 8px; align-items: center; font-size: 12px; cursor: pointer;
+  /* Flexbox with `margin-left: auto` on the cost cell pushes the four
+     numeric columns (cost / active / ops / tokens) flush against the right
+     edge of the row. Their widths are fixed via min-width so they line up
+     vertically across EVERY row regardless of name length or which badges
+     are present — the spacer between name+badges and the numeric block
+     absorbs all the variance. */
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px; cursor: pointer;
 }
-.phase-row summary::before { content: '▸'; font-size: 9px; opacity: .5; text-align: center; }
+.phase-row summary::before { content: '▸'; font-size: 9px; opacity: .5; width: 10px; flex: 0 0 10px; text-align: center; }
 .phase-row[open] summary::before { content: '▾'; }
-.phase-time { font-variant-numeric: tabular-nums; color: #8e8e93; font-size: 11px; }
-.phase-icon { font-size: 13px; text-align: center; }
-.phase-name { font-weight: 600; color: #f2f2f7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.phase-cost { color: #34c759; font-size: 11px; font-variant-numeric: tabular-nums; font-weight: 600; text-align: right; }
-.phase-active, .phase-ops, .phase-tokens {
-  color: #8e8e93; font-size: 11px; font-variant-numeric: tabular-nums; text-align: right;
+.phase-time { flex: 0 0 48px; font-variant-numeric: tabular-nums; color: #8e8e93; font-size: 11px; }
+.phase-icon { flex: 0 0 18px; font-size: 13px; text-align: center; }
+.phase-name {
+  font-weight: 600; color: #f2f2f7;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  /* Name can grow to take all the leftover space LEFT of the numeric block,
+     but never below 140px so short names like "planner" still get room. */
+  flex: 1 1 140px; min-width: 0;
 }
+.phase-badges {
+  display: inline-flex; gap: 6px; align-items: center;
+  flex: 0 1 auto;
+  /* Badges live BEFORE the numeric block in DOM order. Without min-width: 0
+     they could push the cost column leftward; with it they shrink first. */
+  min-width: 0; overflow: hidden;
+}
+.phase-cost {
+  /* Pushes itself and the following numeric cells flush against the right
+     edge of the row. This is the load-bearing rule for alignment. */
+  margin-left: auto;
+  flex: 0 0 auto; min-width: 64px;
+  color: #34c759; font-size: 11px; font-variant-numeric: tabular-nums; font-weight: 600; text-align: right;
+}
+.phase-active { flex: 0 0 56px; text-align: right; color: #8e8e93; font-size: 11px; font-variant-numeric: tabular-nums; }
+.phase-ops    { flex: 0 0 60px; text-align: right; color: #8e8e93; font-size: 11px; font-variant-numeric: tabular-nums; }
+.phase-tokens { flex: 0 0 72px; text-align: right; color: #8e8e93; font-size: 11px; font-variant-numeric: tabular-nums; }
 .phase-stats { color: #8e8e93; font-size: 11px; font-variant-numeric: tabular-nums; }
-.phase-badges { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
 .phase-warn { color: #f59e0b; font-size: 11px; }
-.phase-team { border: 1px solid; padding: 1px 6px; border-radius: 10px; font-size: 10px; font-weight: 600; }
+.phase-team { border: 1px solid; padding: 1px 6px; border-radius: 10px; font-size: 10px; font-weight: 600; white-space: nowrap; }
 .phase-team.muted { color: #636366; border-color: #3a3a3c; }
-/* Activation bands carry their own colours; preserve them inside badges. */
 .phase-activations { display: inline-flex; gap: 2px; }
 
 .phase-children { padding: 6px 10px 10px 30px; border-top: 1px solid #3a3a3c; }
