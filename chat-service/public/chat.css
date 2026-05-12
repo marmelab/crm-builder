@@ -433,17 +433,19 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
 
 /* Hover tooltip for the token / cost breakdowns. Native `title=` tooltips
    don't honour CSS, so anything that needs monospace alignment uses
-   `.tk-host` with a child `.tk-tip` instead. Default: drop DOWN from the
-   host (works inside scroll containers where the host is near the top).
-   Use `.tk-tip-above` for hosts at the bottom of a viewport (inline ticker)
-   where dropping down would land off-screen. */
+   `.tk-host` with a child `.tk-tip` instead. Default anchor: BELOW the host,
+   extending to the RIGHT — works for hosts in the left half of the panel
+   (KPI line, per-phase rows when not too far right).
+   Modifiers:
+     `.tk-tip-above`         — flip vertically (above the host)
+     `.tk-tip-anchor-right`  — flip horizontally (extend leftward) */
 .tk-host { position: relative; cursor: help; }
 .tk-tip {
   display: none;
   position: absolute;
   z-index: 300;
   top: calc(100% + 6px);
-  right: 0;
+  left: 0;
   padding: 8px 12px;
   background: #2c2c2e;
   border: 1px solid #48484a;
@@ -456,12 +458,15 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
   box-shadow: 0 6px 20px rgba(0,0,0,.5);
   pointer-events: none;
   letter-spacing: 0;
-  max-width: min(640px, calc(100vw - 32px));
-  overflow: hidden;
+  max-width: calc(100vw - 32px);
 }
 .tk-tip-above {
   top: auto;
   bottom: calc(100% + 6px);
+}
+.tk-tip-anchor-right {
+  left: auto;
+  right: 0;
 }
 .tk-host:hover > .tk-tip,
 .tk-host:focus-visible > .tk-tip { display: block; }

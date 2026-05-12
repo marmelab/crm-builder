@@ -110,19 +110,28 @@ function shortModel(name) {
 function fmtN(n) { return Number(n || 0).toLocaleString('en-US'); }
 function fmtUsd(n, p = 4) { return `$${Number(n || 0).toFixed(p)}`; }
 
+// Compact token count: 12,345 → "12.3k", 1,234,567 → "1.23M". Used in the
+// per-model cost table so the row fits without scrolling on narrow panels.
+function fmtCompact(n) {
+  const v = Number(n || 0);
+  if (v >= 1_000_000) return (v / 1_000_000).toFixed(v >= 10_000_000 ? 1 : 2) + 'M';
+  if (v >= 1_000)     return (v / 1_000).toFixed(v >= 10_000 ? 0 : 1) + 'k';
+  return String(v);
+}
+
 // Build a monospace, right-aligned table mapping models → token breakdown +
 // approximate per-model cost. `costTotal` is the SDK-reported authoritative
 // total displayed at the bottom (the per-model figures are best-effort and
 // may not sum to it exactly — pricing tables drift).
 export function tokensByModelText(rows, costTotal) {
   if (!rows || rows.length === 0) return '(no per-model data yet)';
-  const headers = ['model', 'input', 'cache-cr', 'output', 'cache-rd', 'cost'];
+  const headers = ['model', 'input', 'cache+', 'output', 'cache-r', 'cost'];
   const data = rows.map((r) => [
     shortModel(r.model),
-    fmtN(r.breakdown?.input),
-    fmtN(r.breakdown?.cacheCreate),
-    fmtN(r.breakdown?.output),
-    fmtN(r.breakdown?.cacheRead),
+    fmtCompact(r.breakdown?.input),
+    fmtCompact(r.breakdown?.cacheCreate),
+    fmtCompact(r.breakdown?.output),
+    fmtCompact(r.breakdown?.cacheRead),
     fmtUsd(r.costUsd, 4),
   ]);
   // Totals row (sum each column except model).
@@ -134,7 +143,7 @@ export function tokensByModelText(rows, costTotal) {
     sums[3] += r.breakdown?.cacheRead   || 0;
     sums[4] += r.costUsd                || 0;
   }
-  const totalRow = ['total', fmtN(sums[0]), fmtN(sums[1]), fmtN(sums[2]), fmtN(sums[3]), fmtUsd(sums[4], 4)];
+  const totalRow = ['total', fmtCompact(sums[0]), fmtCompact(sums[1]), fmtCompact(sums[2]), fmtCompact(sums[3]), fmtUsd(sums[4], 4)];
   // Column widths: max of header + all cells.
   const cols = headers.map((h, i) => {
     const cells = [h, ...data.map((row) => row[i]), totalRow[i]];

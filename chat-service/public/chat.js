@@ -296,9 +296,15 @@ function handleWsMessage(event) {
     stats.removeAttribute('title');
     if (agentsPart) stats.appendChild(document.createTextNode(agentsPart));
 
+    // Tooltips on the ticker need both modifiers: `tk-tip-above` because the
+    // ticker sits at the bottom of the chat widget, and `tk-tip-anchor-right`
+    // because the ticker text is right-aligned so the host is near the right
+    // edge — extending leftward keeps the tooltip on-screen.
+    const tipCls = 'tk-tip tk-tip-above tk-tip-anchor-right';
+
     const tokensHost = el('span', { className: 'tk-host' }, `${formatTokens(total)} tokens`);
     if (msg.tokensBreakdown) {
-      const tip = el('span', { className: 'tk-tip tk-tip-above' });
+      const tip = el('span', { className: tipCls });
       tip.textContent = tokenBreakdownText(msg.tokensBreakdown, { totalLabel: 'total' });
       tokensHost.appendChild(tip);
     }
@@ -307,7 +313,7 @@ function handleWsMessage(event) {
 
     const costHost = el('span', { className: 'tk-host' }, `$${msg.costUsd.toFixed(3)}`);
     if (msg.tokensByModel && msg.tokensByModel.length > 0) {
-      const tip = el('span', { className: 'tk-tip tk-tip-above' });
+      const tip = el('span', { className: tipCls });
       tip.textContent = tokensByModelText(msg.tokensByModel, msg.costUsd);
       costHost.appendChild(tip);
     }

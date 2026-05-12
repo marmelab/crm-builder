@@ -84,12 +84,13 @@ function renderPhaseRow(phase, relLabel) {
   if (phase.kind === 'orchestrator' && phase.userWaitMs > 0) {
     orchHint = ` · excl. ${formatDuration(phase.userWaitMs)} user wait`;
   }
-  // Tokens column: visible label is the grand total (input + cache_create +
-  // output + cache_read). Hovering reveals the right-aligned 4-way breakdown
-  // when per-component data is available. local_agent phases (planner,
-  // simple-developer) only get `task_notification.usage.total_tokens` — no
-  // breakdown — so they fall back to `phase.tokensTotal` for the headline
-  // and skip the tooltip. Without that fallback they used to render "0 tok".
+  // Tokens column: visible label is the grand total. Hover reveals the
+  // right-aligned 4-way breakdown when per-component data is available.
+  // local_agent phases (planner, simple-developer) only get
+  // `task_notification.usage.total_tokens` — no breakdown — so we synthesize
+  // a single-line tooltip showing the totals (active/wall/ops/tokens) instead
+  // of nothing. Without that fallback the headline read "0 tok" and there was
+  // no hover info at all.
   const bk = phase.tokensBreakdown;
   const bkSum = bk
     ? (bk.input || 0) + (bk.cacheCreate || 0) + (bk.output || 0) + (bk.cacheRead || 0)
@@ -97,16 +98,23 @@ function renderPhaseRow(phase, relLabel) {
   const hasBreakdown = bkSum > 0;
   const grandTokens = hasBreakdown ? bkSum : (phase.tokensTotal || 0);
   const statsHead = `${activeFmt} · ${phase.opsCount} ops · ${formatTokens(grandTokens)} tok`;
-  const stats = el('span', {
-    className: 'phase-stats tk-host',
-    title:
-      `active ${activeFmt} · wall ${formatDuration(phase.wallDurationMs ?? phase.durationMs ?? 0)} · ${phase.opsCount} ops${orchHint}`,
-  }, statsHead);
-  if (hasBreakdown) {
-    const tip = el('span', { className: 'tk-tip' });
-    tip.textContent = tokenBreakdownText(bk, { totalLabel: 'total' });
-    stats.appendChild(tip);
-  }
+  // Use the CSS tooltip exclusively — leaving `title=` set would make the
+  // browser render a SECOND native tooltip on top of the styled one.
+  // Phase row is right-aligned, so anchor the tooltip to the right edge to
+  // extend leftward into the visible row.
+  const stats = el('span', { className: 'phase-stats tk-host' }, statsHead);
+  const tip = el('span', { className: 'tk-tip tk-tip-anchor-right' });
+  const fmtN = (n) => Number(n || 0).toLocaleString('en-US');
+  const headerLines = [
+    `active  ${activeFmt}`,
+    `wall    ${formatDuration(phase.wallDurationMs ?? phase.durationMs ?? 0)}`,
+    `ops     ${phase.opsCount}${orchHint ? '  (' + orchHint.replace(/^\s*·\s*/, '') + ')' : ''}`,
+  ];
+  const body = hasBreakdown
+    ? tokenBreakdownText(bk, { totalLabel: 'total' })
+    : `tokens  ${fmtN(grandTokens)}`;
+  tip.textContent = headerLines.join('\n') + '\n\n' + body;
+  stats.appendChild(tip);
 
   const costBadge = phase.costUsd != null
     ? el('span', { className: 'phase-cost' }, `$${phase.costUsd.toFixed(3)}`)
