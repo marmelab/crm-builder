@@ -49,7 +49,6 @@ export function digestLog(logText) {
   let currentSpawnBreakdown = emptyBreakdown();
   let currentSpawnFallback = emptyBreakdown();
   let currentSpawnSawModelUsage = false;
-  let sawModelUsage = false;
 
   const commitSpawn = () => {
     costUsd += currentSpawnMax;
@@ -119,7 +118,6 @@ export function digestLog(logText) {
             });
           }
           currentSpawnSawModelUsage = true;
-          sawModelUsage = true;
         }
         // Fallback accumulator: per-turn usage summing (used only when this
         // spawn never emitted modelUsage).
@@ -138,8 +136,6 @@ export function digestLog(logText) {
   // Commit the trailing spawn.
   commitSpawn();
   tokensUsed = tokensBreakdown.input + tokensBreakdown.cacheCreate + tokensBreakdown.output;
-  // Suppress unused-warning for sawModelUsage (kept for diagnostics).
-  void sawModelUsage;
   const cleanTimeline = droppedAny ? timeline.filter((x) => x !== null) : timeline;
   // Back-compat views — same data, just split by kind. Existing callers
   // (readMessages, runtime stats hydration, tests) keep working unchanged.

@@ -10,6 +10,7 @@ export async function* readJsonl(path) {
 }
 
 export function msBetween(a, b) { return new Date(b).getTime() - new Date(a).getTime(); }
+export function toUnixMs(ts) { return new Date(ts).getTime(); }
 
 export function mergeIntervals(intervals) {
   if (intervals.length === 0) return [];

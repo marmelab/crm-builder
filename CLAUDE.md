@@ -1,174 +1,89 @@
 # Atomic-CRM Builder
 
-Dockerised Claude Code sandbox that lets non-technical users customise [Atomic CRM](https://github.com/marmelab/atomic-crm) through a chat UI. A user describes a change in plain language; a team of 9 agents ships it inside a per-ticket git worktree, reviews, tests, merges locally.
+Dockerised sandbox: non-technical users describe CRM changes in chat → agent team ships them in git worktrees.
 
-## Repository layout
-
-| Path | Role |
-|---|---|
-| [Dockerfile](Dockerfile) | Single image, `node:22-bookworm-slim` base. Installs ttyd, chromium, Playwright, Supabase CLI, Docker CLI, Claude Code, clones `marmelab/atomic-crm` into `/app`, `git init`s it, creates the `developer` user. |
-| [entrypoint.sh](entrypoint.sh) | Auth check → syncs `/root/.claude/{agents,skills,hooks,rules}` into `/home/developer/.claude` → applies the mode-appropriate `App.tsx` variant → starts Supabase (full only) → `exec supervisord`. |
-| [docker-compose.yml](docker-compose.yml) | Two profiles: `demo` (FakeRest, ports 5173/7681/8080) and `full` (Supabase, `network_mode: host`, needs Docker socket). |
-| [supervisord.demo.conf](supervisord.demo.conf) / [.full.conf](supervisord.full.conf) | 3 programs: `crm-frontend` (Vite :5173), `ttyd` (:7681), `chat-service` (:8080). |
-| [app-variants/](app-variants/) | Two `App.tsx` flavours: `App.fakerest.tsx` (browser-only data) and `App.supabase.tsx`. |
-| [claudeConfig/.claude/](claudeConfig/.claude/) | Agents, skills, hooks, rules — bind-mounted read-only in dev and copied into `/home/developer/.claude` at boot. |
-| [chat-service/](chat-service/) | Node server: static public/, WebSocket, `/api/stats`, spawns `claude` CLI per user turn. |
-| [scripts/](scripts/) | `switch-mode.sh` (swap data provider at runtime), `ttyd-session.sh` (tmux session for the web terminal). |
-
-## Runtime model
+## Runtime
 
 ```
 supervisord (pid 1)
-  ├─ crm-frontend   npm run dev --host 0.0.0.0   :5173
-  ├─ ttyd           /usr/local/bin/ttyd           :7681  → tmux → claude CLI
-  └─ chat-service   node /chat-service/server.js  :8080  → WebSocket + spawn(claude -p …)
+  ├─ crm-frontend   :5173  (Vite, /app/src)
+  ├─ ttyd           :7681  (web terminal → claude CLI)
+  └─ chat-service   :8080  (WebSocket + spawn claude -p)
 ```
 
-The chat-service is the non-technical entry point. `ttyd` is the raw terminal for power users (the original `claude --dangerously-skip-permissions` flow).
+Two compose profiles: `demo` (FakeRest) and `full` (Supabase, needs Docker socket).
 
-Volumes (see [docker-compose.yml](docker-compose.yml)):
-- `crm-app` → `/app` (the entire atomic-crm checkout: `src/`, `.git/`, `supabase/`, `e2e/`, `public/`, configs at root, `node_modules/`, `worktrees/`, `docs/`)
-- `claude-auth` → `/home/developer/.claude` (OAuth tokens across restarts)
-- `supabase-cache` → `/root/.docker` (full mode only)
+`entrypoint.sh`: syncs `claudeConfig/.claude/` → `/home/developer/.claude`, applies App.tsx variant, overwrites `/app/.claude/settings.json` with `{"hooks":{}}` (prevents upstream format-file.sh fight with our hooks).
 
-Single-volume strategy: keeps `/app/node_modules` and `/app/worktrees` on the **same device** so `cp -al /app/node_modules /app/worktrees/TASK-XXX/node_modules` produces hard links (zero disk overhead, vitest cache stays per-worktree). Worktrees are gitignored via `.gitignore`. Entrypoint compares `package-lock.json` hash against `/app/.npm-ci-hash` and runs `npm ci` if an agent modified deps. To wipe everything (atomic-crm checkout, commits, deps): `docker compose down -v`.
+Single `crm-app` volume for `/app` — keeps `node_modules` and `worktrees/` on the same device so `cp -al` hard-links node_modules into each worktree (zero disk cost).
 
-## Chat-service
+## Chat-service (`chat-service/`)
 
-Single [server.js](chat-service/server.js) (~785 lines). Key invariants:
+Split: `lib/server/` (spawn, routes, runtime, sessions, turns, ws) + `lib/stats/` (phases, hooks, subagents, io…). Entry: `server.js`.
 
-- **One runtime per session**, many WebSockets per runtime. Runtime holds the `claudeSessionId`, a queue, cumulative stats, and the Set of connected clients. Messages are *broadcast* to every client so multiple tabs stay in sync.
-- **Session persistence**: append-only `log.jsonl` per session + `meta.json` for listing. Visible messages are derived from the log on demand (`messagesFromLog`). The log is the source of truth; `meta` is a cache.
-- **Claude spawn**: `claude --output-format stream-json --verbose --dangerously-skip-permissions --model <from frontmatter> [--resume <id>] -p <prompt>`. The orchestrator model and system prompt are parsed from [chat-orchestrator.md](claudeConfig/.claude/agents/chat-orchestrator.md)'s frontmatter at boot. The prompt body is wrapped in `<instructions>…</instructions>` and prefixed with `<mode>demo|full</mode>`.
-- **Stats tracking** ([chat.js](chat-service/public/chat.js) consumes `stats` frames):
-  - `tokensUsed` = `input_tokens + cache_creation_input_tokens + output_tokens` (cache-read is excluded — cheap rehydration, not billed against the user's budget).
-  - `total_cost_usd` is cumulative *within* a spawn → store as `costUsdCurrentSpawn`, commit to `costUsd` only on turn end.
-  - `activeAgents` only counts `task_type === 'local_agent'` (filters out Bash, MCP, etc.). Tracked via a `Set<task_id>`; start/complete pairs match on `task_id`.
-- **Title regeneration**: first auto-title is a slice of the first message. On the 2nd user message, a one-shot Haiku call regenerates the title from the first exchanges.
+Key invariants:
+- One runtime per session; all connected WS clients get broadcast.
+- Session log: append-only `log.jsonl` (source of truth) + `meta.json` (cache).
+- Spawn: `claude --output-format stream-json --verbose --dangerously-skip-permissions --model <model> [--resume <id>] -p <prompt>`. Model + system prompt parsed from `chat-orchestrator.md` frontmatter at boot.
+- `tokensUsed` = input + cache_creation + output (cache-read excluded — cheap rehydration).
+- `total_cost_usd` is cumulative within a spawn: buffer in `costUsdCurrentSpawn`, commit to `costUsd` on turn end only.
+- `activeAgents` counts only `task_type === 'local_agent'` via `Set<task_id>`.
 
-### Stats aggregator
+Tests: `cd chat-service && npm test` — uses glob `'test/**/*.test.js'` (directory form broken on Node 25).
 
-[lib/stats.js](chat-service/lib/stats.js) (~687 lines). Exposed via `GET /api/stats?sessionId=<uuid>`.
-
-Builds a *server-side* timeline from `log.jsonl` + `hooks.log`:
-- phases (agent_processing, tool_use, stream_gap, …)
-- teams (`TeamCreate(task_id)` → `team_name`)
-- children (sub-agents under each phase)
-- top N ops by duration and cost
-- skills / rules / hooks read counts per agent
-- errors (4 kinds) + retries (3 heuristics: `(retry)` suffix, triggered-by-error, close-consecutive-same-description)
-
-Tests live in [chat-service/test/](chat-service/test/) — `node --test` + JSONL fixtures. Run with `npm test` inside `chat-service/`.
-
-### Bench harness
-
-[chat-service/tests/run.js](chat-service/tests/run.js) replays [cases.json](chat-service/tests/cases.json) over the real `ws://localhost:8080`. Before each case:
-
-```
-cd /app && git checkout -- src/ && cp /app-variants/App.{fakerest|supabase}.tsx src/App.tsx
-```
-
-Writes `tests/results/run-<ISO>.json`, diffs against [baseline.json](chat-service/tests/results/baseline.json). `--update-baseline` rewrites the reference.
-
-The harness records 4 dimensions per case:
-- **cost / time / tokens** (always-on, blocking on `maxCostUsd` / `maxDurationMs`)
-- **agent shape** (`mustInvoke` / `mustNotInvoke`, blocking)
-- **A — file set + diff size** (`mustModify` / `mustNotModify` / `expectedDiffStats`, soft warnings)
-- **C — Playwright check** (`tests/checks/<id>.js`, blocking)
-
-Per-case full diffs are archived to `chat-service/tests/results/<runTs>/<caseId>.patch` for inspection when something fails. Override the target container with `BENCH_CONTAINER=...` and the CRM URL used by C-checks with `CRM_URL=http://localhost:6174`.
-
-## Agent team
-
-8 agents in [claudeConfig/.claude/agents/](claudeConfig/.claude/agents/). Each one: frontmatter (name, description, model, tools, skills) + prose. Models deliberately scoped:
+## Agent team (`claudeConfig/.claude/agents/`)
 
 | Agent | Model | Role |
 |---|---|---|
-| chat-orchestrator | sonnet | User-facing. Classifies, routes, narrates. Conducts the SETUP interview directly via the `setup-interview` skill (no sub-agent). |
-| planner | sonnet | Decomposes need → atomic tickets (JSON) with waves + file-path hints. |
-| architect | opus | Spec gatekeeper (before plan), plan approver (after). |
-| developer | opus | Plans, implements, commits inside a worktree. Mode 2 = reflection. |
-| quality-reviewer | sonnet | Code quality + security (semantic only, hooks own validation). |
-| test-validator | haiku | Integration wiring, e2e presence, reachability. |
-| merger | haiku | `git merge --no-ff` to main, remove worktree. **Never `git add` / `git commit` itself** — only `git merge` and `git reset --hard HEAD` on `/app`. |
+| chat-orchestrator | sonnet | User-facing, routes, narrates. SIMPLE flow dispatches simple-developer + merger directly (no team). |
+| planner | sonnet | Decomposes → tickets JSON with waves + file hints. |
+| architect | opus | Spec gatekeeper + plan approver. |
+| developer | opus | Implements + commits in worktree. |
+| simple-developer | sonnet | 1-file cosmetic changes only. No team, no review — SubagentStop hooks validate. |
+| quality-reviewer | sonnet | Semantic code + security review only. Never re-runs validation. |
+| test-validator | haiku | Integration wiring + e2e presence. |
+| merger | haiku | `git merge --no-ff` only. **Never `git add`/`git commit`**. |
+| documentator | sonnet | Writes rules/skills to `~/.claude/local/` on explicit user request only. |
 | devops | sonnet | One-time bootstrap (fork, Supabase, env, deploy). |
 
-The full lifecycle is encoded in the [agent-team](claudeConfig/.claude/skills/agent-team/) skill (single source of truth for dispatch order).
+Team layout (`agent-team` skill): one `TeamCreate` per wave, `3×N + 1` members in one dispatch (developer + 2 reviewers per ticket + one shared merger). Constraint: one team per lead, no nested teams. Single merger eliminates `.git/index.lock` contention.
 
-The skill uses a **single-team Option C** layout: per wave, the lead does ONE `TeamCreate({team_name: "tickets"})` and dispatches `3×N + 1` members in one message — three per-ticket members (developer + 2 reviewers) per ticket plus **one shared `merger`** (bare name, singleton across the wave). The per-ticket members use deterministic suffixed names (`developer-TASK-001`, `quality-reviewer-TASK-001`, …). This layout is forced by a documented runtime constraint — *one team per lead at a time, no nested teams*. The single-merger choice eliminates `.git/index.lock` contention that would otherwise serialise N parallel mergers anyway. Each Agent's spawn prompt carries `TASK_ID` and `COUNTERPARTS`, isolating per-ticket conversations inside the shared team.
+### Hooks (`claudeConfig/.claude/settings.json`)
 
-### Hooks gate the handoff
+- `PreToolUse / Bash|Read|Grep|Glob|SendMessage` → member-idle-gate
+- `PreToolUse / Bash` → silent-mode-check, circuit-breaker, block-bash-file-write, block-bash-validation, block-orchestrator-merge, restrict-documentator-bash
+- `PreToolUse / Write|Edit` → restrict-documentator-write
+- `PreToolUse / SendMessage` → block-premature-shutdowns, validate-before-review (typecheck + prettier + unit + e2e — blocks developer→reviewer/merger on failure)
+- `PreToolUse / TeamDelete` → teamdelete-gate (blocks if members not gracefully shut down)
+- `PostToolUse / TeamDelete` → teamdelete-cleanup
+- `SubagentStart / simple-developer|developer` → setup-worktree
+- `SubagentStop / merger` → cleanup-worktree
+- `SubagentStop / simple-developer` → typecheck, prettier, unit-app, unit-functions, e2e
 
-[claudeConfig/.claude/settings.json](claudeConfig/.claude/settings.json) wires:
-- `PreToolUse / Bash` → silent-mode-check, circuit-breaker, block-bash-file-write, block-bash-validation.
-- `PreToolUse / SendMessage` → validate-before-review (typecheck + prettier + unit-app + unit-functions + e2e). Triggered when a developer messages a reviewer or merger; first failure blocks the SendMessage. Replaces the older `SubagentStop / developer` chain.
-- `PreToolUse / TeamDelete` → teamdelete-gate. Blocks TeamDelete if any non-lead member has not been gracefully shut down (no `shutdown_approved` in lead's inbox, or one is present but unread). The error message points to the skill's Phase 3 protocol.
-- `PostToolUse / TeamDelete` → teamdelete-cleanup. Silently removes residual `~/.claude/teams/<team>/` after a successful TeamDelete.
+### Worktree scope (critical)
 
-Reviewers must never re-run validation — they check *meaning*; hooks guarantee *correctness*.
+Every ticket agent works in `/app/worktrees/TASK-XXX/`. Never read/edit `/app/src/` when you have a worktree — that's the base branch. Every Bash call must `cd /app/worktrees/TASK-XXX && …` (shell state is stateless between calls).
 
-### Rules & skills
-
-Rules ([claudeConfig/.claude/rules/](claudeConfig/.claude/rules/)): worktree-scope, agent-output-format, coding-style, testing, typescript, web-patterns, web-security, security-triggers.
-
-Skills ([claudeConfig/.claude/skills/](claudeConfig/.claude/skills/)): agent-team, e2e-conventions, playwright-testing, reflection-writing, worktree-detection.
-
-### Worktree scope — the load-bearing rule
-
-Every ticket-scoped agent works inside `/app/worktrees/TASK-XXX/`. Reading `/app/src/...` while you have `/app/worktrees/TASK-XXX/src/...` is wrong: `/app` is on base, missing the ticket's changes, and editing there pollutes `main`. See [worktree-scope.md](claudeConfig/.claude/rules/worktree-scope.md) — it's the rule that has caused the most past incidents.
-
-`Bash` calls are **stateless** — every command must start with `cd /app/worktrees/TASK-XXX && …`.
-
-## Working on this repo (from the host)
+## Development
 
 ```bash
-# Build the image (once, ~5 min)
-docker build -t atomic-crm-dev .
-
-# Demo mode (fast iteration on UI)
-docker compose --profile demo up
-
-# Full mode (needs real DB for migrations, auth, storage)
-docker compose --profile full up
+docker compose --profile demo up   # fast, FakeRest
+docker compose --profile full up   # real Supabase
 ```
 
-In dev the following bind-mounts let you iterate without rebuilding (see [docker-compose.yml](docker-compose.yml) comments; remove before release):
-- `./claudeConfig/.claude:/root/.claude:ro`
-- `./entrypoint.sh:/entrypoint.sh:ro`
-- `./chat-service/{server.js,public,lib}:…:ro`
-- `./sessions:/chat-service/logs`
+Hot-reload bind-mounts (dev only, remove before release): `claudeConfig/.claude`, `entrypoint.sh`, `chat-service/{server.js,public,lib}`, `sessions/`.
 
-### URLs
+## Conventions
 
-| URL | Content |
-|---|---|
-| `http://localhost:5173` | Atomic CRM (Vite) |
-| `http://localhost:8080` | Chat UI (`chat-service`) |
-| `http://localhost:7681` | Web terminal (ttyd → Claude CLI) |
-| `http://localhost:54323` | Supabase Studio (full mode only) |
+- **Language**: code, prompts, commits → English. Conversation with maintainer → French.
+- **Ports hardcoded**: 5173 / 7681 / 8080 / 54321 / 54323. Don't parametrise.
+- **No secrets in git**. `ANTHROPIC_API_KEY` in `.env` (gitignored).
+- **Chat-service imports**: `node:` prefix for `lib/*.js`; bare in `server.js` — don't harmonise.
+- **Opus only for architect + developer**. Everything else sonnet or haiku.
+- **Debug UI**: `JSON.stringify(event, null, 2)` in a `<details>`, not fancy parsers.
 
-### Running unit tests on the chat-service
+## Gotchas
 
-```bash
-cd chat-service && npm test             # node --test 'test/**/*.test.js'
-cd chat-service && npm run test:smoke   # WebSocket smoke run
-cd chat-service && npm run bench        # replays cases.json against ws://localhost:8080
-```
-
-## Conventions for code changes
-
-- **Language**: UI strings, error messages, agent prompts, commit messages → **English**. Conversation with me (the maintainer) → **French**.
-- **Ports are hardcoded**: 5173 / 7681 / 8080 / 54321 / 54323. Don't parametrise.
-- **No secrets committed**. `ANTHROPIC_API_KEY` lives in `.env` (gitignored). OAuth tokens live in the `claude-auth` volume.
-- **Chat-service style**: `node:` prefix on imports of `lib/*.js`; bare imports in `server.js` (pre-existing convention — don't harmonise).
-- **Prefer rough dumps over fancy parsers** for debug UI. `JSON.stringify(event, null, 2)` in a `<details>` is usually what's wanted.
-- **Don't add Opus agents casually**. Opus is reserved for architect + developer. Everything else is sonnet or haiku.
-
-## Gotchas encountered in the past
-
-- Counting every `task_started` as an active agent → counter drifts to 10+. Filter on `task_type === 'local_agent'` ([server.js:533](chat-service/server.js#L533)).
-- Summing `total_cost_usd` event-by-event → massive inflation (it's already cumulative within a spawn). Replace, then commit on `result` ([server.js:556](chat-service/server.js#L556)).
-- `git reset --hard HEAD` in `/app` silently reverts `App.tsx` to the upstream form (no data provider wired). The merger re-applies the variant via [entrypoint-helpers/apply-app-variant.sh](entrypoint.sh) baked into `/entrypoint-helpers/` at boot.
-- The Atomic CRM upstream ships a `PostToolUse / format-file.sh` hook that fights our prettier-on-stop hook (edit → format → re-read different bytes → loop). Entrypoint overwrites `/app/.claude/settings.json` with `{"hooks": {}}` at boot.
-- `node --test test/` (directory form) doesn't work on Node 25; use the glob: `node --test 'test/**/*.test.js'`.
-- Cold cache is expensive (~$0.17 for a "Hi!" in previous measurements) because the CLI eagerly loads every installed plugin into the system prompt. Keep `enabledPlugins` minimal in [settings.json](claudeConfig/.claude/settings.json) and disable unused MCP servers.
+- `total_cost_usd` is cumulative within a spawn — never sum it event-by-event (massive inflation).
+- `git reset --hard HEAD` on `/app` silently reverts App.tsx — merger re-applies variant via `/entrypoint-helpers/apply-app-variant.sh`.
+- Cold cache is expensive (~$0.17 for a "Hi!") — keep `enabledPlugins` minimal in `settings.json`.

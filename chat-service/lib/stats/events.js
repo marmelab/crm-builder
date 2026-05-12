@@ -12,6 +12,9 @@ export function extractToolResultsFromUser(ev) {
   return (ev.message?.content || []).filter((b) => b.type === 'tool_result');
 }
 
+export function isDebugRaw(rec) { return rec.type === 'debug_raw' && !!rec.event; }
+export function isDebugRawAssistant(rec) { return rec.type === 'debug_raw' && rec.event?.type === 'assistant'; }
+
 // Both kinds of task_started events represent a real subagent we want to track:
 // - 'local_agent': dispatched without team_name (planner, simple-developer, ...).
 // - 'in_process_teammate': dispatched into a team (developer-TASK-XXX, reviewers,

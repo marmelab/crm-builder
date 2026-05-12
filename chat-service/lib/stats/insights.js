@@ -1,5 +1,5 @@
-import { extractToolUsesFromAssistant } from './events.js';
-import { tailPayload } from './io.js';
+import { extractToolUsesFromAssistant, isDebugRaw, isDebugRawAssistant } from './events.js';
+import { tailPayload, toUnixMs } from './io.js';
 import { buildPhaseOwnerMap, resolvePhase } from './phases.js';
 
 export function aggregateSkills(phases) {
@@ -21,10 +21,10 @@ const RULE_PATH_RE = /\.claude\/rules\/([^/]+\.md)$/;
 
 export function aggregateRules(events, phases) {
   const agentPhases = phases.filter((p) => p.kind === 'agent');
-  const phaseByToolUseId = buildPhaseOwnerMap(events, agentPhases);
+  const phaseByToolUseId = buildPhaseOwnerMap(agentPhases);
   const byFile = new Map();
   for (const rec of events) {
-    if (rec.type !== 'debug_raw' || rec.event?.type !== 'assistant') continue;
+    if (!isDebugRawAssistant(rec)) continue;
     for (const b of extractToolUsesFromAssistant(rec.event)) {
       if (b.name !== 'Read') continue;
       const m = typeof b.input?.file_path === 'string' && b.input.file_path.match(RULE_PATH_RE);
@@ -49,7 +49,7 @@ export function aggregateRules(events, phases) {
 export function detectErrors(events, phases, hooks) {
   const errs = [];
   for (const rec of events) {
-    if (rec.type !== 'debug_raw' || !rec.event) continue;
+    if (!isDebugRaw(rec)) continue;
     const ev = rec.event;
     if (ev.type === 'system' && ev.subtype === 'notification' && ev.priority === 'immediate') {
       errs.push({ kind: 'notification', ts: rec.ts, phaseId: null, teamName: null,
@@ -100,11 +100,11 @@ export function detectRetries(phases, errors) {
   for (const err of errors.filter((e) => e.kind === 'task_failed')) {
     const errPhase = sortedAgents.find((p) => p.phaseId === err.phaseId);
     if (!errPhase) continue;
-    const windowEnd = new Date(err.ts).getTime() + 5 * 60 * 1000;
+    const windowEnd = toUnixMs(err.ts) + 5 * 60 * 1000;
     const cand = sortedAgents.find((p) =>
       !retrySet.has(p.phaseId) &&
       p.startTs > err.ts &&
-      new Date(p.startTs).getTime() <= windowEnd &&
+      toUnixMs(p.startTs) <= windowEnd &&
       commonPrefixRatio(errPhase.description, p.description) > 0.8
     );
     if (cand) {
@@ -118,7 +118,7 @@ export function detectRetries(phases, errors) {
     for (let j = i + 1; j < sortedAgents.length; j++) {
       const a = sortedAgents[i], b = sortedAgents[j];
       if (retrySet.has(b.phaseId) || a.description !== b.description) continue;
-      if (new Date(b.startTs).getTime() - new Date(a.startTs).getTime() > 5 * 60 * 1000) continue;
+      if (toUnixMs(b.startTs) - toUnixMs(a.startTs) > 5 * 60 * 1000) continue;
       retries.push({ ts: b.startTs, triggeredByErrorTs: null, phaseId: b.phaseId,
         description: b.description, matchMethod: 'duplicate-description-5min' });
       retrySet.add(b.phaseId);

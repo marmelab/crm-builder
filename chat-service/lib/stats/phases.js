@@ -1,12 +1,8 @@
 import {
   msBetween, mergeIntervals, emptyBreakdown, addBreakdown, breakdownFromUsage,
-  costFromBreakdown,
+  costFromBreakdown, toUnixMs,
 } from './io.js';
-import { extractToolUsesFromAssistant, isAgentTaskStart } from './events.js';
-
-function subagentTypeFromAgentToolUse(toolUseId, agentTypeByToolId) {
-  return agentTypeByToolId.get(toolUseId);
-}
+import { extractToolUsesFromAssistant, isAgentTaskStart, isDebugRaw, isDebugRawAssistant } from './events.js';
 
 export function extractPhases(events, agentToolIdToTeam) {
   const byTaskId = new Map();
@@ -18,7 +14,7 @@ export function extractPhases(events, agentToolIdToTeam) {
   // to map a phase to its per-activation subagent transcripts (N reveils via
   // SendMessage = N files, all sharing the same name in their meta.agentType).
   for (const rec of events) {
-    if (rec.type !== 'debug_raw' || rec.event?.type !== 'assistant') continue;
+    if (!isDebugRawAssistant(rec)) continue;
     for (const b of extractToolUsesFromAssistant(rec.event)) {
       if ((b.name === 'Agent' || b.name === 'Task') && b.input?.subagent_type) {
         agentTypeByToolId.set(b.id, b.input.subagent_type);
@@ -30,17 +26,17 @@ export function extractPhases(events, agentToolIdToTeam) {
   // Subsequent task_started for the same task_id (SendMessage-resume) get a different
   // tool_use_id but must inherit the original subagent_type.
   for (const rec of events) {
-    if (rec.type !== 'debug_raw' || !rec.event) continue;
+    if (!isDebugRaw(rec)) continue;
     const ev = rec.event;
     if (isAgentTaskStart(ev)) {
       if (!agentTypeByTaskId.has(ev.task_id)) {
-        const t = subagentTypeFromAgentToolUse(ev.tool_use_id, agentTypeByToolId);
+        const t = agentTypeByToolId.get(ev.tool_use_id);
         if (t) agentTypeByTaskId.set(ev.task_id, t);
       }
     }
   }
   for (const rec of events) {
-    if (rec.type !== 'debug_raw' || !rec.event) continue;
+    if (!isDebugRaw(rec)) continue;
     const ev = rec.event;
     if (isAgentTaskStart(ev)) {
       const existing = byTaskId.get(ev.task_id);
@@ -56,7 +52,7 @@ export function extractPhases(events, agentToolIdToTeam) {
           kind: 'agent',
           agentType:
             agentTypeByTaskId.get(ev.task_id) ??
-            subagentTypeFromAgentToolUse(ev.tool_use_id, agentTypeByToolId) ??
+            agentTypeByToolId.get(ev.tool_use_id) ??
             'unknown',
           // Suffixed dispatch name (e.g. "developer-TASK-001"). Used to locate
           // per-activation subagent transcripts whose meta.agentType matches.
@@ -124,14 +120,14 @@ export function buildOrchestratorPhase(events, agentPhases, startTs, endTs, user
   const totalMs = startTs && endTs ? msBetween(startTs, endTs) : 0;
   const intervals = agentPhases
     .filter((p) => p.startTs && p.endTs)
-    .map((p) => [new Date(p.startTs).getTime(), new Date(p.endTs).getTime()]);
+    .map((p) => [toUnixMs(p.startTs), toUnixMs(p.endTs)]);
   const merged = mergeIntervals(intervals);
   const agentCoverageMs = merged.reduce((a, [s, e]) => a + (e - s), 0);
   let opsCount = 0;
   let tokensBreakdown = emptyBreakdown();
   const skip = new Set(['Agent', 'Task', 'TeamCreate', 'TeamDelete']);
   for (const rec of events) {
-    if (rec.type !== 'debug_raw' || !rec.event) continue;
+    if (!isDebugRaw(rec)) continue;
     const ev = rec.event;
     if (ev.type === 'assistant') {
       // Only orchestrator-emitted tool_uses — sub-agent tool_uses carry a
@@ -207,7 +203,7 @@ export function computePhaseWorkMs(phase) {
   let active = 0;
   let prevEndMs = null;
   for (const t of tools) {
-    const startMs = new Date(t.ts).getTime();
+    const startMs = toUnixMs(t.ts);
     if (prevEndMs !== null) {
       const gap = startMs - prevEndMs;
       if (gap > 0 && gap < THINKING_GAP_THRESHOLD) active += gap;
@@ -254,7 +250,7 @@ export function accumulatePerPhaseTokens(events, phases) {
   const seenByPhase = new Map();
 
   for (const rec of events) {
-    if (rec.type !== 'debug_raw' || rec.event?.type !== 'assistant') continue;
+    if (!isDebugRawAssistant(rec)) continue;
     const ev = rec.event;
     const u = ev.message?.usage;
     if (!u) continue;
@@ -345,7 +341,7 @@ export function calibratePhaseCostsToSdk(phases, sdkTokensByModel) {
   }
 }
 
-export function buildPhaseOwnerMap(events, agentPhases) {
+export function buildPhaseOwnerMap(agentPhases) {
   const phaseByToolUseId = new Map();
   for (const p of agentPhases) if (p._toolUseId) phaseByToolUseId.set(p._toolUseId, p);
   return phaseByToolUseId;
