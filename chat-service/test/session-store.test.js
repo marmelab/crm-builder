@@ -29,11 +29,10 @@ test('digestLog: tokensUsed sums input + cache_creation + output, EXCLUDES cache
   assert.equal(stats.costUsd, 0.01);
 });
 
-test('digestLog: sums tokens but takes max cost across multiple result events (total_cost_usd is cumulative per session)', () => {
-  // total_cost_usd in real Claude result events is cumulative within the
-  // session (monotonically increasing). Summing it across N spawns would
-  // inflate cost by N×. We take Math.max instead; the final value is the
-  // true session total.
+test('digestLog: single spawn — costUsd is the spawn max (cumulative grows monotonically)', () => {
+  // total_cost_usd is cumulative WITHIN a spawn. Multiple result events
+  // within the same spawn report a monotonically growing running total.
+  // Use the spawn's final max — summing each event would over-count by N×.
   const log = [
     resultEvent({ input_tokens: 10, cache_creation_input_tokens: 20, output_tokens: 5 }, 0.001),
     resultEvent({ input_tokens: 30, cache_creation_input_tokens: 40, output_tokens: 15 }, 0.005),
@@ -41,8 +40,95 @@ test('digestLog: sums tokens but takes max cost across multiple result events (t
   ].join('\n');
 
   const { stats } = digestLog(log);
+  // No modelUsage in fixtures → falls back to summing per-turn result.usage.
   assert.equal(stats.tokensUsed, 10 + 20 + 5 + 30 + 40 + 15 + 100);
   assert.ok(Math.abs(stats.costUsd - 0.007) < 1e-9);
+});
+
+test('digestLog: multi-spawn — costUsd is the SUM of per-spawn maxes (decrease = new spawn)', () => {
+  // Each --resume creates a new claude -p process; total_cost_usd resets to 0.
+  // A decrease in total_cost_usd signals a new spawn. Three spawns ending at
+  // 0.5, 0.3, 0.8 → total $1.60 (not $0.80, which would be the global max).
+  const log = [
+    resultEvent({ input_tokens: 1, output_tokens: 1 }, 0.2),
+    resultEvent({ input_tokens: 1, output_tokens: 1 }, 0.5),  // spawn 1 max
+    resultEvent({ input_tokens: 1, output_tokens: 1 }, 0.1),  // ← decrease → new spawn
+    resultEvent({ input_tokens: 1, output_tokens: 1 }, 0.3),  // spawn 2 max
+    resultEvent({ input_tokens: 1, output_tokens: 1 }, 0.05), // ← decrease → new spawn
+    resultEvent({ input_tokens: 1, output_tokens: 1 }, 0.8),  // spawn 3 max
+  ].join('\n');
+
+  const { stats } = digestLog(log);
+  assert.ok(Math.abs(stats.costUsd - (0.5 + 0.3 + 0.8)) < 1e-9, `expected $1.60, got $${stats.costUsd}`);
+});
+
+test('digestLog: tokens come from modelUsage (cumulative, includes sub-agents) when present', () => {
+  // modelUsage is the cumulative-within-spawn token breakdown; result.usage
+  // alone misses sub-agent activations. Prefer modelUsage when present.
+  const resultWithModelUsage = (modelUsage, totalCost) => JSON.stringify({
+    ts: '2026-04-30T12:00:02.000Z', dir: 'out', type: 'debug_raw',
+    event: { type: 'result', usage: { input_tokens: 1, output_tokens: 1 }, modelUsage, total_cost_usd: totalCost },
+  });
+  const log = [
+    resultWithModelUsage({
+      'claude-sonnet-4-6': { inputTokens: 100, cacheCreationInputTokens: 200, cacheReadInputTokens: 9999, outputTokens: 50 },
+      'claude-opus-4-6':   { inputTokens: 10,  cacheCreationInputTokens: 20,  cacheReadInputTokens: 9999, outputTokens: 5 },
+    }, 0.1),
+  ].join('\n');
+
+  const { stats } = digestLog(log);
+  // 100+200+50 + 10+20+5 = 385. cache_read excluded by design.
+  assert.equal(stats.tokensUsed, 385);
+});
+
+test('digestLog: user_message events are the primary spawn boundary (regression: cost-decrease heuristic absorbed small spawns when successor cost > predecessor max)', () => {
+  // Observed on session d0ebd234: 4 user turns with spawn maxes
+  // [$11.5753, $0.1973, $0.0522, $11.4629]. The pre-fix cost-decrease
+  // heuristic missed the spawn 3 → spawn 4 boundary because spawn 4's first
+  // result ($3.27) landed above spawn 3's max ($0.05), so spawn 3 was
+  // silently absorbed and its $0.052 disappeared from the total. With
+  // user_message-driven boundaries the missing $0.052 is recovered.
+  const um = (ts) => JSON.stringify({ ts, dir: 'in', type: 'user_message', content: 'x' });
+  const r  = (ts, cost) => JSON.stringify({
+    ts, dir: 'out', type: 'debug_raw',
+    event: { type: 'result', total_cost_usd: cost, usage: { input_tokens: 1, output_tokens: 1 } },
+  });
+  const log = [
+    um('2026-05-11T13:48:20Z'),
+    r('2026-05-11T13:50:00Z', 11.5753),
+    um('2026-05-11T14:19:21Z'),
+    r('2026-05-11T14:19:54Z', 0.1973),
+    um('2026-05-11T14:20:09Z'),
+    r('2026-05-11T14:20:34Z', 0.0522),
+    um('2026-05-11T14:24:46Z'),
+    r('2026-05-11T14:32:58Z', 3.2753),  // intra-spawn growth, NOT a new spawn
+    r('2026-05-11T14:47:21Z', 11.4629),
+  ].join('\n');
+
+  const expected = 11.5753 + 0.1973 + 0.0522 + 11.4629;
+  const { stats } = digestLog(log);
+  assert.ok(
+    Math.abs(stats.costUsd - expected) < 1e-9,
+    `expected $${expected.toFixed(4)}, got $${stats.costUsd.toFixed(4)} — spawn 3 was likely absorbed`,
+  );
+});
+
+test('digestLog: stats.tokensBreakdown carries the 4-way per-component split', () => {
+  const log = JSON.stringify({
+    ts: '2026-04-30T12:00:00Z', dir: 'out', type: 'debug_raw',
+    event: {
+      type: 'result',
+      total_cost_usd: 0.5,
+      modelUsage: {
+        'claude-sonnet-4-6': { inputTokens: 100, cacheCreationInputTokens: 200, cacheReadInputTokens: 5000, outputTokens: 50 },
+      },
+      usage: { input_tokens: 1, output_tokens: 1 },
+    },
+  });
+  const { stats } = digestLog(log);
+  assert.deepEqual(stats.tokensBreakdown, { input: 100, cacheCreate: 200, output: 50, cacheRead: 5000 });
+  // tokensUsed remains the legacy figure (cache_read excluded).
+  assert.equal(stats.tokensUsed, 350);
 });
 
 test('digestLog: skips malformed JSON lines without crashing', () => {

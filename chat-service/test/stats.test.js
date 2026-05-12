@@ -3,6 +3,10 @@ import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { aggregateSession } from '../lib/stats.js';
+import {
+  computeSummary, tokensFromModelUsage,
+  breakdownFromModelUsage, breakdownFromUsage, sumBreakdown,
+} from '../lib/stats/io.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const fixturesDir = join(__dirname, 'fixtures');
@@ -302,6 +306,202 @@ test('aggregateSession: blocking hooks EXIT=2 are NOT errors', async () => {
     if (e.kind !== 'hook_failed') continue;
     assert.ok(!blocked.includes(e.payload?.hookName));
   }
+});
+
+// ----- computeSummary unit tests (multi-spawn cost + modelUsage tokens) -----
+
+const r = (totalCostUsd, modelUsage = null, usage = { input_tokens: 1, output_tokens: 1 }) => ({
+  type: 'debug_raw',
+  event: { type: 'result', total_cost_usd: totalCostUsd, usage, ...(modelUsage ? { modelUsage } : {}) },
+});
+
+test('computeSummary: single spawn — costUsd is the spawn max, not the sum', () => {
+  // total_cost_usd is cumulative within a spawn; summing all N result events
+  // would over-count by N×. Take the final/max value.
+  const events = [r(0.1), r(0.3), r(0.5), r(0.7)];
+  const { costUsd } = computeSummary(events);
+  assert.ok(Math.abs(costUsd - 0.7) < 1e-9);
+});
+
+test('computeSummary: multi-spawn — decrease in total_cost_usd marks a new spawn', () => {
+  // Three spawns ending at 0.5, 0.3, 0.8 should sum to $1.60 (not $0.80,
+  // which would be the global Math.max).
+  const events = [
+    r(0.2), r(0.5),            // spawn 1 max = 0.5
+    r(0.1), r(0.3),            // spawn 2 max = 0.3 (decrease 0.5→0.1)
+    r(0.05), r(0.4), r(0.8),   // spawn 3 max = 0.8 (decrease 0.3→0.05)
+  ];
+  const { costUsd } = computeSummary(events);
+  assert.ok(Math.abs(costUsd - (0.5 + 0.3 + 0.8)) < 1e-9, `got $${costUsd}`);
+});
+
+test('computeSummary: tokens prefer modelUsage (cumulative) over result.usage (per-turn)', () => {
+  // result.usage misses sub-agent tokens; modelUsage is cumulative-within-spawn
+  // and includes ALL model calls. cache_read excluded from the displayed total.
+  const events = [
+    r(0.5, {
+      'claude-sonnet-4-6': { inputTokens: 100, cacheCreationInputTokens: 200, cacheReadInputTokens: 99999, outputTokens: 50 },
+      'claude-opus-4-6':   { inputTokens: 10,  cacheCreationInputTokens: 20,  cacheReadInputTokens: 99999, outputTokens: 5 },
+    }),
+  ];
+  const { tokensTotal } = computeSummary(events);
+  // 100+200+50 + 10+20+5 = 385
+  assert.equal(tokensTotal, 385);
+});
+
+test('computeSummary: modelUsage is replaced per-result (cumulative), not summed', () => {
+  // Multiple result events in one spawn report a growing cumulative modelUsage.
+  // The LAST value is the spawn's final state, not the sum.
+  const events = [
+    r(0.1, { 'claude-sonnet-4-6': { inputTokens: 10, outputTokens: 5 } }),
+    r(0.3, { 'claude-sonnet-4-6': { inputTokens: 30, outputTokens: 20 } }),
+    r(0.5, { 'claude-sonnet-4-6': { inputTokens: 50, outputTokens: 40 } }),
+  ];
+  const { tokensTotal } = computeSummary(events);
+  assert.equal(tokensTotal, 90, 'should be 50+40 (last cumulative), not 10+5+30+20+50+40');
+});
+
+test('computeSummary: modelUsage tokens sum correctly across multiple spawns', () => {
+  // Two spawns, each ending with its own cumulative modelUsage.
+  const events = [
+    r(0.5, { 'claude-sonnet-4-6': { inputTokens: 100, outputTokens: 50 } }),  // spawn 1 final
+    r(0.1, { 'claude-sonnet-4-6': { inputTokens: 20,  outputTokens: 10 } }),  // spawn 2 starts (decrease)
+    r(0.3, { 'claude-sonnet-4-6': { inputTokens: 60,  outputTokens: 30 } }),  // spawn 2 final
+  ];
+  const { tokensTotal, costUsd } = computeSummary(events);
+  assert.equal(tokensTotal, 150 + 90, '(100+50) + (60+30) = 240');
+  assert.ok(Math.abs(costUsd - 0.8) < 1e-9, '0.5 + 0.3 = 0.8');
+});
+
+test('computeSummary: falls back to result.usage when no modelUsage is present', () => {
+  // Legacy fixtures and synthetic test data have no modelUsage — fall back
+  // to summing per-turn result.usage so existing tests keep working.
+  const events = [
+    r(0.5, null, { input_tokens: 100, cache_creation_input_tokens: 50, output_tokens: 25, cache_read_input_tokens: 99999 }),
+    r(0.7, null, { input_tokens: 200, cache_creation_input_tokens: 100, output_tokens: 50, cache_read_input_tokens: 99999 }),
+  ];
+  const { tokensTotal } = computeSummary(events);
+  assert.equal(tokensTotal, 100 + 50 + 25 + 200 + 100 + 50, 'sum of in+cc+out across both results, cache_read excluded');
+});
+
+test('tokensFromModelUsage: excludes cache_read', () => {
+  const t = tokensFromModelUsage({
+    'claude-opus-4-6': { inputTokens: 10, cacheCreationInputTokens: 20, cacheReadInputTokens: 1000, outputTokens: 5 },
+  });
+  assert.equal(t, 35);
+});
+
+test('tokensFromModelUsage: handles empty/null', () => {
+  assert.equal(tokensFromModelUsage(null), 0);
+  assert.equal(tokensFromModelUsage(undefined), 0);
+  assert.equal(tokensFromModelUsage({}), 0);
+});
+
+// ----- Token breakdown + user_message spawn boundary -----
+
+test('breakdownFromModelUsage: sums input/cacheCreate/output/cacheRead across models', () => {
+  const b = breakdownFromModelUsage({
+    'claude-sonnet-4-6': { inputTokens: 100, cacheCreationInputTokens: 200, cacheReadInputTokens: 1000, outputTokens: 50 },
+    'claude-opus-4-6':   { inputTokens: 10,  cacheCreationInputTokens: 20,  cacheReadInputTokens: 100,  outputTokens: 5 },
+  });
+  assert.deepEqual(b, { input: 110, cacheCreate: 220, output: 55, cacheRead: 1100 });
+  assert.equal(sumBreakdown(b), 1485);
+});
+
+test('breakdownFromUsage: maps snake_case fields to breakdown shape', () => {
+  const b = breakdownFromUsage({
+    input_tokens: 1, cache_creation_input_tokens: 2, cache_read_input_tokens: 3, output_tokens: 4,
+  });
+  assert.deepEqual(b, { input: 1, cacheCreate: 2, output: 4, cacheRead: 3 });
+});
+
+test('computeSummary: returns tokensBreakdown alongside tokensTotal', () => {
+  const events = [{
+    type: 'debug_raw',
+    event: {
+      type: 'result',
+      total_cost_usd: 0.5,
+      modelUsage: {
+        'claude-sonnet-4-6': { inputTokens: 100, cacheCreationInputTokens: 200, cacheReadInputTokens: 9999, outputTokens: 50 },
+      },
+      usage: { input_tokens: 1, output_tokens: 1 },
+    },
+  }];
+  const { tokensTotal, tokensBreakdown } = computeSummary(events);
+  // Legacy headline excludes cache_read.
+  assert.equal(tokensTotal, 350);
+  assert.deepEqual(tokensBreakdown, { input: 100, cacheCreate: 200, output: 50, cacheRead: 9999 });
+});
+
+test('computeSummary: user_message events mark spawn boundaries (regression: cost-decrease heuristic absorbed small spawns)', () => {
+  // Real-world scenario observed on session d0ebd234: 4 user messages,
+  // spawn 3 max cost = $0.05, spawn 4 max cost = $11.46. With the old
+  // cost-decrease heuristic, spawn 4's first result ($3.27 > $0.05) failed
+  // to trigger a boundary commit, swallowing spawn 3's cost entirely. The
+  // user_message boundary commits unconditionally, recovering it.
+  const r = (ts, cost, modelUsage) => ({
+    type: 'debug_raw', ts,
+    event: { type: 'result', total_cost_usd: cost, modelUsage },
+  });
+  const um = (ts) => ({ type: 'user_message', ts, content: 'x' });
+  const events = [
+    um('2026-05-11T13:48:20Z'),
+    r('2026-05-11T13:50:00Z', 11.5753, { 'claude-sonnet-4-6': { inputTokens: 100, outputTokens: 50 } }),
+    um('2026-05-11T14:19:21Z'),
+    r('2026-05-11T14:19:54Z', 0.1973,  { 'claude-sonnet-4-6': { inputTokens: 10,  outputTokens: 5 } }),
+    um('2026-05-11T14:20:09Z'),
+    r('2026-05-11T14:20:34Z', 0.0522,  { 'claude-sonnet-4-6': { inputTokens: 5,   outputTokens: 2 } }),
+    um('2026-05-11T14:24:46Z'),
+    r('2026-05-11T14:32:58Z', 3.2753,  { 'claude-sonnet-4-6': { inputTokens: 200, outputTokens: 100 } }),
+    r('2026-05-11T14:47:21Z', 11.4629, { 'claude-sonnet-4-6': { inputTokens: 300, outputTokens: 150 } }),
+  ];
+  const { costUsd, tokensTotal } = computeSummary(events);
+  const expectedCost = 11.5753 + 0.1973 + 0.0522 + 11.4629;
+  assert.ok(Math.abs(costUsd - expectedCost) < 1e-9, `got $${costUsd}, expected $${expectedCost}`);
+  // Tokens: spawn1=150, spawn2=15, spawn3=7, spawn4=450 → 622
+  assert.equal(tokensTotal, 622);
+});
+
+test('computeSummary: tokensByModel sums per-model costUSD across spawns (SDK authoritative)', () => {
+  // modelUsage[m].costUSD is the per-model cost the SDK has already computed.
+  // Their sum within a result event equals total_cost_usd; across spawns, the
+  // per-model committed costs should sum to summary.costUsd.
+  const r = (ts, cost, modelUsage) => ({
+    type: 'debug_raw', ts,
+    event: { type: 'result', total_cost_usd: cost, modelUsage },
+  });
+  const um = (ts) => ({ type: 'user_message', ts, content: 'x' });
+  const events = [
+    um('2026-05-12T10:00:00Z'),
+    r('2026-05-12T10:00:30Z', 0.50, {
+      'claude-sonnet-4-6': { inputTokens: 100, outputTokens: 50, costUSD: 0.30 },
+      'claude-opus-4-6':   { inputTokens: 10,  outputTokens: 5,  costUSD: 0.20 },
+    }),
+    um('2026-05-12T10:01:00Z'),
+    r('2026-05-12T10:01:30Z', 0.10, {
+      'claude-sonnet-4-6': { inputTokens: 20, outputTokens: 10, costUSD: 0.10 },
+    }),
+  ];
+  const { costUsd, tokensByModel } = computeSummary(events);
+  assert.ok(Math.abs(costUsd - 0.60) < 1e-9);
+  const sumPerModel = tokensByModel.reduce((s, r) => s + r.costUsd, 0);
+  assert.ok(Math.abs(sumPerModel - costUsd) < 1e-9,
+    `per-model sum $${sumPerModel} should equal total $${costUsd}`);
+  // Sonnet got two spawns (0.30 + 0.10), Opus got one (0.20).
+  const sonnet = tokensByModel.find((r) => r.model === 'claude-sonnet-4-6');
+  const opus   = tokensByModel.find((r) => r.model === 'claude-opus-4-6');
+  assert.ok(Math.abs(sonnet.costUsd - 0.40) < 1e-9);
+  assert.ok(Math.abs(opus.costUsd - 0.20) < 1e-9);
+});
+
+test('computeSummary: cost-decrease fallback still works when no user_message events present (legacy fixtures)', () => {
+  // Synthetic event list (no user_message markers) — the multi-spawn test
+  // higher up depends on this fallback path. Re-asserting here so the dual
+  // path is locked in.
+  const r = (cost) => ({ type: 'debug_raw', event: { type: 'result', total_cost_usd: cost } });
+  const events = [r(0.2), r(0.5), r(0.1), r(0.3), r(0.05), r(0.4), r(0.8)];
+  const { costUsd } = computeSummary(events);
+  assert.ok(Math.abs(costUsd - 1.6) < 1e-9);
 });
 
 test('phases group multiple task_started for the same task_id (SendMessage resume)', async () => {

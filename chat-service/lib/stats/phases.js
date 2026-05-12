@@ -1,4 +1,7 @@
-import { msBetween, mergeIntervals } from './io.js';
+import {
+  msBetween, mergeIntervals, emptyBreakdown, addBreakdown, breakdownFromUsage,
+  costFromBreakdown,
+} from './io.js';
 import { extractToolUsesFromAssistant, isAgentTaskStart } from './events.js';
 
 function subagentTypeFromAgentToolUse(toolUseId, agentTypeByToolId) {
@@ -64,6 +67,7 @@ export function extractPhases(events, agentToolIdToTeam) {
           teamName: agentToolIdToTeam.get(ev.tool_use_id) ?? null,
           startTs: rec.ts,
           endTs: null, durationMs: 0, opsCount: 0, tokensTotal: 0,
+          tokensBreakdown: emptyBreakdown(),
           errorsCount: 0, retriesCount: 0, children: [],
           activations: [{
             startTs: rec.ts, endTs: null, durationMs: 0,
@@ -124,7 +128,7 @@ export function buildOrchestratorPhase(events, agentPhases, startTs, endTs, user
   const merged = mergeIntervals(intervals);
   const agentCoverageMs = merged.reduce((a, [s, e]) => a + (e - s), 0);
   let opsCount = 0;
-  let tokensTotal = 0;
+  let tokensBreakdown = emptyBreakdown();
   const skip = new Set(['Agent', 'Task', 'TeamCreate', 'TeamDelete']);
   for (const rec of events) {
     if (rec.type !== 'debug_raw' || !rec.event) continue;
@@ -139,15 +143,14 @@ export function buildOrchestratorPhase(events, agentPhases, startTs, endTs, user
         opsCount++;
       }
     } else if (ev.type === 'result') {
-      // result.usage carries this turn's token cost (cache_read excluded —
-      // it's cheap rehydration, not billed against the working set).
-      const u = ev.usage || {};
-      tokensTotal += (u.input_tokens || 0)
-        + (u.cache_creation_input_tokens || 0)
-        + (u.output_tokens || 0);
+      // result.usage carries this turn's token cost. All four components
+      // (input, cache_creation, output, cache_read) are accumulated so the
+      // panel can show the breakdown on hover.
+      tokensBreakdown = addBreakdown(tokensBreakdown, breakdownFromUsage(ev.usage));
     }
   }
   const wallDurationMs = Math.max(0, totalMs - agentCoverageMs);
+  const tokensTotal = tokensBreakdown.input + tokensBreakdown.cacheCreate + tokensBreakdown.output;
   return {
     phaseId: 'orchestrator', kind: 'orchestrator', agentType: 'orchestrator',
     description: 'Orchestrator', teamName: null,
@@ -155,7 +158,8 @@ export function buildOrchestratorPhase(events, agentPhases, startTs, endTs, user
     durationMs: Math.max(0, wallDurationMs - userWaitMs),
     wallDurationMs,
     userWaitMs,
-    opsCount, tokensTotal, errorsCount: 0, retriesCount: 0, children: [],
+    opsCount, tokensTotal, tokensBreakdown,
+    errorsCount: 0, retriesCount: 0, children: [],
   };
 }
 
@@ -212,6 +216,133 @@ export function computePhaseWorkMs(phase) {
     prevEndMs = startMs + t.durationMs;
   }
   return active;
+}
+
+// Walk the main event stream to build a per-phase token breakdown for the
+// orchestrator AND every `local_agent` phase (planner, simple-developer).
+// Their assistant messages stream into the orchestrator's log:
+//   - orchestrator-emitted messages have parent_tool_use_id == null
+//   - local_agent subagent messages have parent_tool_use_id == the Agent
+//     tool_use that dispatched them (matches the phase's `_toolUseId`)
+//
+// `in_process_teammate` phases are SKIPPED here — their messages live only
+// in `~/.claude/projects/.../subagents/*.jsonl` and are populated by
+// `enrichSubagentChildren`. Touching them here would zero out work already
+// done. Computes per-model breakdown too so each row can compute its own
+// approximate cost via the rate table (same approach the subagent enrichment
+// already uses for COMPLEX team members).
+export function accumulatePerPhaseTokens(events, phases) {
+  const orch = phases.find((p) => p.kind === 'orchestrator');
+  const phaseByToolUseId = new Map();
+  for (const p of phases) {
+    if (p.kind !== 'agent' || p.taskType === 'in_process_teammate') continue;
+    if (p._toolUseId) phaseByToolUseId.set(p._toolUseId, p);
+  }
+
+  // Reset what we're about to recompute so retries are idempotent and a
+  // possibly stale orchestrator total (from buildOrchestratorPhase) is
+  // replaced by the more granular per-message sum.
+  const targets = [orch, ...phaseByToolUseId.values()].filter(Boolean);
+  for (const p of targets) {
+    p.tokensBreakdown = emptyBreakdown();
+    p._tokensByModelMap = new Map();
+  }
+
+  // Dedup per phase by message.id — each tool_use generates two assistant
+  // events (decide + stream) sharing the same id; both can carry partial
+  // usage and would double-count if summed.
+  const seenByPhase = new Map();
+
+  for (const rec of events) {
+    if (rec.type !== 'debug_raw' || rec.event?.type !== 'assistant') continue;
+    const ev = rec.event;
+    const u = ev.message?.usage;
+    if (!u) continue;
+    let owner;
+    if (ev.parent_tool_use_id != null) {
+      owner = phaseByToolUseId.get(ev.parent_tool_use_id);
+      if (!owner) continue;
+    } else {
+      owner = orch;
+    }
+    if (!owner) continue;
+    const msgId = ev.message?.id;
+    let seen = seenByPhase.get(owner.phaseId);
+    if (!seen) { seen = new Set(); seenByPhase.set(owner.phaseId, seen); }
+    if (msgId && seen.has(msgId)) continue;
+    if (msgId) seen.add(msgId);
+    const b = breakdownFromUsage(u);
+    owner.tokensBreakdown = addBreakdown(owner.tokensBreakdown, b);
+    const model = ev.message?.model;
+    if (model) {
+      const prev = owner._tokensByModelMap.get(model) || emptyBreakdown();
+      owner._tokensByModelMap.set(model, addBreakdown(prev, b));
+    }
+  }
+
+  // Materialise per-phase costUsd and tokensByModel from the per-model maps.
+  for (const p of targets) {
+    let cost = 0;
+    const byModel = [];
+    for (const [model, bd] of p._tokensByModelMap) {
+      const c = costFromBreakdown(model, bd);
+      cost += c;
+      byModel.push({ model, breakdown: bd, costUsd: c });
+    }
+    byModel.sort((a, b) => b.costUsd - a.costUsd);
+    p.costUsd = cost;
+    p.tokensByModel = byModel;
+    // Refresh the legacy headline.
+    const bk = p.tokensBreakdown;
+    p.tokensTotal = bk.input + bk.cacheCreate + bk.output;
+    delete p._tokensByModelMap;
+  }
+}
+
+// Reconcile per-phase costs with the SDK's authoritative per-model total.
+//
+// Per-phase costs are derived locally from a rate table (see MODEL_RATES in
+// io.js) applied to each phase's token breakdown. The SDK's
+// `modelUsage[model].costUSD` is the source of truth at the SPAWN/MODEL
+// level. Our rate table tends to over- or under-shoot Claude Code's actual
+// billed prices because the published Anthropic rates don't always match
+// what the CLI is billed (subscription / batch tiers).
+//
+// This pass keeps the RELATIVE split between phases intact (it's based on
+// real per-message usage) but SCALES each phase's per-model cost so the sum
+// over all phases of model M equals the SDK total for model M. After this
+// pass, sum(phase.costUsd for phase) === summary.costUsd (modulo phases for
+// models that don't appear in summary.tokensByModel, which we leave alone).
+export function calibratePhaseCostsToSdk(phases, sdkTokensByModel) {
+  if (!Array.isArray(sdkTokensByModel) || sdkTokensByModel.length === 0) return;
+  const sdkCostByModel = new Map(sdkTokensByModel.map((r) => [r.model, r.costUsd || 0]));
+
+  // Estimated cost per model across all phases (rate table).
+  const estByModel = new Map();
+  for (const p of phases) {
+    for (const r of p.tokensByModel || []) {
+      estByModel.set(r.model, (estByModel.get(r.model) || 0) + (r.costUsd || 0));
+    }
+  }
+
+  // Correction factor per model. Skip when the rate-table sum is zero
+  // (nothing to scale) or the SDK reports no cost for that model.
+  const factorByModel = new Map();
+  for (const [model, est] of estByModel) {
+    const sdk = sdkCostByModel.get(model);
+    if (sdk != null && est > 0) factorByModel.set(model, sdk / est);
+  }
+
+  for (const p of phases) {
+    if (!p.tokensByModel || p.tokensByModel.length === 0) continue;
+    let newTotal = 0;
+    for (const r of p.tokensByModel) {
+      const f = factorByModel.get(r.model);
+      if (f != null) r.costUsd = (r.costUsd || 0) * f;
+      newTotal += r.costUsd || 0;
+    }
+    p.costUsd = newTotal;
+  }
 }
 
 export function buildPhaseOwnerMap(events, agentPhases) {
