@@ -1,5 +1,6 @@
 import {
   msBetween, mergeIntervals, emptyBreakdown, addBreakdown, breakdownFromUsage,
+  costFromBreakdown,
 } from './io.js';
 import { extractToolUsesFromAssistant, isAgentTaskStart } from './events.js';
 
@@ -215,6 +216,87 @@ export function computePhaseWorkMs(phase) {
     prevEndMs = startMs + t.durationMs;
   }
   return active;
+}
+
+// Walk the main event stream to build a per-phase token breakdown for the
+// orchestrator AND every `local_agent` phase (planner, simple-developer).
+// Their assistant messages stream into the orchestrator's log:
+//   - orchestrator-emitted messages have parent_tool_use_id == null
+//   - local_agent subagent messages have parent_tool_use_id == the Agent
+//     tool_use that dispatched them (matches the phase's `_toolUseId`)
+//
+// `in_process_teammate` phases are SKIPPED here — their messages live only
+// in `~/.claude/projects/.../subagents/*.jsonl` and are populated by
+// `enrichSubagentChildren`. Touching them here would zero out work already
+// done. Computes per-model breakdown too so each row can compute its own
+// approximate cost via the rate table (same approach the subagent enrichment
+// already uses for COMPLEX team members).
+export function accumulatePerPhaseTokens(events, phases) {
+  const orch = phases.find((p) => p.kind === 'orchestrator');
+  const phaseByToolUseId = new Map();
+  for (const p of phases) {
+    if (p.kind !== 'agent' || p.taskType === 'in_process_teammate') continue;
+    if (p._toolUseId) phaseByToolUseId.set(p._toolUseId, p);
+  }
+
+  // Reset what we're about to recompute so retries are idempotent and a
+  // possibly stale orchestrator total (from buildOrchestratorPhase) is
+  // replaced by the more granular per-message sum.
+  const targets = [orch, ...phaseByToolUseId.values()].filter(Boolean);
+  for (const p of targets) {
+    p.tokensBreakdown = emptyBreakdown();
+    p._tokensByModelMap = new Map();
+  }
+
+  // Dedup per phase by message.id — each tool_use generates two assistant
+  // events (decide + stream) sharing the same id; both can carry partial
+  // usage and would double-count if summed.
+  const seenByPhase = new Map();
+
+  for (const rec of events) {
+    if (rec.type !== 'debug_raw' || rec.event?.type !== 'assistant') continue;
+    const ev = rec.event;
+    const u = ev.message?.usage;
+    if (!u) continue;
+    let owner;
+    if (ev.parent_tool_use_id != null) {
+      owner = phaseByToolUseId.get(ev.parent_tool_use_id);
+      if (!owner) continue;
+    } else {
+      owner = orch;
+    }
+    if (!owner) continue;
+    const msgId = ev.message?.id;
+    let seen = seenByPhase.get(owner.phaseId);
+    if (!seen) { seen = new Set(); seenByPhase.set(owner.phaseId, seen); }
+    if (msgId && seen.has(msgId)) continue;
+    if (msgId) seen.add(msgId);
+    const b = breakdownFromUsage(u);
+    owner.tokensBreakdown = addBreakdown(owner.tokensBreakdown, b);
+    const model = ev.message?.model;
+    if (model) {
+      const prev = owner._tokensByModelMap.get(model) || emptyBreakdown();
+      owner._tokensByModelMap.set(model, addBreakdown(prev, b));
+    }
+  }
+
+  // Materialise per-phase costUsd and tokensByModel from the per-model maps.
+  for (const p of targets) {
+    let cost = 0;
+    const byModel = [];
+    for (const [model, bd] of p._tokensByModelMap) {
+      const c = costFromBreakdown(model, bd);
+      cost += c;
+      byModel.push({ model, breakdown: bd, costUsd: c });
+    }
+    byModel.sort((a, b) => b.costUsd - a.costUsd);
+    p.costUsd = cost;
+    p.tokensByModel = byModel;
+    // Refresh the legacy headline.
+    const bk = p.tokensBreakdown;
+    p.tokensTotal = bk.input + bk.cacheCreate + bk.output;
+    delete p._tokensByModelMap;
+  }
 }
 
 export function buildPhaseOwnerMap(events, agentPhases) {

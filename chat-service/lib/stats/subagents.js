@@ -149,6 +149,8 @@ async function appendSubagentToolUses(file, phase, toolCounts, allToolCalls) {
   phase.tokensTotal = 0;
   phase.opsCount = 0;
   phase.tokensBreakdown = emptyBreakdown();
+  phase.costUsd = 0;
+  const tokensByModelMap = new Map(); // model → breakdown
 
   // Per-message dedup for tokens: each tool_use generates two assistant events
   // sharing the same `message.id` — once we decide to use a tool, then again
@@ -173,6 +175,10 @@ async function appendSubagentToolUses(file, phase, toolCounts, allToolCalls) {
       // costUsd: include cache_read (billed at a lower rate but still real cost).
       if (e.message.model) {
         phase.costUsd = (phase.costUsd || 0) + tokensToUsd(e.message.model, u);
+        // Also keep a per-model breakdown so the cost badge tooltip can show
+        // the same compact table as the global KPI does.
+        const prev = tokensByModelMap.get(e.message.model) || emptyBreakdown();
+        tokensByModelMap.set(e.message.model, addBreakdown(prev, b));
       }
     }
 
@@ -209,6 +215,16 @@ async function appendSubagentToolUses(file, phase, toolCounts, allToolCalls) {
       }
     }
   }
+
+  // Materialise the per-model rows used by the cost-badge tooltip.
+  phase.tokensByModel = [...tokensByModelMap].map(([model, breakdown]) => ({
+    model, breakdown, costUsd: tokensToUsd(model, {
+      input_tokens: breakdown.input,
+      cache_creation_input_tokens: breakdown.cacheCreate,
+      output_tokens: breakdown.output,
+      cache_read_input_tokens: breakdown.cacheRead,
+    }),
+  })).sort((a, b) => b.costUsd - a.costUsd);
 
   // If the phase never received a task_notification (endTs still null), derive
   // timing from the subagent transcript's first/last event timestamps. This is

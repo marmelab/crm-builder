@@ -14,7 +14,7 @@ import { readJsonl, msBetween, computeSummary } from './stats/io.js';
 import { extractTeams } from './stats/teams.js';
 import {
   extractPhases, buildOrchestratorPhase, buildTimeBreakdown, computePhaseWorkMs,
-  computeUserWaitMs,
+  computeUserWaitMs, accumulatePerPhaseTokens,
 } from './stats/phases.js';
 import { populateChildrenAndCounts } from './stats/children.js';
 import { readHooksLog, aggregateHooks, assignHookExecsToPhases } from './stats/hooks.js';
@@ -80,6 +80,14 @@ export async function aggregateSession({ sessionLogPath, hooksLogPath, sessionId
   const userWaitMs = computeUserWaitMs(events);
   const orchestrator = buildOrchestratorPhase(events, agentPhases, startTs, endTs, userWaitMs);
   const phases = [orchestrator, ...agentPhases].sort((a, b) => a.startTs.localeCompare(b.startTs));
+
+  // Fill in token breakdown + cost for orchestrator and local_agent phases by
+  // walking each assistant message's `usage` in the main stream. Without this,
+  // planner/simple-developer phases only have `total_tokens` from
+  // task_notification (no per-component split) and no cost at all.
+  // `in_process_teammate` phases are left alone — their data comes from
+  // enrichSubagentChildren which reads the per-subagent JSONL files.
+  accumulatePerPhaseTokens(events, phases);
 
   // Build phase children, tool counts, and leaderboards.
   // Must run before workMs/timeBreakdown so children are populated.

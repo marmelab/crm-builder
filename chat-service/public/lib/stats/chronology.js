@@ -1,4 +1,6 @@
-import { el, formatDuration, formatTokens, tokenBreakdownText } from '../dom.js';
+import {
+  el, formatDuration, formatTokens, tokenBreakdownText, tokensByModelText,
+} from '../dom.js';
 
 export function relLabelFactory(baseTs) {
   const base = baseTs ? new Date(baseTs).getTime() : 0;
@@ -80,53 +82,95 @@ function renderPhaseRow(phase, relLabel) {
     ? `~${formatDuration(activeMs)}`
     : formatDuration(activeMs);
 
-  let orchHint = '';
-  if (phase.kind === 'orchestrator' && phase.userWaitMs > 0) {
-    orchHint = ` · excl. ${formatDuration(phase.userWaitMs)} user wait`;
-  }
-  // Tokens column: visible label is the grand total. Hover reveals the
-  // right-aligned 4-way breakdown when per-component data is available.
-  // local_agent phases (planner, simple-developer) only get
-  // `task_notification.usage.total_tokens` — no breakdown — so we synthesize
-  // a single-line tooltip showing the totals (active/wall/ops/tokens) instead
-  // of nothing. Without that fallback the headline read "0 tok" and there was
-  // no hover info at all.
+  // Per-phase numeric columns (cost / active / ops / tokens) are individual
+  // grid cells with fixed min-widths (see chat.css). That gives vertical
+  // alignment across rows: every phase row's cost lines up at the same X,
+  // active values right-align in their column, etc. Phases with no available
+  // figure render an em-dash so the slot stays reserved.
+  //
+  // Each cell hosts its OWN tooltip showing the drill-down for that metric.
+  // No cross-talk: cost tooltip = per-model table, tokens tooltip = 4-way
+  // breakdown, active tooltip = wall + user-wait. Avoids the redundancy of
+  // duplicating timing/cost headers across multiple tooltips.
   const bk = phase.tokensBreakdown;
   const bkSum = bk
     ? (bk.input || 0) + (bk.cacheCreate || 0) + (bk.output || 0) + (bk.cacheRead || 0)
     : 0;
   const hasBreakdown = bkSum > 0;
   const grandTokens = hasBreakdown ? bkSum : (phase.tokensTotal || 0);
-  const statsHead = `${activeFmt} · ${phase.opsCount} ops · ${formatTokens(grandTokens)} tok`;
-  // Use the CSS tooltip exclusively — leaving `title=` set would make the
-  // browser render a SECOND native tooltip on top of the styled one.
-  // Phase row is right-aligned, so anchor the tooltip to the right edge to
-  // extend leftward into the visible row.
-  const stats = el('span', { className: 'phase-stats tk-host' }, statsHead);
-  const tip = el('span', { className: 'tk-tip tk-tip-anchor-right' });
-  const fmtN = (n) => Number(n || 0).toLocaleString('en-US');
-  const headerLines = [
-    `active  ${activeFmt}`,
-    `wall    ${formatDuration(phase.wallDurationMs ?? phase.durationMs ?? 0)}`,
-    `ops     ${phase.opsCount}${orchHint ? '  (' + orchHint.replace(/^\s*·\s*/, '') + ')' : ''}`,
-  ];
-  const body = hasBreakdown
-    ? tokenBreakdownText(bk, { totalLabel: 'total' })
-    : `tokens  ${fmtN(grandTokens)}`;
-  tip.textContent = headerLines.join('\n') + '\n\n' + body;
-  stats.appendChild(tip);
 
-  const costBadge = phase.costUsd != null
-    ? el('span', { className: 'phase-cost' }, `$${phase.costUsd.toFixed(3)}`)
-    : null;
+  // Cost cell: shows $X.XXX. When per-model data is available, the cell hosts
+  // a tooltip with the same compact per-model table the global KPI uses.
+  let costBadge;
+  if (phase.costUsd != null && phase.tokensByModel && phase.tokensByModel.length > 0) {
+    costBadge = el('span', { className: 'phase-cost tk-host' }, `$${phase.costUsd.toFixed(3)}`);
+    const ctip = el('span', { className: 'tk-tip tk-tip-anchor-right' });
+    ctip.textContent = tokensByModelText(phase.tokensByModel, phase.costUsd);
+    costBadge.appendChild(ctip);
+  } else {
+    costBadge = el('span', { className: 'phase-cost' },
+      phase.costUsd != null ? `$${phase.costUsd.toFixed(3)}` : '—');
+  }
+
+  // Active cell: shows active time. Tooltip drills down to wall-clock + any
+  // user-wait carve-out (orchestrator only). Skipped if there's nothing
+  // extra to show (active == wall and no user wait).
+  const wallMs = phase.wallDurationMs ?? phase.durationMs ?? 0;
+  const userWaitMs = phase.userWaitMs || 0;
+  const activeMsNum = phase.kind === 'orchestrator'
+    ? (phase.durationMs ?? 0)
+    : (phase.workMs || phase.durationMs || 0);
+  const showActiveTip = wallMs !== activeMsNum || userWaitMs > 0;
+  let activeSpan;
+  if (showActiveTip) {
+    activeSpan = el('span', { className: 'phase-active tk-host' }, activeFmt);
+    const atip = el('span', { className: 'tk-tip tk-tip-anchor-right' });
+    const lines = [
+      `active  ${activeFmt}`,
+      `wall    ${formatDuration(wallMs)}`,
+    ];
+    if (userWaitMs > 0) lines.push(`user-wait  ${formatDuration(userWaitMs)}`);
+    atip.textContent = lines.join('\n');
+    activeSpan.appendChild(atip);
+  } else {
+    activeSpan = el('span', { className: 'phase-active' }, activeFmt);
+  }
+
+  const opsSpan = el('span', { className: 'phase-ops' }, `${phase.opsCount} ops`);
+
+  // Tokens cell: 4-way breakdown only. No timing, no cost — those have their
+  // own dedicated cells. Skipped when there's no per-component split (e.g.
+  // sessions without the per-message accumulator) — the cell just shows the
+  // total without a tooltip.
+  let tokensSpan;
+  if (hasBreakdown) {
+    tokensSpan = el('span', { className: 'phase-tokens tk-host' },
+      grandTokens > 0 ? `${formatTokens(grandTokens)} tok` : '—',
+    );
+    const tip = el('span', { className: 'tk-tip tk-tip-anchor-right' });
+    tip.textContent = tokenBreakdownText(bk, { totalLabel: 'total' });
+    tokensSpan.appendChild(tip);
+  } else {
+    tokensSpan = el('span', { className: 'phase-tokens' },
+      grandTokens > 0 ? `${formatTokens(grandTokens)} tok` : '—',
+    );
+  }
+
+  // Optional badges grouped into a single trailing grid cell so the numeric
+  // columns to the left stay aligned regardless of which badges exist.
+  const badges = el('span', { className: 'phase-badges' },
+    bands, warn, retry, taskBadge,
+  );
 
   det.appendChild(el('summary', null,
     el('span', { className: 'phase-time' }, relLabel(phase.startTs)),
     el('span', { className: 'phase-icon' }, dot),
     el('span', { className: 'phase-name' }, phase.agentType || phase.kind),
     costBadge,
-    stats,
-    bands, warn, retry, taskBadge,
+    activeSpan,
+    opsSpan,
+    tokensSpan,
+    badges,
   ));
 
   // Skipped hooks (no actual run — e.g. SHA cache hit, or no changes in the
