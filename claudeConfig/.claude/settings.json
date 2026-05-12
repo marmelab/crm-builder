@@ -1,10 +1,10 @@
 {
     "enabledPlugins": {
-        "context7@claude-plugins-official": true,
-        "playwright@claude-plugins-official": true,
-        "security-guidance@claude-plugins-official": true,
-        "supabase@claude-plugins-official": true,
-        "typescript-lsp@claude-plugins-official": true,
+        "context7@claude-plugins-official": false,
+        "playwright@claude-plugins-official": false,
+        "security-guidance@claude-plugins-official": false,
+        "supabase@claude-plugins-official": false,
+        "typescript-lsp@claude-plugins-official": false,
         "code-review@claude-plugins-official": false,
         "commit-commands@claude-plugins-official": false,
         "frontend-design@claude-plugins-official": false,

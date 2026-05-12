@@ -135,6 +135,14 @@ See `.claude/rules/validation-commands.md` for the full list and rationale. Shor
 
 Each Bash counts against a 30/subagent budget. Prefer Glob/Grep/Read for exploration.
 
+## Tool call efficiency — HARD RULE
+
+Context grows with every turn — fewer turns means lower cost and faster execution.
+
+- **Parallel reads**: when reading multiple independent files (no file depends on another's content to decide what to read next), issue all Read calls in the same response — up to 4 at once. Scan `files_to_modify` upfront and queue all reads together rather than deciding file by file.
+- **Batched edits**: when applying independent changes across files or locations, issue 2–3 Edit calls per turn. Only serialise when edit N genuinely requires the result of edit N-1.
+- **Batched git diagnostics**: combine into one Bash call — e.g. `git status && git log --oneline -3` — rather than separate turns per command.
+
 ---
 
 ## Pre-plan checklist
@@ -151,7 +159,7 @@ From `files_to_modify`, build a reuse registry:
 - Existing TypeScript types in `src/types/`
 - Established patterns
 
-Grep broadly only if `files_to_modify` is missing or clearly incomplete.
+**Exploration depth — stay scope-bound**: read the files listed in `files_to_modify` plus their direct imports if a specific pattern is unclear. Do not expand to the full dependency graph by default. If you hit an unknown pattern that blocks you, read one additional file to resolve it — then stop. Grep broadly only if `files_to_modify` is missing or clearly incomplete.
 
 ## Plan format
 
