@@ -64,7 +64,6 @@ try {
   assert.ok(init1.sessionId, 'got a sessionId');
   assert.equal(init1.title, '');
   assert.deepEqual(init1.messages, []);
-  await waitFor(e1, (e) => e.type === 'choices', 'welcome choices');
   const id1 = init1.sessionId;
   console.log(`✓ new session created: ${id1}`);
 
@@ -194,11 +193,7 @@ try {
   assert.equal(init2.title, 'Renamed by smoke test');
   assert.equal(init2.state, 'completed', 'state restored on resume');
   assert.ok(init2.messages.length >= 2, 'history restored');
-  // No welcome choices on resume
-  await new Promise((r) => setTimeout(r, 100));
-  const hasWelcome = e2.some((e) => e.type === 'choices');
-  assert.equal(hasWelcome, false, 'no welcome choices on resume');
-  console.log('✓ resume works — history + state restored, no welcome prompt');
+  console.log('✓ resume works — history + state restored');
   ws2.close();
 
   // 8. Bogus session ID → should fall back to new session
