@@ -5,11 +5,18 @@
  width="526.000000pt" height="928.000000pt" viewBox="0 0 526.000000 928.000000"
  preserveAspectRatio="xMidYMid meet">
 
+<defs>
+<linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+  <stop offset="0%" stop-color="#3b82f6"/>
+  <stop offset="100%" stop-color="#8b5cf6"/>
+</linearGradient>
+</defs>
+
 <g transform="translate(0.000000,928.000000) scale(0.100000,-0.100000)"
-fill="#ffffff" stroke="none">
+fill="url(#g)" stroke="none">
 <path d="M410 8530 l0 -740 2220 0 2220 0 0 740 0 740 -2220 0 -2220 0 0 -740z
 m4070 0 l0 -370 -1850 0 -1850 0 0 370 0 370 1850 0 1850 0 0 -370z"/>
-<path d="M410 7235 l0 -185 -185 0 -185 0 0 -740 0 -740 185 0 185 0 0 -185 0
+<path stroke="url(#g)" stroke-width="200" stroke-linejoin="round" d="M410 7235 l0 -185 -185 0 -185 0 0 -740 0 -740 185 0 185 0 0 -185 0
 -185 185 0 185 0 0 -185 0 -185 185 0 185 0 0 -1295 0 -1295 -185 0 -185 0 0
 -185 0 -185 -185 0 -185 0 0 -185 0 -185 -185 0 -185 0 0 -555 0 -555 185 0
 185 0 0 -185 0 -185 2220 0 2220 0 0 185 0 185 185 0 185 0 0 555 0 555 -185
