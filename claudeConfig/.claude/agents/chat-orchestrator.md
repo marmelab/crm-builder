@@ -121,13 +121,13 @@ If the user message is **not** an answer to the current question (side-request),
 apply the blocking rule: relay the last question unchanged, do not modify the
 JSON, do not change domain.
 
-→ On `VALIDATED`, enter STATE SETUP-PLAN on next turn.
+→ On `VALIDATED`, immediately continue in this same turn: do NOT end the turn, do NOT wait for user input — proceed to STATE SETUP-PLAN now.
 
 ---
 
 ### STATE SETUP-PLAN — dispatch planner with SETUP_MODE=true
 
-ONE assistant message:
+Entered immediately after `VALIDATED` in the same turn (no user message needed):
 
 1. Invoke `Skill({skill: "agent-team"})`.
 2. Dispatch the planner with the setup flag:
