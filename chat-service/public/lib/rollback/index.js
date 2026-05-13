@@ -21,18 +21,25 @@ export function initRollback({ getSessionId, appendMessage }) {
       const data = await res.json();
       if (!data.commits?.length) {
         await openConfirmModal({
-          title: 'Nothing to roll back',
-          body: 'No changes from this session are still active.',
+          title: 'Nothing to undo',
+          body: 'There are no changes from this session left to undo.',
           confirmLabel: 'OK',
           hideCancel: true,
         });
         return;
       }
 
+      // Pin the displayed session title — same reasoning as `sessionId` above:
+      // the user might rename the chat while the confirm modal is open, but
+      // they decided to undo the session as they see it now.
+      const sessionTitle = document.getElementById('chat-title')?.textContent?.trim();
+      const body = sessionTitle
+        ? `Every change made in the session "${sessionTitle}" will be undone. Other sessions stay untouched.`
+        : 'Every change made in this session will be undone. Other sessions stay untouched.';
       const ok = await openConfirmModal({
-        title: 'Rollback changes ?',
-        body: 'This will revert every change made in this session.',
-        confirmLabel: 'Rollback',
+        title: 'Undo this session?',
+        body,
+        confirmLabel: 'Undo',
         cancelLabel: 'Cancel',
       });
       if (!ok) return;
@@ -42,20 +49,25 @@ export function initRollback({ getSessionId, appendMessage }) {
         method: 'POST',
       });
       const result = await r.json().catch(() => ({}));
-      // The server broadcasts the assistant message via WS for both success
-      // (200) and conflict (409) — those don't need a local render. Only
-      // unexpected failures (500, parse error, etc.) reach the client without
-      // a broadcast, so we render those locally.
+      // The server broadcasts the assistant message via WS for success (200),
+      // conflict-handed-off-to-agent (202), and the legacy conflict-aborted
+      // (409). Only unexpected failures (500, parse error, etc.) reach the
+      // client without a broadcast, so we render those locally.
       const stillActive = getSessionId() === sessionId;
       const serverBroadcasted = r.ok || r.status === 409;
       if (!serverBroadcasted && stillActive) {
-        const text = result.chatMessage || `Rollback failed: ${result.message || `HTTP ${r.status}`}`;
+        const text = result.chatMessage
+          || "We couldn't undo your changes right now. Please try again in a moment.";
         appendMessage('assistant', text, { subtype: 'rollback' });
       }
     } catch (err) {
       console.error('[rollback] error', err);
       if (getSessionId() === sessionId) {
-        appendMessage('assistant', `Rollback error: ${err.message}`, { subtype: 'rollback' });
+        appendMessage(
+          'assistant',
+          "We couldn't undo your changes right now. Please try again in a moment.",
+          { subtype: 'rollback' },
+        );
       }
     } finally {
       btn.disabled = false;

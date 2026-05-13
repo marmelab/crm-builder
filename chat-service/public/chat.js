@@ -419,7 +419,7 @@ function appendMessage(role, content, seqOrOpts = ++seqCounter) {
   if (subtype === 'rollback') {
     const header = document.createElement('div');
     header.className = 'msg-rollback-header';
-    header.innerHTML = `${ROLLBACK_ICON_SVG}<span>Rollback</span>`;
+    header.innerHTML = `${ROLLBACK_ICON_SVG}<span>Undo changes</span>`;
     const body = document.createElement('div');
     body.className = 'msg-rollback-body';
     body.textContent = content;
