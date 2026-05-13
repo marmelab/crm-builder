@@ -3,9 +3,9 @@ import { extname, join } from 'node:path';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { CWD, LOG_DIR, ALLOWED_STATES, MIME_TYPES, UUID_RE } from './config.js';
-import { listSessions, getSession, patchSession } from './session-store.js';
+import { listSessions, getSession, patchSession, deleteSession } from './session-store.js';
 import { runtimes } from './runtime.js';
-import { broadcast } from './ws-bus.js';
+import { broadcast, sendToWs } from './ws-bus.js';
 
 const execFileAsync = promisify(execFile);
 const GIT_BUF = { maxBuffer: 4 * 1024 * 1024 };
@@ -309,6 +309,35 @@ export function createRequestHandler({ publicDir }) {
         if (!d) { res.writeHead(404); res.end('Not found'); return; }
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(d));
+        return;
+      }
+      if (req.method === 'DELETE') {
+        if (!UUID_RE.test(id)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'invalid_sessionId' }));
+          return;
+        }
+        const runtime = runtimes.get(id);
+        if (runtime?.busy) {
+          res.writeHead(409, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'session_busy' }));
+          return;
+        }
+        if (runtime) {
+          // Notify clients without going through broadcast() — broadcast logs
+          // the event to the session log, which we're about to delete.
+          for (const client of runtime.clients) {
+            sendToWs(client, { type: 'session_deleted', sessionId: id });
+            try { client.close(); } catch {}
+          }
+          // Await the log stream's flush before rm — close() resolves once
+          // logStream.end() drains, so we don't race writes against deletion.
+          try { await runtime.session?.close(); } catch {}
+          runtimes.delete(id);
+        }
+        await deleteSession(id);
+        res.writeHead(204);
+        res.end();
         return;
       }
       if (req.method === 'PATCH') {
