@@ -1,13 +1,32 @@
-<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#3b82f6"/>
-      <stop offset="100%" stop-color="#8b5cf6"/>
-    </linearGradient>
-  </defs>
-  <path d="M 51 23 A 22 22 0 1 1 38 13" fill="none"
-        stroke="url(#g)" stroke-width="6" stroke-linecap="round"/>
-  <circle cx="32" cy="34" r="5.5" fill="url(#g)"/>
-  <path d="M46 7 L47.7 13.3 L54 15 L47.7 16.7 L46 23 L44.3 16.7 L38 15 L44.3 13.3 Z"
-        fill="url(#g)"/>
+<?xml version="1.0" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 20010904//EN"
+ "http://www.w3.org/TR/2001/REC-SVG-20010904/DTD/svg10.dtd">
+<svg version="1.0" xmlns="http://www.w3.org/2000/svg"
+ width="526.000000pt" height="928.000000pt" viewBox="0 0 526.000000 928.000000"
+ preserveAspectRatio="xMidYMid meet">
+
+<defs>
+<linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+  <stop offset="0%" stop-color="#3b82f6"/>
+  <stop offset="100%" stop-color="#8b5cf6"/>
+</linearGradient>
+</defs>
+
+<g transform="translate(0.000000,928.000000) scale(0.100000,-0.100000)"
+fill="url(#g)" stroke="none">
+<path d="M410 8530 l0 -740 2220 0 2220 0 0 740 0 740 -2220 0 -2220 0 0 -740z
+m4070 0 l0 -370 -1850 0 -1850 0 0 370 0 370 1850 0 1850 0 0 -370z"/>
+<path stroke="url(#g)" stroke-width="200" stroke-linejoin="round" d="M410 7235 l0 -185 -185 0 -185 0 0 -740 0 -740 185 0 185 0 0 -185 0
+-185 185 0 185 0 0 -185 0 -185 185 0 185 0 0 -1295 0 -1295 -185 0 -185 0 0
+-185 0 -185 -185 0 -185 0 0 -185 0 -185 -185 0 -185 0 0 -555 0 -555 185 0
+185 0 0 -185 0 -185 2220 0 2220 0 0 185 0 185 185 0 185 0 0 555 0 555 -185
+0 -185 0 0 185 0 185 -185 0 -185 0 0 185 0 185 -185 0 -185 0 0 1295 0 1295
+185 0 185 0 0 185 0 185 185 0 185 0 0 185 0 185 185 0 185 0 0 740 0 740
+-185 0 -185 0 0 185 0 185 -2220 0 -2220 0 0 -185z m4440 -925 l0 -740 -185 0
+-185 0 0 -185 0 -185 -185 0 -185 0 0 -185 0 -185 -185 0 -185 0 0 -1295 0
+-1295 185 0 185 0 0 -185 0 -185 185 0 185 0 0 -185 0 -185 185 0 185 0 0
+-555 0 -555 -2220 0 -2220 0 0 555 0 555 185 0 185 0 0 185 0 185 185 0 185 0
+0 185 0 185 185 0 185 0 0 1295 0 1295 -185 0 -185 0 0 185 0 185 -185 0 -185
+0 0 185 0 185 -185 0 -185 0 0 740 0 740 2220 0 2220 0 0 -740z"/>
+</g>
 </svg>
