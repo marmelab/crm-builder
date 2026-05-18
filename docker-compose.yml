@@ -27,7 +27,6 @@ services:
       - MODE=demo
     ports:
       - "5173:5173" # CRM
-      - "7681:7681" # Claude terminal
       - "8080:8080" # Chat assistant
     volumes:
       - crm-app:/app

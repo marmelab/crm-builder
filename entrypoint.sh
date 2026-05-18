@@ -21,19 +21,30 @@ echo ""
 
 # ── Auth check — API key or OAuth token ───────────────────────
 CLAUDE_DIR="/home/developer/.claude"
+
+# Ensure .claude is writable by developer regardless of how the volume mounted —
+# `make claude` writes credentials here as the developer user on first OAuth.
+mkdir -p "${CLAUDE_DIR}"
+chown -R developer:developer "${CLAUDE_DIR}" 2>/dev/null || true
+
 if [ -n "${ANTHROPIC_API_KEY}" ]; then
   echo -e "${GREEN}✓  Auth: API key${NC}"
 elif [ -f "${CLAUDE_DIR}/.credentials.json" ] || [ -f "${CLAUDE_DIR}/credentials.json" ]; then
-  echo -e "${GREEN}✓  Auth: OAuth token (claude login)${NC}"
+  echo -e "${GREEN}✓  Auth: OAuth token${NC}"
 else
-  echo -e "${YELLOW}⚠️   No authentication found — starting terminal for claude login${NC}"
+  echo -e "${YELLOW}⚠️   No authentication found${NC}"
   echo ""
-  echo -e "${BOLD}  → Open http://localhost:7681 in your browser${NC}"
-  echo -e "  → Run: ${YELLOW}claude login${NC}"
-  echo -e "  → Then restart this container (Ctrl+C, then docker compose up again)"
+  echo -e "${BOLD}  → From your host machine, run:${NC} ${YELLOW}make claude${NC}"
   echo ""
+  echo "Waiting for credentials..."
   export HOME=/home/developer
-  exec /usr/local/bin/ttyd --port 7681 --writable --interface 0.0.0.0 /usr/local/bin/ttyd-session.sh
+  # Re-chown each iteration: claude creates subdirs (projects/, statsig/, …)
+  # during OAuth that are otherwise blocked if any new root-owned path appears.
+  while [ ! -f "${CLAUDE_DIR}/.credentials.json" ] && [ ! -f "${CLAUDE_DIR}/credentials.json" ]; do
+    sleep 2
+    chown -R developer:developer "${CLAUDE_DIR}" 2>/dev/null || true
+  done
+  echo -e "${GREEN}✓  Credentials detected — continuing startup${NC}"
 fi
 
 # Always use the image's .claude config (volume may have stale copy)
@@ -297,14 +308,13 @@ fi
 echo ""
 echo -e "  ${BLUE}🌐  CRM              →  http://localhost:5173${NC}"
 if [ "$MODE" = "full" ]; then
-echo -e "  ${BLUE}🗄️   Supabase          →  http://localhost:54323${NC}"
+echo -e "  ${BLUE}🗄️   Supabase         →  http://localhost:54323${NC}"
 fi
-echo -e "  ${BLUE}💬  Chat assistant    →  http://localhost:8080${NC}"
-echo -e "  ${BLUE}🤖  Claude terminal   →  http://localhost:7681${NC}"
+echo -e "  ${BLUE}💬  Chat assistant   →  http://localhost:8080${NC}"
 echo ""
 echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${YELLOW}  Open http://localhost:7681 and type:                 ${NC}"
-echo -e "${YELLOW}  claude --dangerously-skip-permissions                ${NC}"
+echo -e "${YELLOW}  For an interactive Claude session, from your host:   ${NC}"
+echo -e "${YELLOW}  make claude                                          ${NC}"
 echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 
