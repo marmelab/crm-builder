@@ -6,7 +6,7 @@ import { WebSocketServer } from 'ws';
 import { PORT } from './lib/server/config.js';
 import { loadSystemPrompt, applySystemPrompt } from './lib/server/system-prompt.js';
 import { openSession } from './lib/server/session-store.js';
-import { createRequestHandler } from './lib/server/http-routes.js';
+import { createRequestHandler, switchMode } from './lib/server/http-routes.js';
 import { runtimes, wsToRuntime, runtimeForWs, createRuntime, safeSend } from './lib/server/runtime.js';
 import { sendToWs } from './lib/server/ws-bus.js';
 import { sendProgress } from './lib/server/ticket-progress.js';
@@ -32,6 +32,16 @@ wss.on('connection', async (ws, req) => {
   if (!session) {
     ws.close();
     return;
+  }
+
+  // A brand-new chat session always starts back on the FakeRest demo.
+  // Otherwise the iframe would still be wired to the previous session's
+  // real-data view, which is misleading and risky (writes hit Supabase).
+  // Existing/rejoined sessions keep whatever mode the runtime is in.
+  // Reuses the same helper the /api/mode POST handler runs, so the two
+  // code paths can never drift apart.
+  if (session.isNew && process.env.MODE === 'full') {
+    switchMode('demo');
   }
 
   let runtime = runtimes.get(session.id);

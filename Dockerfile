@@ -112,8 +112,10 @@ COPY app-variants/App.supabase.tsx /app-variants/App.supabase.tsx
 
 # ── Utility scripts ───────────────────────────────────────────
 COPY scripts/switch-mode.sh /usr/local/bin/switch-mode
+COPY scripts/apply-migrations.sh /usr/local/bin/apply-migrations
+COPY scripts/pending-deploys.sh /usr/local/bin/pending-deploys
 COPY scripts/ttyd-session.sh /usr/local/bin/ttyd-session.sh
-RUN chmod +x /usr/local/bin/switch-mode /usr/local/bin/ttyd-session.sh
+RUN chmod +x /usr/local/bin/switch-mode /usr/local/bin/apply-migrations /usr/local/bin/pending-deploys /usr/local/bin/ttyd-session.sh
 
 # ── Supervisor config ─────────────────────────────────────────
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf

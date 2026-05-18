@@ -340,29 +340,39 @@ async function handleGetMode(req, res) {
   res.end(JSON.stringify({ mode, supabaseReady }));
 }
 
-async function handleSetMode(req, res) {
-  let body;
-  try { body = await readJsonBody(req); } catch {
-    res.writeHead(400); res.end('Bad request'); return;
-  }
-  const { mode } = body;
-  if (mode !== 'demo' && mode !== 'full') {
-    res.writeHead(400, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'mode must be demo or full' }));
-    return;
-  }
+// Shared mode-switch helper: updates process.env.MODE, swaps App.tsx for the
+// matching variant (sync, so the iframe reload sees the right file), and
+// starts Supabase in the background when switching to full. Callers:
+//   - POST /api/mode (the chat-UI mode toggle button)
+//   - server.js, when a brand-new chat session opens while MODE=full
+//     (auto-reset to demo).
+// Returns true on success, false if the input mode is invalid.
+export function switchMode(mode) {
+  if (mode !== 'demo' && mode !== 'full') return false;
   process.env.MODE = mode;
-  // Copy App.tsx synchronously so the iframe reload gets the correct version immediately
   const variant = mode === 'full' ? 'App.supabase.tsx' : 'App.fakerest.tsx';
   try { copyFileSync(`/app-variants/${variant}`, '/app/src/App.tsx'); }
   catch (e) { console.warn('[mode-switch] App.tsx copy failed:', e.message); }
-  // Start Supabase in background (only needed for full; demo keeps Supabase warm)
   if (mode === 'full') {
     const child = spawn('/usr/local/bin/switch-mode', ['full'], {
       detached: true, stdio: 'ignore',
       env: { ...process.env, APP_DIR: '/app' },
     });
     child.unref();
+  }
+  return true;
+}
+
+async function handleSetMode(req, res) {
+  let body;
+  try { body = await readJsonBody(req); } catch {
+    res.writeHead(400); res.end('Bad request'); return;
+  }
+  const { mode } = body;
+  if (!switchMode(mode)) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'mode must be demo or full' }));
+    return;
   }
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ ok: true, mode }));

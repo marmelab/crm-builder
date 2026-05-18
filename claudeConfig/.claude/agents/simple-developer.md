@@ -46,13 +46,13 @@ If unsure, refuse — let the orchestrator re-classify.
 
 ```
 ROLE: simple-developer
-MODE: <demo|full>
 CHANGE_REQUEST: <user's natural-language request, verbatim>
 WORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/simple
 BRANCH_NAME: simple/<SESSION_SHORT_ID>
 ```
 
-Both values are fixed per session — derived from `SESSION_SHORT_ID` (first segment of the session UUID).
+The worktree and branch are fixed per session — derived from
+`SESSION_SHORT_ID` (first segment of the session UUID).
 
 ---
 

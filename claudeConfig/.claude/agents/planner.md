@@ -87,6 +87,7 @@ Rules:
   "parallel_safe": true,
   "branch_name": "feature/company-importance-type",
   "visual_customization": false,
+  "requires_supabase_migration": false,
   "status": "pending"
 }
 ```
@@ -99,7 +100,7 @@ Rules:
 - `package.json` / lockfiles (shared `node_modules` symlink)
 - `tsconfig.json` / `vite.config.ts` / build config
 - `.env` / `.env.*`
-- DB schema (full mode)
+- DB schema files in `supabase/migrations*/`
 - Global CSS / `tailwind.config`
 
 Normal feature tickets (type / component / config prop) → `parallel_safe: true`.
@@ -107,6 +108,14 @@ Normal feature tickets (type / component / config prop) → `parallel_safe: true
 **`branch_name`**: filesystem-safe, `feature/<short-kebab>` or `fix/<short-kebab>`. Used to create the worktree.
 
 **`visual_customization`**: set `true` when the ticket touches colors, theme, component styling, dark/light mode, or layout preferences. The developer loads `Skill({skill: "shadcn-customization"})` as its first action on such tickets.
+
+**`requires_supabase_migration`**: set `true` when the ticket adds, alters,
+or drops a database schema element — new entity, new column on an existing
+entity, dropped table, RLS policy change, index, trigger, etc. Set `false`
+for UI-only, TypeScript-only, fake-data-only, or cosmetic tickets. The
+developer reads this flag and produces the SQL file staged in
+`supabase/migrations-pending/` whenever it is true; the orchestrator
+promotes and applies it once the user agrees to deploy.
 
 ### Dependency rules
 
@@ -144,11 +153,11 @@ When `SETUP_MODE=true`:
   pipeline_stages, and user_roles defined by project-manager are your spec.
 - Produce **scaffolding tickets**, in this order of priority:
   - For each entity with `"type": "create"`: one ticket for the Supabase
-    migration (full mode only) + one ticket for the TypeScript types,
-    components and routes.
+    migration (`requires_supabase_migration: true`) + one ticket for the
+    TypeScript types, components and routes.
   - For each entity with `"type": "extend"`: one ticket adding the listed
     custom fields to the existing entity (types + form inputs + list/show
-    columns + Supabase migration in full mode).
+    columns + Supabase migration; `requires_supabase_migration: true`).
   - One ticket per integration the user requested.
   - One ticket for theme / language / dashboard preferences if non-default.
 - Use sensible `dependencies` — extend-tickets often depend on the base
@@ -161,8 +170,9 @@ When `SETUP_MODE=true`:
 
   What a cleanup ticket must do:
   - Remove the entity's routes, list/show/edit components, and navigation entry.
-  - Remove its TypeScript types and fake-data generators (demo mode) or drop
-    the Supabase table (full mode — separate migration ticket).
+  - Remove its TypeScript types and fake-data generators.
+  - Produce a separate migration ticket (`requires_supabase_migration: true`)
+    to drop the Supabase table, RLS, indexes, etc.
   - Remove any reference to the entity in other components (sidebar, dashboards,
     relation selectors).
   - For feature removals (pipeline, analytics, csv_import_export): remove the
@@ -184,16 +194,26 @@ Produce:
 
 ---
 
-## Mode rules
+## What every data-shaped ticket must produce
 
-`MODE=demo`:
-- App uses FakeRest (in-browser data, no DB).
-- NEVER create migration / schema / DB tickets.
-- Data changes = TypeScript types + fake data generators.
-- Ticket `type` is `feature` or `fix` only.
+The dev team always produces both runtime artefacts side-by-side, regardless
+of which data provider the iframe is currently using. Every data change
+produces:
+- TypeScript types + fake-data generators (what FakeRest serves the demo).
+- When the change is schema-shaped (new entity, new field on an existing
+  entity, dropped table, RLS, index, trigger, …) a SQL migration file
+  staged in `supabase/migrations-pending/` and the ticket flag
+  `requires_supabase_migration: true`. The staging folder is invisible
+  to Supabase CLI — the orchestrator promotes files to
+  `supabase/migrations/` and applies them only after the user explicitly
+  agrees to deploy.
 
-`MODE=full` (or unset):
-- Supabase available — migration tickets when schema changes.
+A schema-shaped change can either be one combined ticket (TS + fake data
++ migration) when the size is small, or split into two tickets (migration
++ UI/types) when the migration is non-trivial. Default to combined for
+field additions on existing entities, split for new entities.
+
+Ticket `type`: `feature` / `fix` / `migration`.
 
 ---
 

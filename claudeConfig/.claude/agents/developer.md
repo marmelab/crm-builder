@@ -103,15 +103,42 @@ Domain skills — load on demand with `Skill({skill: "..."})` when your task nee
 
 ## Environment
 
-Read `MODE` from `<mode>...</mode>` or `MODE=<value>` in caller's prompt.
+Always produce the runtime artefacts the project needs:
+- TypeScript types + fake-data generators (what the FakeRest demo serves).
+- A SQL migration when the ticket flag `requires_supabase_migration: true`
+  is set (see *Supabase-migration flag* below).
 
-`MODE=demo`:
-- App uses FakeRest (in-browser data, no DB).
-- NEVER create SQL migrations or run supabase commands.
-- Adding a field = update TypeScript type + fake data generator.
+Never run `supabase` CLI commands yourself. The orchestrator promotes and
+applies migrations after the user explicitly agrees.
 
-`MODE=full`:
-- Supabase running. Schema changes need a migration in `supabase/migrations/`.
+## Supabase-migration flag on the ticket
+
+The ticket's `requires_supabase_migration` field is set by the planner.
+Treat it as your contract:
+
+- `true` → write the SQL migration to
+  `supabase/migrations-pending/<YYYYMMDDHHMMSS>_<SESSION_SHORT_ID>_<TASK-XXX>_<short-slug>.sql`
+  inside your worktree, e.g.
+  `supabase/migrations-pending/20260518091200_46bc14c5_TASK-001_add_invoices.sql`.
+  `SESSION_SHORT_ID` is the first segment of your worktree path (derive
+  it from `WORKTREE_PATH`: `/app/worktrees/46bc14c5/TASK-001` →
+  `46bc14c5`). Use `date -u +%Y%m%d%H%M%S` for the timestamp; replace
+  dashes/spaces in the slug with underscores. The `SESSION_SHORT_ID` in
+  the name is what lets the deploy script scope your migration to this
+  chat session — without it, another session's refused migration could
+  be promoted by mistake. The `migrations-pending/` folder is the
+  staging area — Supabase CLI ignores it, so this file is NOT applied
+  yet. The orchestrator's post-dev deploy offer is what promotes it to
+  `supabase/migrations/` and runs `supabase migration up`.
+- `false` → do not touch `supabase/migrations/` or
+  `supabase/migrations-pending/`.
+
+If during implementation you discover the planner was wrong (e.g. you can
+implement the change with a JSONB column already present, or conversely
+you realise you DO need a schema change), Edit
+`${TICKETS_DIR}/TASK-XXX.json` to flip the flag before requesting review.
+This is the only field other than `status` you are allowed to update on
+the ticket file.
 
 ---
 
