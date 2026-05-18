@@ -89,6 +89,7 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
 #chat-history-panel.collapsed #chat-new .chat-new-label,
 #chat-history-panel.collapsed #history-list,
 #chat-history-panel.collapsed #history-empty,
+#chat-history-panel.collapsed .history-download-label,
 #chat-history-panel.collapsed .history-logo { display: none; }
 #chat-history-panel.collapsed #chat-new { justify-content: center; padding: 10px 0; }
 
@@ -106,18 +107,23 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
 #chat-history-panel.collapsed #history-recent-btn { display: flex; }
 
 #history-download-btn {
-  display: none;
-  align-items: center; justify-content: center;
-  width: 100%; padding: 10px 0;
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; padding: 10px 14px;
+  margin-top: auto;
   background: none; border: none;
-  border-bottom: 1px solid #2c2c2e;
+  border-top: 1px solid #2c2c2e;
   color: #8e8e93; cursor: pointer;
+  font-family: inherit; font-size: 13px; font-weight: 500; text-align: left;
   text-decoration: none;
+  flex-shrink: 0;
   transition: background .15s, color .15s;
 }
 #history-download-btn:hover { background: #2c2c2e; color: #fff; }
-#history-download-btn svg { display: block; }
-#chat-history-panel.collapsed #history-download-btn { display: flex; }
+#history-download-btn svg { display: block; flex-shrink: 0; width: 16px; height: 16px; }
+#chat-history-panel.collapsed #history-download-btn {
+  justify-content: center; padding: 10px 0;
+}
+#chat-history-panel.collapsed #history-download-btn svg { width: 20px; height: 20px; }
 
 #history-recent-popup {
   position: fixed; z-index: 300;
@@ -218,6 +224,7 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
 #history-list::-webkit-scrollbar-thumb { background: #636366; border-radius: 4px; }
 #history-list::-webkit-scrollbar-thumb:hover { background: #8e8e93; }
 .history-item {
+  display: flex; align-items: center; gap: 8px;
   padding: 10px 14px; cursor: pointer;
   border-bottom: 1px solid #2c2c2e;
   transition: background .15s;
@@ -225,6 +232,7 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
 .history-item:last-child { border-bottom: none; }
 .history-item:hover { background: #2c2c2e; }
 .history-item.active { background: rgba(59,130,246,.12); }
+.history-item-main { flex: 1; min-width: 0; }
 .history-title {
   color: #f2f2f7; font-size: 13px; font-weight: 500;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -232,6 +240,19 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
 .history-meta {
   color: #636366; font-size: 11px; margin-top: 3px;
 }
+.history-delete {
+  flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px;
+  background: none; border: none; border-radius: 6px;
+  color: #636366; cursor: pointer;
+  opacity: 0;
+  transition: background .15s, color .15s, opacity .15s;
+}
+.history-delete svg { display: block; }
+.history-item:hover .history-delete,
+.history-delete:focus-visible { opacity: 1; }
+.history-delete:hover { background: rgba(248,113,113,.15); color: #f87171; }
 #history-empty {
   flex: 1;
   display: flex; align-items: center; justify-content: center;

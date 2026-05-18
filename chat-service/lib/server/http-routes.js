@@ -1,11 +1,13 @@
-import { readFile, appendFile, stat } from 'node:fs/promises';
+import { readFile, appendFile, stat, mkdtemp, rm, mkdir, writeFile, cp } from 'node:fs/promises';
+import { createReadStream, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { extname, join } from 'node:path';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { CWD, LOG_DIR, ALLOWED_STATES, MIME_TYPES, UUID_RE } from './config.js';
-import { listSessions, getSession, patchSession } from './session-store.js';
+import { listSessions, getSession, patchSession, deleteSession } from './session-store.js';
 import { runtimes } from './runtime.js';
-import { broadcast } from './ws-bus.js';
+import { broadcast, sendToWs } from './ws-bus.js';
 
 const execFileAsync = promisify(execFile);
 const GIT_BUF = { maxBuffer: 4 * 1024 * 1024 };
@@ -258,29 +260,71 @@ async function handleSessionRollbackRequest(req, res, sessionId) {
   }
 }
 
-function handleDownloadBundleRequest(req, res) {
+const ZIP_README = readFileSync(new URL('./download-readme.md', import.meta.url), 'utf8');
+const CREATE_ZIP_PY = new URL('./create-zip.py', import.meta.url).pathname;
+
+function tarCopy(src, dest, excludes = []) {
+  return new Promise((resolve, reject) => {
+    const create = spawn('tar', [...excludes.map((e) => `--exclude=${e}`), '-C', src, '-cf', '-', '.']);
+    const extract = spawn('tar', ['-C', dest, '-xf', '-']);
+    create.stdout.pipe(extract.stdin);
+    create.stderr.on('data', (d) => console.error('[tar]', d.toString().trim()));
+    extract.stderr.on('data', (d) => console.error('[tar]', d.toString().trim()));
+    extract.on('close', (code) => { if (code === 0) resolve(); else reject(new Error(`tar extract exited ${code}`)); });
+    create.on('error', reject);
+    extract.on('error', reject);
+  });
+}
+
+async function handleDownloadZipRequest(req, res) {
   const date = new Date().toISOString().slice(0, 10);
-  res.writeHead(200, {
-    'Content-Type': 'application/octet-stream',
-    'Content-Disposition': `attachment; filename="crm-${date}.bundle"`,
-  });
-  const proc = spawn('git', ['-C', CWD, 'bundle', 'create', '-', '--all']);
-  proc.stdout.pipe(res);
-  proc.stderr.on('data', (d) => console.error('[bundle]', d.toString().trim()));
-  proc.on('error', (err) => {
-    console.error('[bundle] spawn error:', err);
-    if (!res.headersSent) { res.writeHead(500); res.end('bundle failed'); }
-  });
-  proc.on('close', (code) => {
-    if (code !== 0) console.warn(`[bundle] git bundle exited with code ${code}`);
-  });
+  const tmp = await mkdtemp(join(tmpdir(), 'crm-export-'));
+  const contentDir = join(tmp, 'content');
+  const zipPath = join(tmp, 'archive.zip');
+  try {
+    await mkdir(contentDir);
+
+    await mkdir(join(contentDir, 'sources'));
+    await tarCopy(CWD, join(contentDir, 'sources'), ['./node_modules', './worktrees', './dist', './.claude']);
+    await writeFile(join(contentDir, 'README.md'), ZIP_README);
+
+    try {
+      await cp(LOG_DIR, join(contentDir, 'sessions'), { recursive: true });
+    } catch (err) {
+      if (err.code !== 'ENOENT') throw err;
+    }
+
+    try {
+      await cp('/home/developer/.claude/local', join(contentDir, 'documentator'), { recursive: true });
+    } catch (err) {
+      if (err.code !== 'ENOENT') throw err;
+    }
+
+    await execFileAsync('python3', [CREATE_ZIP_PY, contentDir, zipPath]);
+
+    res.writeHead(200, {
+      'Content-Type': 'application/zip',
+      'Content-Disposition': `attachment; filename="crm-${date}.zip"`,
+    });
+    const stream = createReadStream(zipPath);
+    stream.pipe(res);
+    stream.on('close', () => rm(tmp, { recursive: true, force: true }).catch(() => {}));
+    stream.on('error', (err) => {
+      console.error('[download-zip] stream error:', err);
+      rm(tmp, { recursive: true, force: true }).catch(() => {});
+    });
+  } catch (err) {
+    console.error('[download-zip] error:', err);
+    rm(tmp, { recursive: true, force: true }).catch(() => {});
+    if (!res.headersSent) { res.writeHead(500); res.end('zip failed'); }
+  }
 }
 
 
 export function createRequestHandler({ publicDir }) {
   return async (req, res) => {
-    if (req.url === '/api/download/bundle' && req.method === 'GET') {
-      return handleDownloadBundleRequest(req, res);
+    if (req.url === '/api/download/zip' && req.method === 'GET') {
+      return handleDownloadZipRequest(req, res);
     }
     if (req.url?.startsWith('/api/stats')) return handleStatsRequest(req, res);
 
@@ -309,6 +353,35 @@ export function createRequestHandler({ publicDir }) {
         if (!d) { res.writeHead(404); res.end('Not found'); return; }
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(d));
+        return;
+      }
+      if (req.method === 'DELETE') {
+        if (!UUID_RE.test(id)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'invalid_sessionId' }));
+          return;
+        }
+        const runtime = runtimes.get(id);
+        if (runtime?.busy) {
+          res.writeHead(409, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'session_busy' }));
+          return;
+        }
+        if (runtime) {
+          // Notify clients without going through broadcast() — broadcast logs
+          // the event to the session log, which we're about to delete.
+          for (const client of runtime.clients) {
+            sendToWs(client, { type: 'session_deleted', sessionId: id });
+            try { client.close(); } catch {}
+          }
+          // Await the log stream's flush before rm — close() resolves once
+          // logStream.end() drains, so we don't race writes against deletion.
+          try { await runtime.session?.close(); } catch {}
+          runtimes.delete(id);
+        }
+        await deleteSession(id);
+        res.writeHead(204);
+        res.end();
         return;
       }
       if (req.method === 'PATCH') {

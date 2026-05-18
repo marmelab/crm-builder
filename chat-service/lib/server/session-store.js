@@ -1,4 +1,4 @@
-import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, readdir, rm } from 'node:fs/promises';
 import { createWriteStream } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { LOG_DIR, UUID_RE, ALLOWED_STATES } from './config.js';
@@ -267,7 +267,7 @@ export async function openSession(requestedId) {
       await saveMeta();
       return meta;
     },
-    close: () => logStream.end(),
+    close: () => new Promise((resolve) => logStream.end(resolve)),
   };
 }
 
@@ -329,6 +329,16 @@ export async function getSession(id) {
     return { meta, messages };
   } catch {
     return null;
+  }
+}
+
+export async function deleteSession(id) {
+  if (!UUID_RE.test(id)) return false;
+  try {
+    await rm(`${LOG_DIR}/${id}`, { recursive: true, force: true });
+    return true;
+  } catch {
+    return false;
   }
 }
 

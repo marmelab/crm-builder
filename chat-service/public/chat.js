@@ -246,6 +246,15 @@ function handleWsMessage(event) {
     return;
   }
 
+  if (msg.type === 'session_deleted') {
+    // Server is about to tear down the WS; close the panel cleanly so the
+    // user doesn't see a "Connection lost" toast for a session they just
+    // deleted (possibly from another tab).
+    closeDiscussion();
+    historyApi.refreshHistory();
+    return;
+  }
+
   if (msg.type === 'state') {
     display.setDisplayedState(msg.state);
     historyApi.refreshHistory();
