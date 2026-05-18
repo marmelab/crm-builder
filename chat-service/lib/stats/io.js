@@ -113,12 +113,13 @@ export function spawnBoundaryTimestamps(events) {
 // published standard pricing — they may drift; the derived per-model figures
 // are best-effort and may not sum to the SDK total to the penny.
 export const MODEL_RATES = {
-  'claude-opus-4-6':           { input: 15,  cacheCreate: 18.75, cacheRead: 1.5,  output: 75 },
-  'claude-opus-4-5':           { input: 15,  cacheCreate: 18.75, cacheRead: 1.5,  output: 75 },
+  'claude-opus-4-7':           { input: 5,   cacheCreate: 6.25,  cacheRead: 0.5,  output: 25 },
+  'claude-opus-4-6':           { input: 5,   cacheCreate: 6.25,  cacheRead: 0.5,  output: 25 },
+  'claude-opus-4-5':           { input: 5,   cacheCreate: 6.25,  cacheRead: 0.5,  output: 25 },
   'claude-sonnet-4-6':         { input: 3,   cacheCreate: 3.75,  cacheRead: 0.3,  output: 15 },
   'claude-sonnet-4-5':         { input: 3,   cacheCreate: 3.75,  cacheRead: 0.3,  output: 15 },
-  'claude-haiku-4-5-20251001': { input: 1,   cacheCreate: 1.25,  cacheRead: 0.1,  output: 5 },
-  'claude-haiku-4-5':          { input: 1,   cacheCreate: 1.25,  cacheRead: 0.1,  output: 5 },
+  'claude-haiku-4-5-20251001': { input: 1,   cacheCreate: 1.25,  cacheRead: 0.1,  output: 5  },
+  'claude-haiku-4-5':          { input: 1,   cacheCreate: 1.25,  cacheRead: 0.1,  output: 5  },
 };
 
 // Short label for the cost-tooltip header. Strips the `claude-` prefix and
