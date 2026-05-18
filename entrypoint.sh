@@ -219,57 +219,52 @@ fi
 HELPER
 chmod +x /entrypoint-helpers/apply-app-variant.sh
 
-# ── Select App.tsx variant based on mode ─────────────────────
+# ── App.tsx variant ───────────────────────────────────────────
+/entrypoint-helpers/apply-app-variant.sh
 if [ "$MODE" = "demo" ]; then
-  /entrypoint-helpers/apply-app-variant.sh
   echo -e "${GREEN}✓  Data provider: FakeRest${NC}"
-  SUPERVISOR_CONF=/etc/supervisor/conf.d/demo.conf
 else
-  # MODE=full
-  /entrypoint-helpers/apply-app-variant.sh
   echo -e "${GREEN}✓  Data provider: Supabase${NC}"
+fi
 
-  # Check Docker socket (required for Supabase)
-  if [ ! -S /var/run/docker.sock ]; then
-    echo ""
-    echo -e "${RED}❌  Docker socket not found!${NC}"
-    echo "    In full mode, Supabase requires the Docker daemon."
-    echo "    Add: -v /var/run/docker.sock:/var/run/docker.sock"
-    echo ""
-    echo "    Or switch to demo mode: -e MODE=demo"
-    exit 1
-  fi
-  echo -e "${GREEN}✓  Docker socket available${NC}"
-
-  # Add developer to the Docker socket group (GID varies per host)
+# ── Docker socket group (enables runtime mode switch to Supabase) ─
+if [ -S /var/run/docker.sock ]; then
   DOCKER_GID=$(stat -c '%g' /var/run/docker.sock)
   if ! getent group "$DOCKER_GID" > /dev/null 2>&1; then
     groupadd --gid "$DOCKER_GID" docker-host
   fi
   usermod -aG "$DOCKER_GID" developer
-  echo -e "${GREEN}✓  developer added to Docker group (GID=${DOCKER_GID})${NC}"
+  echo -e "${GREEN}✓  Docker socket available (GID=${DOCKER_GID})${NC}"
+fi
 
-  # Start Supabase
+# ── Start Supabase when MODE=full ─────────────────────────────
+if [ "$MODE" = "full" ]; then
+  if [ ! -S /var/run/docker.sock ]; then
+    echo ""
+    echo -e "${RED}❌  Docker socket not found!${NC}"
+    echo "    Full mode requires the Docker daemon."
+    echo "    Add: -v /var/run/docker.sock:/var/run/docker.sock"
+    echo ""
+    echo "    Or use demo mode: MODE=demo docker compose up"
+    exit 1
+  fi
+
   echo ""
   echo -e "${BOLD}Starting Supabase...${NC}"
   echo -e "${YELLOW}(First run: ~2 min to pull images)${NC}"
   npx supabase start 2>&1 | grep -E "✓|✗|Error|Started|API URL" || true
 
-  # Wait for Supabase API to actually be ready
   echo -e "${BOLD}Waiting for Supabase API (localhost:54321)...${NC}"
   RETRIES=60
   until curl -s --max-time 2 -o /dev/null http://localhost:54321; do
     RETRIES=$((RETRIES - 1))
     if [ $RETRIES -le 0 ]; then
       echo -e "${RED}❌  Supabase did not respond after 60s${NC}"
-      echo "    Check: docker logs atomic-crm-full"
       exit 1
     fi
     sleep 1
   done
   echo -e "${GREEN}✓  Supabase ready (localhost:54321)${NC}"
-
-  SUPERVISOR_CONF=/etc/supervisor/conf.d/full.conf
 fi
 
 # Commit the App.tsx variant so `git reset --hard HEAD` in the merger restores
@@ -308,4 +303,10 @@ echo -e "${YELLOW}  claude --dangerously-skip-permissions                ${NC}"
 echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 
-exec /usr/bin/supervisord -n -c "$SUPERVISOR_CONF"
+# ── Pre-warm Supabase in background (avoids cold-start delay when switching) ─
+if [ "$MODE" = "demo" ] && [ -S /var/run/docker.sock ]; then
+  echo -e "${YELLOW}↻  Pre-warming Supabase in background (ready for mode switch)...${NC}"
+  (cd /app && npx supabase start > /var/log/supabase-prewarm.log 2>&1) &
+fi
+
+exec /usr/bin/supervisord -n -c /etc/supervisor/conf.d/supervisord.conf

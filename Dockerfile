@@ -113,9 +113,8 @@ COPY scripts/switch-mode.sh /usr/local/bin/switch-mode
 COPY scripts/ttyd-session.sh /usr/local/bin/ttyd-session.sh
 RUN chmod +x /usr/local/bin/switch-mode /usr/local/bin/ttyd-session.sh
 
-# ── Supervisor configs ────────────────────────────────────────
-COPY supervisord.demo.conf /etc/supervisor/conf.d/demo.conf
-COPY supervisord.full.conf /etc/supervisor/conf.d/full.conf
+# ── Supervisor config ─────────────────────────────────────────
+COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
 # ── Chat service ──────────────────────────────────────────────
 COPY chat-service/ /chat-service/

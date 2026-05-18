@@ -321,8 +321,54 @@ async function handleDownloadZipRequest(req, res) {
 }
 
 
+async function checkSupabaseReady() {
+  try {
+    const ctrl = new AbortController();
+    const tid = setTimeout(() => ctrl.abort(), 800);
+    await fetch('http://localhost:54321', { signal: ctrl.signal });
+    clearTimeout(tid);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function handleGetMode(req, res) {
+  const mode = process.env.MODE || 'demo';
+  const supabaseReady = await checkSupabaseReady();
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ mode, supabaseReady }));
+}
+
+async function handleSetMode(req, res) {
+  let body;
+  try { body = await readJsonBody(req); } catch {
+    res.writeHead(400); res.end('Bad request'); return;
+  }
+  const { mode } = body;
+  if (mode !== 'demo' && mode !== 'full') {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'mode must be demo or full' }));
+    return;
+  }
+  // Update the in-process env so subsequent claude spawns pick up the new mode
+  process.env.MODE = mode;
+  // Run switch-mode.sh in the background — caller does not wait for Supabase startup
+  const child = spawn('/usr/local/bin/switch-mode', [mode], {
+    detached: true,
+    stdio: 'ignore',
+    env: { ...process.env, APP_DIR: '/app' },
+  });
+  child.unref();
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ ok: true, mode }));
+}
+
 export function createRequestHandler({ publicDir }) {
   return async (req, res) => {
+    if (req.url === '/api/mode' && req.method === 'GET') return handleGetMode(req, res);
+    if (req.url === '/api/mode' && req.method === 'POST') return handleSetMode(req, res);
+
     if (req.url === '/api/download/zip' && req.method === 'GET') {
       return handleDownloadZipRequest(req, res);
     }

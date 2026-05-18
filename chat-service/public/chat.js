@@ -771,3 +771,58 @@ statsBtn.addEventListener('click', () => {
   if (statsMode) exitStatsMode(); else enterStatsMode();
 });
 statsCloseBtn.addEventListener('click', exitStatsMode);
+
+// ── Mode toggle (Demo ↔ Full / Supabase) ──────────────────────
+const modeToggleBtn = document.getElementById('mode-toggle');
+let modePollingTimer = null;
+
+function updateModeBtn(mode, supabaseReady) {
+  modeToggleBtn.dataset.mode = mode;
+  if (mode === 'full') {
+    modeToggleBtn.textContent = supabaseReady ? 'Real data' : 'Real data ↻';
+    modeToggleBtn.classList.toggle('mode-full', true);
+    modeToggleBtn.classList.toggle('mode-starting', !supabaseReady);
+    modeToggleBtn.title = supabaseReady
+      ? 'Using your real database — click to switch to demo'
+      : 'Connecting to your database… click to switch back to demo';
+    if (!supabaseReady && !modePollingTimer) {
+      modePollingTimer = setInterval(pollMode, 4000);
+    } else if (supabaseReady && modePollingTimer) {
+      clearInterval(modePollingTimer);
+      modePollingTimer = null;
+    }
+  } else {
+    modeToggleBtn.textContent = 'Demo';
+    modeToggleBtn.classList.remove('mode-full', 'mode-starting');
+    modeToggleBtn.title = 'Using sample data — click to switch to your real database';
+    if (modePollingTimer) { clearInterval(modePollingTimer); modePollingTimer = null; }
+  }
+}
+
+async function pollMode() {
+  try {
+    const res = await fetch('/api/mode');
+    if (!res.ok) return;
+    const { mode, supabaseReady } = await res.json();
+    updateModeBtn(mode, supabaseReady);
+  } catch {}
+}
+
+modeToggleBtn.addEventListener('click', async () => {
+  const currentMode = modeToggleBtn.dataset.mode || 'demo';
+  const nextMode = currentMode === 'demo' ? 'full' : 'demo';
+  updateModeBtn(nextMode, false);
+  try {
+    const res = await fetch('/api/mode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: nextMode }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    await pollMode();
+  } catch {
+    await pollMode();
+  }
+});
+
+pollMode();

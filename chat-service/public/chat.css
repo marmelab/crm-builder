@@ -75,6 +75,18 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
 #chat-debug svg,
 #chat-restore-btn svg { display: block; }
 
+#mode-toggle {
+  background: rgba(255,255,255,.08);
+  border: none; color: #aeaeb2;
+  cursor: pointer; padding: 3px 8px; border-radius: 12px;
+  font-size: 11px; font-weight: 600; letter-spacing: .03em;
+  transition: color .15s, background .15s; white-space: nowrap;
+}
+#mode-toggle:hover { color: #fff; background: rgba(255,255,255,.14); }
+#mode-toggle.mode-full { color: #34d399; background: rgba(52,211,153,.12); }
+#mode-toggle.mode-full:hover { background: rgba(52,211,153,.2); }
+#mode-toggle.mode-starting { color: #fbbf24; background: rgba(251,191,36,.1); }
+
 /* Sessions panel — full-height sidebar pinned to the left edge of the
    viewport, always visible while the widget is open. */
 #chat-history-panel {

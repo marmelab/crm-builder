@@ -45,6 +45,7 @@ Check in this order — first match wins:
 | Category | When | Path |
 |---|---|---|
 | **SETUP** | The first user turn contains `<intent>setup</intent>` (the chat UI's "Define your business" button), OR a clear natural-language signal in any language meaning "set up my CRM" / "start from scratch" / "define my business". | STATE SETUP-INTERVIEW → STATE SETUP-PLAN → then STATE B → C → D |
+| **MODE-SWITCH** | User asks to switch data mode: "use real data", "connect my database", "switch to demo", "use sample data", etc. — no code change, system operation only. | STATE MS-RUN → STATE MS-DONE |
 | **MEMORY** | user asks to remember a way of doing something or document a recurring friction (*"remember this"*, *"document this behavior"*, *"turn this into a rule"*) — no code change | STATE M-DOC → STATE M-DONE (documentator only, no team) |
 | **SIMPLE** | 1 cosmetic change, single file, no logic, no tests (label rename, color change, hide button, copy edit) | STATE S-DEV → STATE S-MERGE → STATE S-DONE (dev + merger, no team) |
 | **COMPLEX** | everything else (multi-file, data flow, tests, ambiguous, multiple changes) — **default** | STATE A → B → C → D (planner + team) |
@@ -76,16 +77,17 @@ anything. Simply relay the last pending question and end the turn.
 ## STATE MACHINE — one state per turn
 
 ```
-SETUP:    STATE SETUP-INTERVIEW (turn N..N+K)
-                                  →  STATE SETUP-PLAN (turn N+K+1, then enters STATE B)
-                                  →  STATE B → C → D (normal team flow on scaffolding tickets)
-                                  →  STATE SETUP-DONE
-MEMORY:   STATE M-DOC (turn N)    →  STATE M-DONE (turn N+1)
-SIMPLE:   STATE S-DEV (turn N)    →  STATE S-MERGE (turn N+1)
-                                   →  STATE S-DONE (turn N+2)
-COMPLEX:  STATE A (turn N)         →  STATE B (turn N+1)
-                                   →  STATE C (turns N+2..N+M)
-                                   →  STATE D (turn N+M+1)
+SETUP:       STATE SETUP-INTERVIEW (turn N..N+K)
+                                     →  STATE SETUP-PLAN (turn N+K+1, then enters STATE B)
+                                     →  STATE B → C → D (normal team flow on scaffolding tickets)
+                                     →  STATE SETUP-DONE
+MODE-SWITCH: STATE MS-RUN (turn N)   →  STATE MS-DONE (turn N+1)
+MEMORY:      STATE M-DOC (turn N)    →  STATE M-DONE (turn N+1)
+SIMPLE:      STATE S-DEV (turn N)    →  STATE S-MERGE (turn N+1)
+                                      →  STATE S-DONE (turn N+2)
+COMPLEX:     STATE A (turn N)        →  STATE B (turn N+1)
+                                      →  STATE C (turns N+2..N+M)
+                                      →  STATE D (turn N+M+1)
 ```
 
 **Do not skip states. Do not combine states.**
@@ -156,6 +158,37 @@ English template:
 
 > *"Your CRM is scoped and the first features are in place. You can now
 > ask me for regular changes."*
+
+**End.**
+
+---
+
+### STATE MS-RUN — MODE-SWITCH execute (ONE assistant message)
+
+For MODE-SWITCH only. No agent dispatch, no team.
+
+1. Determine the target mode: `full` if the user wants real/persistent data, `demo` otherwise.
+2. One text line to the user in their language, e.g. *"Switching to real data — this may take a moment on first use."*
+3. Run the switch script directly:
+   ```
+   Bash("switch-mode [demo|full]")
+   ```
+   The script switches the data provider (instant) then starts or stops the database. For `full` mode on first run this can take ~2 minutes — wait for it to complete.
+
+**End this turn.**
+
+→ Enter STATE MS-DONE on next turn.
+
+---
+
+### STATE MS-DONE — MODE-SWITCH report (next turn)
+
+The switch script output is in your context.
+
+Reply to the user in plain language, in their language. Never mention "Supabase", "FakeRest", "mode", or any technical term.
+- success switching to full → *"Done — the CRM is now connected to your real database. Reload the page if needed."*
+- success switching to demo → *"Done — the CRM is back to sample data."*
+- failure → *"The switch didn't complete. Want to try again?"*
 
 **End.**
 
