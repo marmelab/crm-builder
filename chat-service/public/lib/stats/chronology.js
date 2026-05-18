@@ -1,5 +1,5 @@
 import {
-  el, formatDuration, formatTokens, tokenBreakdownText, tokensByModelText,
+  el, formatDuration, formatTokens, tokenBreakdownText, tokensByModelTokensText, costByModelText, setupCostTip,
 } from '../dom.js';
 
 export function relLabelFactory(baseTs) {
@@ -103,13 +103,13 @@ function renderPhaseRow(phase, relLabel) {
   // a tooltip with the same compact per-model table the global KPI uses.
   let costBadge;
   if (phase.costUsd != null && phase.tokensByModel && phase.tokensByModel.length > 0) {
-    costBadge = el('span', { className: 'phase-cost tk-host' }, `$${phase.costUsd.toFixed(3)}`);
+    costBadge = el('span', { className: 'phase-cost tk-host tk-cost-host' }, `$${phase.costUsd.toFixed(2)}`);
     const ctip = el('span', { className: 'tk-tip tk-tip-anchor-right' });
-    ctip.textContent = tokensByModelText(phase.tokensByModel, phase.costUsd);
+    setupCostTip(ctip, phase.tokensByModel, phase.costUsd);
     costBadge.appendChild(ctip);
   } else {
     costBadge = el('span', { className: 'phase-cost' },
-      phase.costUsd != null ? `$${phase.costUsd.toFixed(3)}` : '—');
+      phase.costUsd != null ? `$${phase.costUsd.toFixed(2)}` : '—');
   }
 
   // Active cell: shows active time. Tooltip drills down to wall-clock + any
@@ -148,7 +148,9 @@ function renderPhaseRow(phase, relLabel) {
       grandTokens > 0 ? `${formatTokens(grandTokens)} tok` : '—',
     );
     const tip = el('span', { className: 'tk-tip tk-tip-anchor-right' });
-    tip.textContent = tokenBreakdownText(bk, { totalLabel: 'total' });
+    tip.textContent = (phase.tokensByModel && phase.tokensByModel.length > 0)
+      ? tokensByModelTokensText(phase.tokensByModel)
+      : tokenBreakdownText(bk, { totalLabel: 'total' });
     tokensSpan.appendChild(tip);
   } else {
     tokensSpan = el('span', { className: 'phase-tokens' },

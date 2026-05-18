@@ -67,6 +67,18 @@ if (typeof document !== 'undefined' && !document._tkTipsInit) {
     if (host.contains(e.relatedTarget)) return;
     clearTipPosition(host);
   });
+  // Click on a cost tooltip host toggles between cost breakdown and rates table.
+  document.addEventListener('click', (e) => {
+    const host = e.target.closest && e.target.closest('.tk-cost-host');
+    if (!host) return;
+    e.stopPropagation();
+    const tip = host.querySelector(':scope > .tk-tip');
+    if (!tip || !tip.dataset.ratesContent) return;
+    const showingRates = tip.dataset.showing === 'rates';
+    tip.textContent = showingRates ? tip.dataset.costContent : tip.dataset.ratesContent;
+    tip.dataset.showing = showingRates ? 'cost' : 'rates';
+    positionTip(host);
+  });
 }
 
 export function el(tag, props, ...children) {
@@ -122,7 +134,7 @@ export function tokenBreakdownText(breakdown, opts = {}) {
   const fmtN = (n) => Number(n || 0).toLocaleString('en-US');
   const totalLabel = opts.totalLabel || 'total';
   const showCost = typeof opts.costUsd === 'number';
-  const costPrecision = opts.costPrecision ?? 4;
+  const costPrecision = opts.costPrecision ?? 2;
   const rows = [
     ['input',          breakdown?.input       || 0],
     ['cache-creation', breakdown?.cacheCreate || 0],
@@ -167,7 +179,9 @@ export function withBreakdownTooltip(labelText, breakdown, opts = {}) {
   const host = el('span', { className: 'tk-host' }, labelText);
   if (!breakdown) return host;
   const tip = el('span', { className: opts.tipClass || 'tk-tip' });
-  tip.textContent = tokenBreakdownText(breakdown, opts);
+  tip.textContent = (opts.tokensByModel && opts.tokensByModel.length > 0)
+    ? tokensByModelTokensText(opts.tokensByModel)
+    : tokenBreakdownText(breakdown, opts);
   host.appendChild(tip);
   return host;
 }
@@ -179,7 +193,17 @@ function shortModel(name) {
 }
 
 function fmtN(n) { return Number(n || 0).toLocaleString('en-US'); }
-function fmtUsd(n, p = 4) { return `$${Number(n || 0).toFixed(p)}`; }
+function fmtUsd(n, p = 2) { return `$${Number(n || 0).toFixed(p)}`; }
+
+const MODEL_RATES = {
+  'claude-opus-4-7':           { input: 5,   cacheCreate: 6.25,  cacheRead: 0.5,  output: 25 },
+  'claude-opus-4-6':           { input: 5,   cacheCreate: 6.25,  cacheRead: 0.5,  output: 25 },
+  'claude-opus-4-5':           { input: 5,   cacheCreate: 6.25,  cacheRead: 0.5,  output: 25 },
+  'claude-sonnet-4-6':         { input: 3,   cacheCreate: 3.75,  cacheRead: 0.3,  output: 15 },
+  'claude-sonnet-4-5':         { input: 3,   cacheCreate: 3.75,  cacheRead: 0.3,  output: 15 },
+  'claude-haiku-4-5-20251001': { input: 1,   cacheCreate: 1.25,  cacheRead: 0.1,  output: 5  },
+  'claude-haiku-4-5':          { input: 1,   cacheCreate: 1.25,  cacheRead: 0.1,  output: 5  },
+};
 
 // Compact token count: 12,345 → "12.3k", 1,234,567 → "1.23M". Used in the
 // per-model cost table so the row fits without scrolling on narrow panels.
@@ -190,54 +214,111 @@ function fmtCompact(n) {
   return String(v);
 }
 
-// Build a monospace, right-aligned table mapping models → token breakdown +
-// approximate per-model cost. `costTotal` is the SDK-reported authoritative
-// total displayed at the bottom (the per-model figures are best-effort and
-// may not sum to it exactly — pricing tables drift).
-export function tokensByModelText(rows, costTotal) {
+// Token counts per model, no cost column.
+export function tokensByModelTokensText(rows) {
   if (!rows || rows.length === 0) return '(no per-model data yet)';
-  const headers = ['model', 'input', 'cache+', 'output', 'cache-r', 'cost'];
-  const data = rows.map((r) => [
-    shortModel(r.model),
-    fmtCompact(r.breakdown?.input),
-    fmtCompact(r.breakdown?.cacheCreate),
-    fmtCompact(r.breakdown?.output),
-    fmtCompact(r.breakdown?.cacheRead),
-    fmtUsd(r.costUsd, 4),
-  ]);
-  // Totals row (sum each column except model).
-  const sums = [0, 0, 0, 0, 0];
-  for (const r of rows) {
-    sums[0] += r.breakdown?.input       || 0;
-    sums[1] += r.breakdown?.cacheCreate || 0;
-    sums[2] += r.breakdown?.output      || 0;
-    sums[3] += r.breakdown?.cacheRead   || 0;
-    sums[4] += r.costUsd                || 0;
-  }
-  const totalRow = ['total', fmtCompact(sums[0]), fmtCompact(sums[1]), fmtCompact(sums[2]), fmtCompact(sums[3]), fmtUsd(sums[4], 4)];
-  // Column widths: max of header + all cells.
-  const cols = headers.map((h, i) => {
-    const cells = [h, ...data.map((row) => row[i]), totalRow[i]];
-    return Math.max(...cells.map((s) => s.length));
+  const headers = ['model', 'input', 'cache+', 'output', 'cache-r', 'total'];
+  const mkRow = (r) => {
+    const b = r.breakdown || {};
+    const t = (b.input||0) + (b.cacheCreate||0) + (b.output||0) + (b.cacheRead||0);
+    return [shortModel(r.model), fmtCompact(b.input), fmtCompact(b.cacheCreate), fmtCompact(b.output), fmtCompact(b.cacheRead), fmtCompact(t)];
+  };
+  const data = rows.map(mkRow);
+  const sums = rows.reduce((acc, r) => {
+    const b = r.breakdown || {};
+    acc[0] += b.input || 0; acc[1] += b.cacheCreate || 0;
+    acc[2] += b.output || 0; acc[3] += b.cacheRead || 0;
+    return acc;
+  }, [0, 0, 0, 0]);
+  const totalRow = ['total', ...sums.map(fmtCompact), fmtCompact(sums.reduce((a, b) => a + b, 0))];
+  const cols = headers.map((h, i) => Math.max(h.length, ...data.map((r) => r[i].length), totalRow[i].length));
+  const fmtRow = (row) => row.map((v, i) => i === 0 ? v.padEnd(cols[i]) : v.padStart(cols[i])).join('  ');
+  const sep = '─'.repeat(cols.reduce((a, b) => a + b, 0) + (cols.length - 1) * 2);
+  return [fmtRow(headers), sep, ...data.map(fmtRow), sep, fmtRow(totalRow)].join('\n');
+}
+
+// Cost per model per operation type, no token counts.
+// Per-op costs are computed from MODEL_RATES; the "total" column uses the
+// authoritative SDK costUsd so it matches the KPI figure exactly.
+export function costByModelText(rows, costTotal) {
+  if (!rows || rows.length === 0) return '(no per-model data yet)';
+  const headers = ['model', 'input', 'cache+', 'output', 'cache-r', 'total'];
+  const normalizedOpCosts = rows.map((r) => {
+    const b = r.breakdown || {};
+    const rt = MODEL_RATES[r.model] || MODEL_RATES['claude-sonnet-4-6'];
+    const raw = [
+      (b.input       || 0) * rt.input       / 1_000_000,
+      (b.cacheCreate || 0) * rt.cacheCreate / 1_000_000,
+      (b.output      || 0) * rt.output      / 1_000_000,
+      (b.cacheRead   || 0) * rt.cacheRead   / 1_000_000,
+    ];
+    const rawTotal = raw.reduce((a, v) => a + v, 0);
+    // Normalize so per-op columns always sum to the authoritative SDK total.
+    const scale = rawTotal > 0 ? (r.costUsd || 0) / rawTotal : 0;
+    return raw.map((v) => v * scale);
   });
-  // First column left-aligned; rest right-aligned (numbers + money).
-  const fmtRow = (row) => row.map((v, i) =>
-    i === 0 ? v.padEnd(cols[i]) : v.padStart(cols[i])).join('  ');
+  const data = rows.map((r, i) => [
+    shortModel(r.model),
+    ...normalizedOpCosts[i].map((v) => fmtUsd(v)),
+    fmtUsd(r.costUsd),
+  ]);
+  const opSums = normalizedOpCosts.reduce((acc, ops, i) => {
+    ops.forEach((v, j) => { acc[j] += v; });
+    acc[4] += rows[i].costUsd || 0;
+    return acc;
+  }, [0, 0, 0, 0, 0]);
+  const totalRow = ['total', ...opSums.map((v) => fmtUsd(v))];
+  const cols = headers.map((h, i) => Math.max(h.length, ...data.map((r) => r[i].length), totalRow[i].length));
+  const fmtRow = (row) => row.map((v, i) => i === 0 ? v.padEnd(cols[i]) : v.padStart(cols[i])).join('  ');
   const sep = '─'.repeat(cols.reduce((a, b) => a + b, 0) + (cols.length - 1) * 2);
   const lines = [fmtRow(headers), sep, ...data.map(fmtRow), sep, fmtRow(totalRow)];
-  if (typeof costTotal === 'number' && Math.abs(costTotal - sums[4]) > 0.01) {
+  if (typeof costTotal === 'number' && Math.abs(costTotal - opSums[4]) > 0.01) {
     lines.push('');
-    const sdkLabel = 'SDK reported total';
-    lines.push(`${sdkLabel.padEnd(cols[0] + 2 + cols[1] + 2 + cols[2] + 2 + cols[3] + 2 + cols[4])}  ${fmtUsd(costTotal, 4).padStart(cols[5])}`);
+    lines.push(`${'SDK total'.padEnd(cols[0] + 2 + cols[1] + 2 + cols[2] + 2 + cols[3] + 2 + cols[4])}  ${fmtUsd(costTotal).padStart(cols[5])}`);
   }
   return lines.join('\n');
 }
 
-// Returns a `.tk-host` span carrying the cost-by-model table on hover.
+// Rates table shown on click (hidden shortcut). Lists the $/MTok rates used
+// for the per-op cost estimation for each model present in `rows`.
+function modelRatesText(rows) {
+  if (!rows || rows.length === 0) return '';
+  const headers = ['model', 'input', 'cache+', 'output', 'cache-r'];
+  const data = rows.map((r) => {
+    const rt = MODEL_RATES[r.model] || MODEL_RATES['claude-sonnet-4-6'];
+    return [
+      shortModel(r.model),
+      `$${rt.input}/M`,
+      `$${rt.cacheCreate}/M`,
+      `$${rt.output}/M`,
+      `$${rt.cacheRead}/M`,
+    ];
+  });
+  const cols = headers.map((h, i) => Math.max(h.length, ...data.map((r) => r[i].length)));
+  const fmtRow = (row) => row.map((v, i) => i === 0 ? v.padEnd(cols[i]) : v.padStart(cols[i])).join('  ');
+  const sep = '─'.repeat(cols.reduce((a, b) => a + b, 0) + (cols.length - 1) * 2);
+  return ['API rates ($/MTok)', sep, ...data.map(fmtRow), '', '(click to go back)'].join('\n');
+}
+
+// Attach cost-toggle data to an existing `.tk-tip` element so click-to-rates works.
+export function setupCostTip(tip, rows, costTotal) {
+  const costContent = costByModelText(rows || [], costTotal);
+  tip.textContent = costContent;
+  tip.dataset.costContent = costContent;
+  tip.dataset.ratesContent = modelRatesText(rows || []);
+  tip.dataset.showing = 'cost';
+}
+
+// Returns a `.tk-cost-host` span carrying the cost-by-model table on hover.
+// Click toggles to a rates table (hidden shortcut to verify pricing).
 export function withCostTooltip(labelText, rows, costTotal, opts = {}) {
-  const host = el('span', { className: 'tk-host' }, labelText);
+  const host = el('span', { className: 'tk-host tk-cost-host' }, labelText);
   const tip = el('span', { className: opts.tipClass || 'tk-tip' });
-  tip.textContent = tokensByModelText(rows || [], costTotal);
+  const costContent = costByModelText(rows || [], costTotal);
+  tip.textContent = costContent;
+  tip.dataset.costContent = costContent;
+  tip.dataset.ratesContent = modelRatesText(rows || []);
+  tip.dataset.showing = 'cost';
   host.appendChild(tip);
   return host;
 }
