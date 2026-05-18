@@ -1,5 +1,5 @@
 import { readFile, appendFile, stat, mkdtemp, rm, mkdir, writeFile, cp } from 'node:fs/promises';
-import { createReadStream, readFileSync } from 'node:fs';
+import { createReadStream, readFileSync, copyFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { extname, join } from 'node:path';
 import { execFile, spawn } from 'node:child_process';
@@ -351,15 +351,19 @@ async function handleSetMode(req, res) {
     res.end(JSON.stringify({ error: 'mode must be demo or full' }));
     return;
   }
-  // Update the in-process env so subsequent claude spawns pick up the new mode
   process.env.MODE = mode;
-  // Run switch-mode.sh in the background — caller does not wait for Supabase startup
-  const child = spawn('/usr/local/bin/switch-mode', [mode], {
-    detached: true,
-    stdio: 'ignore',
-    env: { ...process.env, APP_DIR: '/app' },
-  });
-  child.unref();
+  // Copy App.tsx synchronously so the iframe reload gets the correct version immediately
+  const variant = mode === 'full' ? 'App.supabase.tsx' : 'App.fakerest.tsx';
+  try { copyFileSync(`/app-variants/${variant}`, '/app/src/App.tsx'); }
+  catch (e) { console.warn('[mode-switch] App.tsx copy failed:', e.message); }
+  // Start Supabase in background (only needed for full; demo keeps Supabase warm)
+  if (mode === 'full') {
+    const child = spawn('/usr/local/bin/switch-mode', ['full'], {
+      detached: true, stdio: 'ignore',
+      env: { ...process.env, APP_DIR: '/app' },
+    });
+    child.unref();
+  }
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ ok: true, mode }));
 }

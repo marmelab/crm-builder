@@ -777,9 +777,10 @@ const modeToggleBtn = document.getElementById('mode-toggle');
 let modePollingTimer = null;
 
 function updateModeBtn(mode, supabaseReady) {
+  const label = modeToggleBtn.querySelector('.mode-toggle-label');
   modeToggleBtn.dataset.mode = mode;
   if (mode === 'full') {
-    modeToggleBtn.textContent = supabaseReady ? 'Real data' : 'Real data ↻';
+    if (label) label.textContent = supabaseReady ? 'Real data' : 'Real data ↻';
     modeToggleBtn.classList.toggle('mode-full', true);
     modeToggleBtn.classList.toggle('mode-starting', !supabaseReady);
     modeToggleBtn.title = supabaseReady
@@ -792,7 +793,7 @@ function updateModeBtn(mode, supabaseReady) {
       modePollingTimer = null;
     }
   } else {
-    modeToggleBtn.textContent = 'Demo';
+    if (label) label.textContent = 'Demo';
     modeToggleBtn.classList.remove('mode-full', 'mode-starting');
     modeToggleBtn.title = 'Using sample data — click to switch to your real database';
     if (modePollingTimer) { clearInterval(modePollingTimer); modePollingTimer = null; }
@@ -819,6 +820,9 @@ modeToggleBtn.addEventListener('click', async () => {
       body: JSON.stringify({ mode: nextMode }),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    // App.tsx is already swapped server-side — reload the CRM iframe now
+    const frame = document.getElementById('crm-frame');
+    if (frame) frame.src = frame.src;
     await pollMode();
   } catch {
     await pollMode();

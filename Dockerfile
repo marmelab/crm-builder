@@ -68,6 +68,8 @@ RUN wget -q https://github.com/marmelab/atomic-crm/archive/refs/heads/main.zip \
 
 WORKDIR ${APP_DIR}
 RUN npm install
+# Pre-bundle Vite dependencies so the first dev-server start is instant
+RUN npx vite optimize 2>/dev/null || true
 
 # ── Playwright Chromium (for vitest browser mode) ─────────────
 # PLAYWRIGHT_BROWSERS_PATH=/ms-playwright → accessible to all users

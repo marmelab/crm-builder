@@ -76,16 +76,20 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
 #chat-restore-btn svg { display: block; }
 
 #mode-toggle {
-  background: rgba(255,255,255,.08);
-  border: none; color: #aeaeb2;
-  cursor: pointer; padding: 3px 8px; border-radius: 12px;
-  font-size: 11px; font-weight: 600; letter-spacing: .03em;
-  transition: color .15s, background .15s; white-space: nowrap;
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; padding: 10px 14px;
+  background: none; border: none; border-bottom: 1px solid #2c2c2e;
+  color: #8e8e93; cursor: pointer;
+  font-family: inherit; font-size: 13px; font-weight: 500; text-align: left;
+  transition: background .15s, color .15s;
 }
-#mode-toggle:hover { color: #fff; background: rgba(255,255,255,.14); }
-#mode-toggle.mode-full { color: #34d399; background: rgba(52,211,153,.12); }
-#mode-toggle.mode-full:hover { background: rgba(52,211,153,.2); }
-#mode-toggle.mode-starting { color: #fbbf24; background: rgba(251,191,36,.1); }
+.mode-toggle-icon { display: block; flex-shrink: 0; transition: color .2s; }
+#mode-toggle.mode-full { color: #34d399; }
+#mode-toggle.mode-starting { color: #fbbf24; }
+#mode-toggle:hover { background: #2c2c2e; color: #fff; }
+/* Collapsed: icon only, centered — mirrors #chat-new collapsed style */
+#chat-history-panel.collapsed #mode-toggle { justify-content: center; padding: 10px 0; }
+#chat-history-panel.collapsed #mode-toggle .mode-toggle-label { display: none; }
 
 /* Sessions panel — full-height sidebar pinned to the left edge of the
    viewport, always visible while the widget is open. */

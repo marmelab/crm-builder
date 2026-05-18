@@ -28,13 +28,6 @@ case "$TARGET" in
     cp /app-variants/App.fakerest.tsx "${APP_DIR}/src/App.tsx"
     echo -e "${GREEN}✓  Demo mode — FakeRest${NC}"
     echo "  Data is simulated in the browser and resets on page reload."
-
-    # Stop Supabase if it is running (best-effort, non-blocking)
-    if [ -S /var/run/docker.sock ] && docker ps --format '{{.Names}}' 2>/dev/null | grep -q 'supabase_db_'; then
-      echo -e "${YELLOW}Stopping Supabase...${NC}"
-      (cd "${APP_DIR}" && npx supabase stop) || true
-      echo -e "${GREEN}✓  Supabase stopped${NC}"
-    fi
     ;;
 
   full)

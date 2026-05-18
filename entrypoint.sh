@@ -303,10 +303,12 @@ echo -e "${YELLOW}  claude --dangerously-skip-permissions                ${NC}"
 echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 
-# ── Pre-warm Supabase in background (avoids cold-start delay when switching) ─
-if [ "$MODE" = "demo" ] && [ -S /var/run/docker.sock ]; then
-  echo -e "${YELLOW}↻  Pre-warming Supabase in background (ready for mode switch)...${NC}"
-  (cd /app && npx supabase start > /var/log/supabase-prewarm.log 2>&1) &
+# ── Pre-warm Supabase once Vite is ready (no resource contention at cold start) ─
+if [ -S /var/run/docker.sock ]; then
+  (
+    until curl -s --max-time 2 -o /dev/null http://localhost:5173; do sleep 3; done
+    cd /app && npx supabase start > /var/log/supabase-prewarm.log 2>&1
+  ) &
 fi
 
 exec /usr/bin/supervisord -n -c /etc/supervisor/conf.d/supervisord.conf
