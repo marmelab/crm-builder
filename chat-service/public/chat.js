@@ -1,5 +1,5 @@
 import {
-  el, formatTokens, tokenBreakdownText, tokensByModelText,
+  el, formatTokens, tokenBreakdownText, setupCostTip,
 } from './lib/dom.js';
 import { renderStatsPanel, initStatsRefresh } from './lib/stats/index.js';
 import { initConnection, initDisplay, initHistory, openConfirmModal, initRecentPopup } from './lib/sessions/index.js';
@@ -311,8 +311,9 @@ function handleWsMessage(event) {
     // edge — extending leftward keeps the tooltip on-screen.
     const tipCls = 'tk-tip tk-tip-above tk-tip-anchor-right';
 
-    const tokensHost = el('span', { className: 'tk-host' }, `${formatTokens(total)} tokens`);
-    if (msg.tokensBreakdown) {
+    const hasTokenTip = !!msg.tokensBreakdown;
+    const tokensHost = el('span', { className: hasTokenTip ? 'tk-host' : null }, `${formatTokens(total)} tokens`);
+    if (hasTokenTip) {
       const tip = el('span', { className: tipCls });
       tip.textContent = tokenBreakdownText(msg.tokensBreakdown, { totalLabel: 'total' });
       tokensHost.appendChild(tip);
@@ -320,10 +321,11 @@ function handleWsMessage(event) {
     stats.appendChild(tokensHost);
     stats.appendChild(document.createTextNode(' · '));
 
-    const costHost = el('span', { className: 'tk-host' }, `$${msg.costUsd.toFixed(3)}`);
-    if (msg.tokensByModel && msg.tokensByModel.length > 0) {
+    const hasCostTip = msg.tokensByModel && msg.tokensByModel.length > 0;
+    const costHost = el('span', { className: hasCostTip ? 'tk-host tk-cost-host' : null }, `$${msg.costUsd.toFixed(2)}`);
+    if (hasCostTip) {
       const tip = el('span', { className: tipCls });
-      tip.textContent = tokensByModelText(msg.tokensByModel, msg.costUsd);
+      setupCostTip(tip, msg.tokensByModel, msg.costUsd);
       costHost.appendChild(tip);
     }
     stats.appendChild(costHost);
@@ -558,7 +560,7 @@ function appendDebug(toolName, input, agentCtx, seq = ++seqCounter) {
   if (toolName === 'result') {
     const detail = document.createElement('span');
     detail.className = 'debug-detail';
-    const cost = input?.cost != null ? ` — $${input.cost.toFixed(4)}` : '';
+    const cost = input?.cost != null ? ` — $${input.cost.toFixed(2)}` : '';
     detail.textContent = `${input?.turns ?? '?'} turn(s)${cost}`;
     el.appendChild(detail);
   }
@@ -591,7 +593,7 @@ function summarizeEvent(ev) {
     return `✓ task_complete: ${ev.task_id}`;
   }
   if (ev.type === 'result') {
-    const cost = ev.total_cost_usd != null ? ` — $${ev.total_cost_usd.toFixed(4)}` : '';
+    const cost = ev.total_cost_usd != null ? ` — $${ev.total_cost_usd.toFixed(2)}` : '';
     return `✅ result: ${ev.num_turns} turn(s)${cost} [${ev.stop_reason}]`;
   }
   if (ev.type === 'assistant') {

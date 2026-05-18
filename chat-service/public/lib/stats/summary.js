@@ -1,6 +1,6 @@
 import {
   el, formatDuration, formatTokens, withBreakdownTooltip, withCostTooltip,
-  tokenBreakdownText, tokensByModelText,
+  tokensByModelTokensText, costByModelText,
 } from '../dom.js';
 
 // Aggregate per-agentType figures across all phases of that agent. Used by
@@ -55,16 +55,17 @@ export function renderSummarySection(data) {
     ? (bk.input || 0) + (bk.cacheCreate || 0) + (bk.output || 0) + (bk.cacheRead || 0)
     : data.summary.tokensTotal;
 
+  const byModel = data.summary.tokensByModel;
+
   const tokensLabel = `🪙 ${formatTokens(grandTotal)} tokens`;
   const tokensSpan = bk
-    ? withBreakdownTooltip(tokensLabel, bk, { totalLabel: 'total' })
+    ? withBreakdownTooltip(tokensLabel, bk, { totalLabel: 'total', tokensByModel: byModel })
     : el('span', null, tokensLabel);
 
-  // Cost tooltip: per-model 4-way breakdown + approximate per-model cost.
+  // Cost tooltip: per-model cost broken down by operation type.
   // Falls through to a plain span when the aggregator didn't produce
   // per-model data (e.g. legacy fixtures).
-  const costLabel = `💵 $${data.summary.costUsd.toFixed(3)}`;
-  const byModel = data.summary.tokensByModel;
+  const costLabel = `💵 $${data.summary.costUsd.toFixed(2)}`;
   const costSpan = (byModel && byModel.length > 0)
     ? withCostTooltip(costLabel, byModel, data.summary.costUsd)
     : el('span', null, costLabel);
@@ -102,20 +103,15 @@ export function renderSummarySection(data) {
         '',
       ];
       if (agg) {
-        const bkSum =
-          agg.tokensBreakdown.input + agg.tokensBreakdown.cacheCreate +
-          agg.tokensBreakdown.output + agg.tokensBreakdown.cacheRead;
-        if (bkSum > 0) {
-          lines.push(tokenBreakdownText(agg.tokensBreakdown, { totalLabel: 'tokens' }));
-          lines.push('');
-        }
         if (agg.tokensByModel.size > 0) {
           const byModelRows = [...agg.tokensByModel].map(([model, v]) => ({
             model, breakdown: v.breakdown, costUsd: v.costUsd,
           })).sort((a, b) => b.costUsd - a.costUsd);
-          lines.push(tokensByModelText(byModelRows, agg.costUsd));
+          lines.push(tokensByModelTokensText(byModelRows));
+          lines.push('');
+          lines.push(costByModelText(byModelRows, agg.costUsd));
         } else if (agg.costUsd > 0) {
-          lines.push(`cost  $${agg.costUsd.toFixed(4)}`);
+          lines.push(`cost  $${agg.costUsd.toFixed(2)}`);
         }
       }
       tip.textContent = lines.join('\n').trimEnd();
