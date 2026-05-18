@@ -261,6 +261,7 @@ async function handleSessionRollbackRequest(req, res, sessionId) {
 }
 
 const ZIP_README = readFileSync(new URL('./download-readme.md', import.meta.url), 'utf8');
+const CREATE_ZIP_PY = new URL('./create-zip.py', import.meta.url).pathname;
 
 function tarCopy(src, dest, excludes = []) {
   return new Promise((resolve, reject) => {
@@ -299,7 +300,7 @@ async function handleDownloadZipRequest(req, res) {
       if (err.code !== 'ENOENT') throw err;
     }
 
-    await execFileAsync('zip', ['-r', zipPath, '.'], { cwd: contentDir });
+    await execFileAsync('python3', [CREATE_ZIP_PY, contentDir, zipPath]);
 
     res.writeHead(200, {
       'Content-Type': 'application/zip',
