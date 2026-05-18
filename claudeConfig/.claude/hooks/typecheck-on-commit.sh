@@ -20,7 +20,11 @@ cd "$REPO" || { echo "[$(date -Iseconds)] typecheck EXIT=0 cd_failed" >> "$LOG";
 # single worktree. Avoids the "shared brakes" issue where one dev's broken
 # state blocks all parallel SendMessages (one bad TASK poisoning N reviewers).
 SESSION_SHORT=$(basename "${CHAT_SESSION_DIR:-}" | cut -d'-' -f1)
-if [ -n "${VALIDATE_WORKTREE:-}" ] && [ -d "$VALIDATE_WORKTREE" ]; then
+if [ "${CLAUDE_ROLLBACK_MODE:-}" = "1" ]; then
+  # Rollback runs in /app directly — no worktree. Validate /app's uncommitted
+  # revert resolution against HEAD.
+  WORKTREES="/app"
+elif [ -n "${VALIDATE_WORKTREE:-}" ] && [ -d "$VALIDATE_WORKTREE" ]; then
   WORKTREES="$VALIDATE_WORKTREE"
 elif [ -n "$SESSION_SHORT" ]; then
   WORKTREES=$(git worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2}' | grep "^/app/worktrees/${SESSION_SHORT}/" || true)

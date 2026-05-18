@@ -109,6 +109,8 @@ if [ ! -f "$INBOX" ]; then
 fi
 
 # Count "merged" / "merge failed" reports from the merger.
+# In rollback mode, the merger reports `ROLLBACK_DONE` / `ROLLBACK_FAILED: ...`
+# instead — also accept those.
 COUNT=$(node -e '
 try {
   const fs = require("fs");
@@ -117,7 +119,11 @@ try {
   for (const entry of (Array.isArray(inbox) ? inbox : [])) {
     if ((entry.from || "") !== "merger") continue;
     const text = (entry.text || entry.message || "").toString();
-    if (/(^|\s)merged\s+TASK-/.test(text) || /merge\s+failed/.test(text) || /TASK-[A-Za-z0-9_-]+\s+merge\s+failed/.test(text)) {
+    if (/(^|\s)merged\s+TASK-/.test(text)
+      || /merge\s+failed/.test(text)
+      || /TASK-[A-Za-z0-9_-]+\s+merge\s+failed/.test(text)
+      || /\bROLLBACK_DONE\b/.test(text)
+      || /\bROLLBACK_FAILED\b/.test(text)) {
       n++;
     }
   }

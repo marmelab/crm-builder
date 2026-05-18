@@ -11,6 +11,13 @@ set -u
 LOG="${CHAT_SESSION_DIR:-/chat-service/logs}/hooks.log"
 mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
 
+# In rollback mode the merger finalises a `git revert` on /app — no worktree
+# to clean up.
+if [ "${CLAUDE_ROLLBACK_MODE:-}" = "1" ]; then
+  echo "[$(date -Iseconds)] cleanup-worktree SKIP rollback mode" >> "$LOG" 2>/dev/null || true
+  exit 0
+fi
+
 SESSION_SHORT=$(basename "${CHAT_SESSION_DIR:-}" | cut -d'-' -f1)
 if [ -z "$SESSION_SHORT" ]; then
   echo "[$(date -Iseconds)] cleanup-worktree SKIP no SESSION_SHORT" >> "$LOG" 2>/dev/null || true

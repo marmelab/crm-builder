@@ -169,48 +169,132 @@ async function captureConflictFiles() {
   }
 }
 
-function buildResolverPrompt({ failedCommit, conflicts, remaining }) {
+function buildOrchestratorPrompt({ failedCommit, conflicts, remaining }) {
   const conflictList = conflicts.length
-    ? conflicts.map((f) => `  - ${f}`).join('\n')
-    : '  (run `git status` to discover them)';
+    ? conflicts.map((f) => `    - ${f}`).join('\n')
+    : '    (run `git status` in /app to discover them)';
   const remainingList = remaining.length
     ? remaining
-        .map((c) => `  - git revert --no-edit ${c.parents.length >= 2 ? '-m 1 ' : ''}${c.sha}    # ${c.subject}`)
+        .map((c) => `    - ${c.parents.length >= 2 ? '-m 1 ' : ''}${c.sha}    # ${c.subject}`)
         .join('\n')
-    : '  (none)';
+    : '    (none)';
+
+  const failedShort = failedCommit.sha.slice(0, 7);
+  const safeSubject = failedCommit.subject.replace(/[`"\\]/g, '');
+
   return [
-    'You are resolving a `git revert` conflict on /app for a CRM rollback.',
+    'You are the team-lead for a CRM rollback conflict resolution. A `git revert` on /app is mid-conflict and you must dispatch a team to finish the rollback.',
     '',
-    `A revert of commit ${failedCommit.sha.slice(0, 7)} ("${failedCommit.subject}") hit a conflict.`,
-    'The working tree at /app is currently in the middle of a revert with conflict markers.',
-    '',
-    'Conflicting files reported by `git status`:',
+    `ROLLBACK CONTEXT:`,
+    `  - Failed commit: ${failedShort} ("${safeSubject}")`,
+    `  - Working tree: /app (REVERT_HEAD is set — a revert is in progress)`,
+    `  - Conflicting files reported by git:`,
     conflictList,
-    '',
-    'What to do (operate ONLY in /app, never in /app/worktrees/):',
-    '1. Resolve every conflict. The intent is to remove the changes introduced by the reverted commit — when in doubt, prefer the "incoming" side of the revert (drop the conflicting additions).',
-    '2. `cd /app && git add -A && git revert --continue --no-edit` to commit the in-progress revert.',
-    '3. Then revert the remaining commits in this order (stop at the first failure you cannot resolve):',
+    `  - Remaining commits to revert (in order, after the in-progress one is finalised):`,
     remainingList,
-    '   If a new conflict appears, repeat steps 1-2 for it.',
-    '4. Never touch worktrees, never use --no-verify.',
-    '5. When everything is reverted, print a SINGLE trailing line: `ROLLBACK_DONE`. On unrecoverable failure, print `ROLLBACK_FAILED: <one-line reason>` and run `git revert --abort` first so the tree is clean.',
+    '',
+    'WORKFLOW — execute exactly this and nothing else:',
+    '',
+    '1. Create the team:',
+    '   TeamCreate({team_name: "rollback", description: "Rollback conflict resolution"})',
+    '',
+    '2. Dispatch the three members in ONE assistant message:',
+    '   Agent({subagent_type: "simple-developer", name: "simple-developer", team_name: "rollback", model: "sonnet",',
+    '          description: "Resolve rollback conflict",',
+    '          prompt: "ROLLBACK_PROMPT_SIMPLE_DEVELOPER (see template below)"})',
+    '   Agent({subagent_type: "quality-reviewer", name: "quality-reviewer", team_name: "rollback", model: "sonnet",',
+    '          description: "Review rollback resolution",',
+    '          prompt: "ROLLBACK_PROMPT_QUALITY_REVIEWER (see template below)"})',
+    '   Agent({subagent_type: "merger", name: "merger", team_name: "rollback", model: "haiku",',
+    '          description: "Finalise rollback reverts",',
+    '          prompt: "ROLLBACK_PROMPT_MERGER (see template below)"})',
+    '',
+    '3. Send GO to simple-developer (one SendMessage in the same turn as step 2 is OK):',
+    `   SendMessage({to: "simple-developer", message: "GO — resolve the rollback conflict. failed_commit=${failedShort}; remaining=${remaining.length}"})`,
+    '',
+    '4. PASSIVE WAIT. Each turn, output one short text line ("Working on rollback...") only if your last message was different. No tool calls.',
+    '   Watch for a SendMessage from `merger` containing either:',
+    '     - `ROLLBACK_DONE` → success, proceed to step 5',
+    '     - `ROLLBACK_FAILED: <reason>` → failure, proceed to step 5',
+    '',
+    '5. TEARDOWN (when merger has reported):',
+    '   SendMessage({to: "simple-developer", message: {type: "shutdown_request"}})',
+    '   SendMessage({to: "quality-reviewer", message: {type: "shutdown_request"}})',
+    '   SendMessage({to: "merger", message: {type: "shutdown_request"}})',
+    '   Then yield (text-only). On next turn, when shutdown_approved arrives: TeamDelete({}).',
+    '',
+    '6. FINAL OUTPUT. After TeamDelete, output a SINGLE final line on stdout, the LAST line you ever produce:',
+    '     - `ROLLBACK_DONE` on success',
+    '     - `ROLLBACK_FAILED: <one-line reason>` on failure',
+    '   (The chat-service parses the last line of your stdout.)',
+    '',
+    '## SPAWN PROMPT TEMPLATES',
+    '',
+    '### ROLLBACK_PROMPT_SIMPLE_DEVELOPER',
+    '```',
+    'ROLE: simple-developer',
+    'MODE: ROLLBACK_CONFLICT',
+    'TEAM: rollback',
+    'WORK_DIR: /app',
+    `FAILED_COMMIT: ${failedShort} ("${safeSubject}")`,
+    `CONFLICT_FILES: ${conflicts.join(', ') || '(see git status)'}`,
+    'COUNTERPARTS:',
+    '  - reviewer: quality-reviewer',
+    '  - merger: merger',
+    'TEAM_LEAD: team-lead',
+    '',
+    'Follow the ROLLBACK_CONFLICT workflow in simple-developer.md. Do NOT call Skill({skill: "agent-team"}).',
+    '```',
+    '',
+    '### ROLLBACK_PROMPT_QUALITY_REVIEWER',
+    '```',
+    'ROLE: quality-reviewer',
+    'MODE: ROLLBACK_CONFLICT',
+    'TEAM: rollback',
+    'WORK_DIR: /app',
+    'COUNTERPART: simple-developer',
+    'TEAM_LEAD: team-lead',
+    '',
+    'Follow the ROLLBACK_CONFLICT workflow in quality-reviewer.md. Do NOT call any tool until simple-developer sends "ready, please review".',
+    '```',
+    '',
+    '### ROLLBACK_PROMPT_MERGER',
+    '```',
+    'ROLE: merger',
+    'MODE: ROLLBACK_CONFLICT',
+    'TEAM: rollback',
+    'WORK_DIR: /app',
+    'REMAINING_REVERTS:',
+    remainingList,
+    'COUNTERPARTS:',
+    '  - developer: simple-developer',
+    'TEAM_LEAD: team-lead',
+    '',
+    'Follow the ROLLBACK_CONFLICT workflow in merger.md. Do NOT call any tool until simple-developer sends a "ready: finalise revert" message.',
+    '```',
   ].join('\n');
 }
 
-function spawnRollbackResolver({ sessionId, failedCommit, conflicts, remaining, alreadyReverted }) {
-  const prompt = buildResolverPrompt({ failedCommit, conflicts, remaining });
+function spawnRollbackTeamLead({ sessionId, sessionDir, failedCommit, conflicts, remaining, alreadyReverted }) {
+  const prompt = buildOrchestratorPrompt({ failedCommit, conflicts, remaining });
   const proc = spawn('claude', [
     '--model', 'claude-sonnet-4-6',
     '--dangerously-skip-permissions',
+    '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
     '-p', prompt,
   ], {
-    env: { ...process.env, HOME: CLAUDE_HOME },
+    env: {
+      ...process.env,
+      HOME: CLAUDE_HOME,
+      CLAUDE_PROJECT_DIR: CWD,
+      CHAT_SESSION_DIR: sessionDir,
+      CLAUDE_ROLLBACK_MODE: '1',
+    },
     cwd: CWD,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   proc.once('error', (e) => {
-    console.error('[rollback-resolver] spawn error:', e.message);
+    console.error('[rollback-team-lead] spawn error:', e.message);
     persistAssistantMessage(sessionId,
       "Something went wrong while undoing your changes. Please try again in a moment.",
       { subtype: 'rollback' },
@@ -224,21 +308,26 @@ function spawnRollbackResolver({ sessionId, failedCommit, conflicts, remaining, 
   proc.stderr.on('data', (d) => { err += d.toString(); });
 
   proc.once('close', async (code) => {
-    const lastLine = out.trim().split('\n').pop()?.trim() || '';
-    const success = code === 0 && /^ROLLBACK_DONE\b/.test(lastLine);
+    // The team-lead emits one final line on stdout — scan from the end for the
+    // most recent ROLLBACK_DONE / ROLLBACK_FAILED marker. Trailing whitespace,
+    // text turns, and stream-json metadata may follow, so don't trust the very
+    // last line blindly.
+    const lines = out.trim().split('\n').reverse();
+    const marker = lines.find((l) => /\bROLLBACK_(DONE|FAILED)\b/.test(l)) || '';
+    const success = code === 0 && /\bROLLBACK_DONE\b/.test(marker);
     let chatMessage;
     if (success) {
       chatMessage = "All changes from this session have been undone.";
     } else {
-      if (lastLine.startsWith('ROLLBACK_FAILED')) {
-        const technical = lastLine.replace(/^ROLLBACK_FAILED:\s*/, '');
-        console.error('[rollback-resolver] reason:', technical);
+      const failMatch = marker.match(/ROLLBACK_FAILED:\s*(.*)$/);
+      if (failMatch) {
+        console.error('[rollback-team-lead] reason:', failMatch[1]);
       }
-      if (err) console.error('[rollback-resolver] stderr:', err.trim());
+      if (err) console.error('[rollback-team-lead] stderr:', err.trim());
       chatMessage = "We couldn't fully undo your changes. Some of them may still be in place — please ask your administrator for help.";
     }
     await persistAssistantMessage(sessionId, chatMessage, { subtype: 'rollback' })
-      .catch((e) => console.warn('[rollback-resolver] persist failed:', e.message));
+      .catch((e) => console.warn('[rollback-team-lead] persist failed:', e.message));
     await setSessionState(sessionId, 'completed');
   });
 }
@@ -275,8 +364,9 @@ export async function handleSessionRollbackRequest(req, res, sessionId) {
         await setSessionState(sessionId, 'in_progress');
         await persistAssistantMessage(sessionId, chatMessage, { subtype: 'rollback' })
           .catch((e) => console.warn('[rollback] persist failed:', e.message));
-        spawnRollbackResolver({
+        spawnRollbackTeamLead({
           sessionId,
+          sessionDir: `${LOG_DIR}/${sessionId}`,
           failedCommit: c,
           conflicts,
           remaining,
