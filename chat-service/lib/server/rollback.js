@@ -193,7 +193,7 @@ function buildResolverPrompt({ failedCommit, conflicts, remaining }) {
     '3. Then revert the remaining commits in this order (stop at the first failure you cannot resolve):',
     remainingList,
     '   If a new conflict appears, repeat steps 1-2 for it.',
-    '4. Never `git push`, never touch worktrees, never use --no-verify.',
+    '4. Never touch worktrees, never use --no-verify.',
     '5. When everything is reverted, print a SINGLE trailing line: `ROLLBACK_DONE`. On unrecoverable failure, print `ROLLBACK_FAILED: <one-line reason>` and run `git revert --abort` first so the tree is clean.',
   ].join('\n');
 }
