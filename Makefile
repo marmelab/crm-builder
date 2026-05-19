@@ -1,7 +1,10 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help build up up-full down wipe restart logs shell test test-unit test-smoke bench bench-update clean-sessions reset \
+.PHONY: help build up up-full down wipe restart logs shell claude test test-unit test-smoke bench bench-update clean-sessions reset \
         start demo full stop kill image log tail bash exec tests smoke clean archive reload
+
+# Detect running container — used by claude/shell targets
+RUNNING_CONTAINER = $$(docker ps --filter "name=atomic-crm-" --filter "status=running" --format "{{.Names}}" | head -1)
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*##"; printf "Usage: make <target>\n\nTargets:\n"} /^[a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -26,8 +29,21 @@ restart: down up ## Restart the demo stack
 logs: ## Tail logs of the running stack
 	docker compose logs -f
 
-shell: ## Open a shell inside the running demo container
-	docker exec -it atomic-crm-demo bash
+shell: ## Open a shell inside the running container (demo or full)
+	@c=$(RUNNING_CONTAINER); \
+	if [ -z "$$c" ]; then \
+		echo "Error: no atomic-crm container running. Run 'make up' first."; \
+		exit 1; \
+	fi; \
+	docker exec -it $$c bash
+
+claude: ## Open Claude inside the running container (also triggers OAuth on first run)
+	@c=$(RUNNING_CONTAINER); \
+	if [ -z "$$c" ]; then \
+		echo "Error: no atomic-crm container running. Run 'make up' in another shell first."; \
+		exit 1; \
+	fi; \
+	docker exec -it -u developer -e HOME=/home/developer -w /app $$c claude --dangerously-skip-permissions
 
 test: ## Run all tests
 	$(MAKE) test-unit test-smoke

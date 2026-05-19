@@ -49,7 +49,7 @@ docker build -t atomic-crm-dev .
 ```bash
 docker run -it --rm \
   -e ANTHROPIC_API_KEY=sk-ant-YOUR_KEY \
-  -p 5173:5173 -p 7681:7681 \
+  -p 5173:5173 -p 8080:8080 \
   atomic-crm-dev
 ```
 
@@ -65,10 +65,16 @@ docker run -it --rm \
 
 ### With docker compose (easier)
 ```bash
-cp .env.example .env    # then fill in ANTHROPIC_API_KEY
+cp .env.example .env    # then fill in ANTHROPIC_API_KEY (optional if you'll
+                        # authenticate via `make claude` instead)
 
-docker compose --profile demo up    # demo mode
-docker compose --profile full up    # full mode
+make up        # demo mode
+make up-full   # full mode
+
+# First-time login (only if you don't have ANTHROPIC_API_KEY set):
+# Run this from another shell — the stack pauses on first boot waiting for
+# credentials, and resumes automatically once login completes.
+make claude         # OAuth flow on first run — copy URL to browser, paste token back
 ```
 
 ### Persist code changes across restarts
@@ -86,20 +92,22 @@ docker compose --profile full up
 
 ## Usage
 
-Once started, open two tabs:
+Once started, open these URLs:
 
 | URL | Content |
 |---|---|
-| `http://localhost:7681` | Claude Code terminal |
 | `http://localhost:5173` | The CRM |
+| `http://localhost:8080` | Chat assistant (the main UI for asking Claude to ship changes) |
 | `http://localhost:54323` | Supabase Dashboard (full mode only) |
 
-In the terminal:
+For a direct, interactive Claude session, run from your host:
 ```bash
-# Start Claude
-claude --dangerously-skip-permissions
+make claude         # opens `claude --dangerously-skip-permissions` in the container
+                    # (also triggers OAuth on first run if ANTHROPIC_API_KEY is unset)
+```
 
-# Switch between modes without restarting the container
+Inside that session you can also switch modes without restarting the container:
+```bash
 switch-mode demo    # → FakeRest
 switch-mode full    # → Supabase
 ```
