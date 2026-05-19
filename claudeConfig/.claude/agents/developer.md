@@ -135,6 +135,21 @@ Treat it as your contract:
 - `false` → do not touch `supabase/migrations/` or
   `supabase/migrations-pending/`.
 
+**View update rule** — when a migration adds or removes a column on a table,
+check `supabase/schemas/03_views.sql` for any view that `SELECT`s from that
+table. If one exists, the migration **must** also recreate it with the new
+column. Use `CREATE OR REPLACE VIEW` and append new columns at the end (Postgres
+forbids inserting them mid-list). Forgetting this is the single most common
+migration bug: the column exists on the base table but is invisible to the app
+because PostgREST queries the view, not the table directly.
+
+```sql
+-- example: adding `importance` to companies requires updating companies_summary
+CREATE OR REPLACE VIEW public.companies_summary AS
+  SELECT c.id, ..., c.nb_deals, c.nb_contacts, c.importance  -- new col at end
+  FROM companies c ...;
+```
+
 If during implementation you discover the planner was wrong (e.g. you can
 implement the change with a JSONB column already present, or conversely
 you realise you DO need a schema change), Edit
