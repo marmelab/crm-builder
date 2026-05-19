@@ -4,7 +4,7 @@
         start demo full stop kill image log tail bash exec tests smoke clean archive reload
 
 # Detect running container — used by claude/shell targets
-RUNNING_CONTAINER = $$(docker ps --filter "name=atomic-crm-" --filter "status=running" --format "{{.Names}}" | head -1)
+RUNNING_CONTAINER = $$(docker ps --filter "name=atomic-crm" --filter "status=running" --format "{{.Names}}" | head -1)
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*##"; printf "Usage: make <target>\n\nTargets:\n"} /^[a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
