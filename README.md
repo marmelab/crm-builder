@@ -80,12 +80,12 @@ make claude         # OAuth flow on first run — copy URL to browser, paste tok
 ### Persist code changes across restarts
 ```bash
 # Stop and restart — keeps your code changes
-docker compose --profile full down
-docker compose --profile full up
+make down
+make up        # or make up-full
 
 # Full reset — deletes volumes (loses code changes)
-docker compose --profile full down -v
-docker compose --profile full up
+make wipe
+make up
 ```
 
 ---
