@@ -122,8 +122,10 @@ Treat it as your contract:
   `supabase/migrations-pending/20260518091200_46bc14c5_TASK-001_add_invoices.sql`.
   `SESSION_SHORT_ID` is the first segment of your worktree path (derive
   it from `WORKTREE_PATH`: `/app/worktrees/46bc14c5/TASK-001` →
-  `46bc14c5`). Use `date -u +%Y%m%d%H%M%S` for the timestamp; replace
-  dashes/spaces in the slug with underscores. The `SESSION_SHORT_ID` in
+  `46bc14c5`). Use `date -u +%Y%m%d%H%M%S` for the timestamp. The
+  `TASK-XXX` segment keeps its hyphen exactly as-is (e.g. `TASK-001`,
+  never `TASK_001`). Only the `<short-slug>` at the end has spaces and
+  dashes replaced with underscores (e.g. `add_priority_column`). The `SESSION_SHORT_ID` in
   the name is what lets the deploy script scope your migration to this
   chat session — without it, another session's refused migration could
   be promoted by mistake. The `migrations-pending/` folder is the
