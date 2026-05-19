@@ -363,6 +363,16 @@ export function switchMode(mode) {
   return true;
 }
 
+// Broadcast a mode change to every connected WebSocket client (all sessions).
+// Does NOT log to session — this is a global UI signal, not a session message.
+function broadcastModeChange(mode, supabaseReady = false) {
+  for (const runtime of runtimes.values()) {
+    for (const client of runtime.clients) {
+      sendToWs(client, { type: 'mode_changed', mode, supabaseReady });
+    }
+  }
+}
+
 async function handleSetMode(req, res) {
   let body;
   try { body = await readJsonBody(req); } catch {
@@ -374,14 +384,40 @@ async function handleSetMode(req, res) {
     res.end(JSON.stringify({ error: 'mode must be demo or full' }));
     return;
   }
+  // Notify other tabs that the mode changed. supabaseReady=false because
+  // switch-mode.sh may still be starting Supabase in the background; those
+  // clients will poll until it becomes ready.
+  broadcastModeChange(mode, false);
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ ok: true, mode }));
+}
+
+// Called by switch-mode.sh at the end of its run (after Supabase is confirmed
+// ready). Updates process.env.MODE and broadcasts with accurate supabaseReady
+// so clients reload the iframe exactly once, when everything is actually up.
+async function handleModeNotify(req, res) {
+  let body;
+  try { body = await readJsonBody(req); } catch {
+    res.writeHead(400); res.end('Bad request'); return;
+  }
+  const { mode } = body;
+  if (mode !== 'demo' && mode !== 'full') {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'mode must be demo or full' }));
+    return;
+  }
+  process.env.MODE = mode;
+  const supabaseReady = mode === 'full' ? await checkSupabaseReady() : false;
+  broadcastModeChange(mode, supabaseReady);
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ ok: true }));
 }
 
 export function createRequestHandler({ publicDir }) {
   return async (req, res) => {
     if (req.url === '/api/mode' && req.method === 'GET') return handleGetMode(req, res);
     if (req.url === '/api/mode' && req.method === 'POST') return handleSetMode(req, res);
+    if (req.url === '/api/mode/notify' && req.method === 'POST') return handleModeNotify(req, res);
 
     if (req.url === '/api/download/zip' && req.method === 'GET') {
       return handleDownloadZipRequest(req, res);

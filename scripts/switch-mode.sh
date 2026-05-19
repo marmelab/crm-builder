@@ -28,6 +28,9 @@ case "$TARGET" in
     cp /app-variants/App.fakerest.tsx "${APP_DIR}/src/App.tsx"
     echo -e "${GREEN}✓  Demo mode — FakeRest${NC}"
     echo "  Data is simulated in the browser and resets on page reload."
+    curl -s -X POST http://localhost:8080/api/mode/notify \
+      -H 'Content-Type: application/json' \
+      -d '{"mode":"demo"}' > /dev/null 2>&1 || true
     ;;
 
   full)
@@ -61,6 +64,12 @@ case "$TARGET" in
       done
       echo -e "${GREEN}✓  Supabase ready (localhost:54321)${NC}"
     fi
+    # Notify the chat-service so it updates process.env.MODE and broadcasts
+    # a mode_changed WebSocket event to all connected browser tabs.
+    # Called after Supabase is confirmed ready so supabaseReady=true in the event.
+    curl -s -X POST http://localhost:8080/api/mode/notify \
+      -H 'Content-Type: application/json' \
+      -d '{"mode":"full"}' > /dev/null 2>&1 || true
     ;;
 
   *)

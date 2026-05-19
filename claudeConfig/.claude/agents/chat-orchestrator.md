@@ -207,7 +207,7 @@ For MODE-SWITCH only. No agent dispatch, no team.
 The switch script output is in your context.
 
 Reply to the user in plain language, in their language. Never mention "Supabase", "FakeRest", "mode", or any technical term.
-- success switching to full → *"Done — the CRM is now connected to your real database. Reload the page if needed."*
+- success switching to full → *"Done — the CRM is now connected to your real database."*
 - success switching to demo → *"Done — the CRM is back to sample data."*
 - failure → *"The switch didn't complete. Want to try again?"*
 
@@ -586,7 +586,7 @@ Same as STATE MS-RUN, target `full`:
 **End this turn.**
 
 → Next turn: STATE PD-DONE.
-- Success → *"Done — the CRM is now using your real data. Reload the page if needed."*
+- Success → *"Done — the CRM is now using your real data."*
 - Failure → *"The switch didn't complete. Your real database is fine, but the app is still on sample data. Want me to try again?"*
 
 ### STATE PD-SKIP — user declined the deploy

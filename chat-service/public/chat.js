@@ -294,6 +294,21 @@ function handleWsMessage(event) {
     return;
   }
 
+  if (msg.type === 'mode_changed') {
+    const prevMode = modeToggleBtn.dataset.mode || 'demo';
+    const prevStarting = modeToggleBtn.classList.contains('mode-starting');
+    updateModeBtn(msg.mode, msg.supabaseReady ?? false);
+    // Reload the CRM iframe when the mode actually changes, or when Supabase
+    // transitions from starting to ready (so the app connects with a live DB).
+    const modeChanged = msg.mode !== prevMode;
+    const justReady = msg.mode === 'full' && prevStarting && (msg.supabaseReady ?? false);
+    if (modeChanged || justReady) {
+      const frame = document.getElementById('crm-frame');
+      if (frame) frame.src = frame.src;
+    }
+    return;
+  }
+
   if (msg.type === 'stats') {
     const agents = msg.activeAgents || 0;
     const agentsPart = agents > 0 ? `🤖 ${agents} · ` : '';
