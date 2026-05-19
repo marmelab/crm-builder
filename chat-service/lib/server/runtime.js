@@ -1,4 +1,7 @@
+import { appendFile, stat } from 'node:fs/promises';
+import { LOG_DIR } from './config.js';
 import { sendToWs, broadcast } from './ws-bus.js';
+import { patchSession } from './session-store.js';
 import { emptyBreakdown } from '../stats/io.js';
 
 // One runtime per open session. Multiple WebSockets (tabs, reconnects
@@ -72,4 +75,38 @@ export async function transitionState(runtime, newState) {
   if (!runtime?.session) return;
   const changed = await runtime.session.setState(newState).catch(() => false);
   if (changed) broadcast(runtime, { type: 'state', state: newState });
+}
+
+// Resilient state setter for callers that may not have a runtime in hand
+// (HTTP routes, background tasks): broadcasts via runtime when one is active
+// so every open tab sees the badge change live, otherwise writes meta.json
+// directly so a later reconnect picks up the correct state.
+export async function setSessionState(sessionId, state) {
+  const runtime = runtimes.get(sessionId);
+  if (runtime?.session) {
+    await transitionState(runtime, state);
+    return;
+  }
+  await patchSession(sessionId, { state }).catch((e) => {
+    console.warn('[runtime] patchSession failed:', e.message);
+  });
+}
+
+// Resilient assistant-message writer mirroring setSessionState: broadcast via
+// runtime when present (so every tab sees it immediately), otherwise append
+// directly to the session's log.jsonl. Skips silently if the session log
+// doesn't exist (don't materialise a stray folder for an invalid id).
+export async function persistAssistantMessage(sessionId, content, { subtype } = {}) {
+  const payload = { type: 'message', role: 'assistant', content, ts: new Date().toISOString() };
+  if (subtype) payload.subtype = subtype;
+  const runtime = runtimes.get(sessionId);
+  if (runtime?.session) {
+    broadcast(runtime, payload);
+    await runtime.session.recordMessage('assistant', content);
+    return;
+  }
+  const logPath = `${LOG_DIR}/${sessionId}/log.jsonl`;
+  try { await stat(logPath); } catch { return; }
+  const entry = { ts: new Date().toISOString(), dir: 'out', ...payload };
+  await appendFile(logPath, JSON.stringify(entry) + '\n');
 }

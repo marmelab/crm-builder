@@ -1,10 +1,9 @@
-import { readFile, appendFile, stat, mkdir, rm } from 'node:fs/promises';
+import { readFile, stat, mkdir, rm } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { CWD, LOG_DIR, UUID_RE } from './config.js';
-import { runtimes, createRuntime, transitionState } from './runtime.js';
-import { broadcast } from './ws-bus.js';
-import { openSession, patchSession } from './session-store.js';
+import { runtimes, createRuntime, setSessionState, persistAssistantMessage } from './runtime.js';
+import { openSession } from './session-store.js';
 import { processMessage } from './turn.js';
 
 const execFileAsync = promisify(execFile);
@@ -21,39 +20,6 @@ const parseCommitLog = (out) => out.split('\n').filter(Boolean).map((line) => {
   const [sha, parents, subject, date] = line.split('\t');
   return { sha, parents: parents ? parents.split(' ') : [], subject, date };
 });
-
-// Set session state — broadcasts via runtime if one is active (so every open
-// tab sees the status badge change live), otherwise writes meta.json directly
-// so a later reconnect picks up the correct state.
-async function setSessionState(sessionId, state) {
-  const runtime = runtimes.get(sessionId);
-  if (runtime?.session) {
-    await transitionState(runtime, state);
-    return;
-  }
-  await patchSession(sessionId, { state }).catch((e) => {
-    console.warn('[rollback] patchSession failed:', e.message);
-  });
-}
-
-async function persistAssistantMessage(sessionId, content, { subtype } = {}) {
-  const payload = { type: 'message', role: 'assistant', content, ts: new Date().toISOString() };
-  if (subtype) payload.subtype = subtype;
-  // Live runtime path — broadcast() handles WS fan-out + logWrite, so every
-  // tab connected to this session sees the message immediately.
-  const runtime = runtimes.get(sessionId);
-  if (runtime?.session) {
-    broadcast(runtime, payload);
-    await runtime.session.recordMessage('assistant', content);
-    return;
-  }
-  // No active runtime — append directly. Skip if the log doesn't exist
-  // (don't materialise a stray session folder for an invalid id).
-  const logPath = `${LOG_DIR}/${sessionId}/log.jsonl`;
-  try { await stat(logPath); } catch { return; }
-  const entry = { ts: new Date().toISOString(), dir: 'out', ...payload };
-  await appendFile(logPath, JSON.stringify(entry) + '\n');
-}
 
 async function findRevertedFullShas() {
   // `git revert` writes a commit with body `This reverts commit <full sha>.`.
