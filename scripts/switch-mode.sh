@@ -50,7 +50,7 @@ case "$TARGET" in
       echo ""
       echo -e "${BOLD}Starting Supabase...${NC}"
       echo -e "${YELLOW}(First run: ~2 min to pull images)${NC}"
-      (cd "${APP_DIR}" && npx supabase start 2>&1 | grep -E "✓|✗|Error|Started|API URL") || true
+      (cd "${APP_DIR}" && supabase start 2>&1 | grep -E "✓|✗|Error|Started|API URL") || true
 
       echo -e "${BOLD}Waiting for Supabase API (localhost:54321)...${NC}"
       RETRIES=120

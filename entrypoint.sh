@@ -263,7 +263,7 @@ if [ "$MODE" = "full" ]; then
   echo ""
   echo -e "${BOLD}Starting Supabase...${NC}"
   echo -e "${YELLOW}(First run: ~2 min to pull images)${NC}"
-  npx supabase start 2>&1 | grep -E "✓|✗|Error|Started|API URL" || true
+  supabase start 2>&1 | grep -E "✓|✗|Error|Started|API URL" || true
 
   echo -e "${BOLD}Waiting for Supabase API (localhost:54321)...${NC}"
   RETRIES=60
@@ -313,21 +313,13 @@ echo -e "${YELLOW}  make claude                                          ${NC}"
 echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 
-# ── Pre-warm Supabase once Vite is ready (no resource contention at cold start) ─
-if [ -S /var/run/docker.sock ]; then
-  (
-    until curl -s --max-time 2 -o /dev/null http://localhost:5173; do sleep 3; done
-    cd /app && npx supabase start > /var/log/supabase-prewarm.log 2>&1
-  ) &
-fi
-
 # ── Graceful shutdown: stop Supabase before supervisord exits ─────────────────
 # exec would replace this bash process, losing the trap. Run supervisord in the
 # background instead and wait — SIGTERM from `compose down` is caught here.
 _stop() {
   if [ "$MODE" = "full" ]; then
     echo -e "${YELLOW}Stopping Supabase before shutdown...${NC}"
-    npx supabase stop --no-backup 2>/dev/null || true
+    supabase stop --no-backup 2>/dev/null || true
   fi
   kill "$SUPERVISOR_PID" 2>/dev/null || true
 }
