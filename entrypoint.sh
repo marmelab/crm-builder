@@ -311,4 +311,18 @@ if [ -S /var/run/docker.sock ]; then
   ) &
 fi
 
-exec /usr/bin/supervisord -n -c /etc/supervisor/conf.d/supervisord.conf
+# ── Graceful shutdown: stop Supabase before supervisord exits ─────────────────
+# exec would replace this bash process, losing the trap. Run supervisord in the
+# background instead and wait — SIGTERM from `compose down` is caught here.
+_stop() {
+  if [ "$MODE" = "full" ]; then
+    echo -e "${YELLOW}Stopping Supabase before shutdown...${NC}"
+    npx supabase stop --no-backup 2>/dev/null || true
+  fi
+  kill "$SUPERVISOR_PID" 2>/dev/null || true
+}
+trap _stop TERM INT
+
+/usr/bin/supervisord -n -c /etc/supervisor/conf.d/supervisord.conf &
+SUPERVISOR_PID=$!
+wait $SUPERVISOR_PID
