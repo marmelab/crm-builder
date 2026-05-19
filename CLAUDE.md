@@ -7,9 +7,11 @@ Dockerised sandbox: non-technical users describe CRM changes in chat → agent t
 ```
 supervisord (pid 1)
   ├─ crm-frontend   :5173  (Vite, /app/src)
-  ├─ ttyd           :7681  (web terminal → claude CLI)
   └─ chat-service   :8080  (WebSocket + spawn claude -p)
 ```
+
+For a direct REPL into claude CLI, use `make claude` from the host —
+it `docker exec`s as the `developer` user. First run triggers OAuth automatically.
 
 Two compose profiles: `demo` (FakeRest) and `full` (Supabase, needs Docker socket).
 
@@ -76,7 +78,7 @@ Hot-reload bind-mounts (dev only, remove before release): `claudeConfig/.claude`
 ## Conventions
 
 - **Language**: code, prompts, commits → English. Conversation with maintainer → French.
-- **Ports hardcoded**: 5173 / 7681 / 8080 / 54321 / 54323. Don't parametrise.
+- **Ports hardcoded**: 5173 / 8080 / 54321 / 54323. Don't parametrise.
 - **No secrets in git**. `ANTHROPIC_API_KEY` in `.env` (gitignored).
 - **Chat-service imports**: `node:` prefix for `lib/*.js`; bare in `server.js` — don't harmonise.
 - **Opus only for architect + developer**. Everything else sonnet or haiku.
