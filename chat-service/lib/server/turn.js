@@ -32,7 +32,9 @@ export async function processMessage(runtime, prompt) {
   let lastAssistantText = '';
   let exitCode = null;
   try {
-    const proc = spawnClaude(prompt, runtime.claudeSessionId, `${LOG_DIR}/${runtime.session.id}`);
+    const proc = spawnClaude(prompt, runtime.claudeSessionId, `${LOG_DIR}/${runtime.session.id}`, {
+      rollbackInProgress: !!runtime.session?.meta?.rollbackInProgress,
+    });
     runtime.currentProc = proc; // expose for the stop handler
     let stderrBuf = '';
     // Prevent unhandled 'error' from crashing the process (e.g. claude binary missing).

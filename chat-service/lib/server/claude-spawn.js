@@ -36,7 +36,7 @@ export function rewriteUserMessage(userMessage) {
   return userMessage;
 }
 
-export function spawnClaude(userMessage, claudeSessionId, sessionDir) {
+export function spawnClaude(userMessage, claudeSessionId, sessionDir, { rollbackInProgress = false } = {}) {
   const mode = process.env.MODE || 'demo';
   const env = `<mode>${mode}</mode>\n<session_dir>${sessionDir}</session_dir>`;
   const systemPrompt = getSystemPrompt();
@@ -56,14 +56,20 @@ export function spawnClaude(userMessage, claudeSessionId, sessionDir) {
   if (orchestratorModel) args.push('--model', orchestratorModel);
   if (claudeSessionId) args.push('--resume', claudeSessionId);
   args.push('-p', prompt);
+  const baseEnv = {
+    ...process.env,
+    HOME: CLAUDE_HOME,
+    CLAUDE_PROJECT_DIR: CWD,
+    CHAT_SESSION_DIR: sessionDir,
+    MODE: mode,
+  };
+  // Propagated to every PreToolUse / SubagentStart / SubagentStop hook (and
+  // every Agent the orchestrator spawns inherits it). Tracks the rollback
+  // handoff across multiple turns — set when the HTTP /rollback route hands
+  // off, cleared on the next fresh user message.
+  if (rollbackInProgress) baseEnv.CLAUDE_ROLLBACK_MODE = '1';
   return spawn('claude', args, {
-    env: buildSpawnEnv({
-      ...process.env,
-      HOME: CLAUDE_HOME,
-      CLAUDE_PROJECT_DIR: CWD,
-      CHAT_SESSION_DIR: sessionDir,
-      MODE: mode,
-    }, claudeSessionId),
+    env: buildSpawnEnv(baseEnv, claudeSessionId),
     cwd: CWD,
     stdio: ['ignore', 'pipe', 'pipe'],
   });

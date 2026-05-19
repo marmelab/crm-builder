@@ -44,6 +44,7 @@ Check in this order — first match wins:
 
 | Category | When | Path |
 |---|---|---|
+| **ROLLBACK** | The user turn contains `<intent>rollback-conflict</intent>` — injected by the chat-service when its automatic `git revert` hit a merge conflict and needs a team to finish. Never typed by a human; never appears mid-conversation otherwise. | STATE R-DISPATCH → STATE R-WAIT → STATE R-TEARDOWN → STATE R-DONE |
 | **SETUP** | The first user turn contains `<intent>setup</intent>` (the chat UI's "Define your business" button), OR a clear natural-language signal in any language meaning "set up my CRM" / "start from scratch" / "define my business". | STATE SETUP-INTERVIEW → STATE SETUP-PLAN → then STATE B → C → D |
 | **MEMORY** | user asks to remember a way of doing something or document a recurring friction (*"remember this"*, *"document this behavior"*, *"turn this into a rule"*) — no code change | STATE M-DOC → STATE M-DONE (documentator only, no team) |
 | **SIMPLE** | 1 cosmetic change, single file, no logic, no tests (label rename, color change, hide button, copy edit) | STATE S-DEV → STATE S-MERGE → STATE S-DONE (dev + merger, no team) |
@@ -86,6 +87,9 @@ SIMPLE:   STATE S-DEV (turn N)    →  STATE S-MERGE (turn N+1)
 COMPLEX:  STATE A (turn N)         →  STATE B (turn N+1)
                                    →  STATE C (turns N+2..N+M)
                                    →  STATE D (turn N+M+1)
+ROLLBACK: STATE R-DISPATCH (turn N) →  STATE R-WAIT (turns N+1..N+K)
+                                    →  STATE R-TEARDOWN (turn N+K+1)
+                                    →  STATE R-DONE
 ```
 
 **Do not skip states. Do not combine states.**
@@ -390,6 +394,130 @@ Once `TeamDelete` has been called, you are in STATE DONE. **Do not call `TeamDel
 Any further incoming messages (late `shutdown_approved`, residual agent notifications) are silently ignored — output nothing, call no tools.
 
 If planner produced wave 2: restart from STATE A (do not enter STATE DONE yet).
+
+---
+
+### STATE R-DISPATCH — ROLLBACK dispatch (ONE assistant message)
+
+For ROLLBACK only. The incoming user turn looks like:
+
+```
+<intent>rollback-conflict</intent>
+FAILED_COMMIT: <short> ("<subject>")
+CONFLICT_FILES:
+  - <path>
+  - ...
+REMAINING_REVERTS:
+  - [-m 1 ] <sha>    # <subject>
+  - ...
+  (or "(none)")
+```
+
+No planner, no worktree — `simple-developer`, `quality-reviewer`, and `merger` resolve the conflict directly in `/app` (a `git revert` is mid-flight; `/app/.git/REVERT_HEAD` is set). Their `ROLLBACK_CONFLICT` workflows live in their own agent files; you only dispatch them and act as `team-lead`.
+
+**ONE assistant message. Do exactly this and nothing else:**
+
+1. `TeamCreate({team_name: "rollback", description: "Rollback conflict resolution"})`
+2. Dispatch the three bare members (no TASK suffix):
+   ```
+   Agent({subagent_type: "simple-developer", name: "simple-developer", team_name: "rollback", model: "sonnet",
+          description: "Resolve rollback conflict",
+          prompt: "<see SIMPLE-DEVELOPER frame below>"})
+   Agent({subagent_type: "quality-reviewer", name: "quality-reviewer", team_name: "rollback", model: "sonnet",
+          description: "Review rollback resolution",
+          prompt: "<see QUALITY-REVIEWER frame below>"})
+   Agent({subagent_type: "merger", name: "merger", team_name: "rollback", model: "haiku",
+          description: "Finalise rollback reverts",
+          prompt: "<see MERGER frame below>"})
+   ```
+3. `SendMessage({to: "simple-developer", message: "GO — resolve the rollback conflict. failed_commit=<short>; remaining=<N>"})`
+4. One text line in the user's language: *"Working on the rollback..."*
+
+**End this turn.**
+
+→ Enter STATE R-WAIT on next turn.
+
+#### Spawn prompt frames
+
+Copy `FAILED_COMMIT`, `CONFLICT_FILES`, `REMAINING_REVERTS` verbatim from the user turn.
+
+**simple-developer**
+```
+ROLE: simple-developer
+MODE: ROLLBACK_CONFLICT
+TEAM: rollback
+WORK_DIR: /app
+FAILED_COMMIT: <short> ("<subject>")
+CONFLICT_FILES: <comma-separated, or "(see git status)">
+COUNTERPARTS:
+  - reviewer: quality-reviewer
+  - merger: merger
+TEAM_LEAD: team-lead
+
+Follow the ROLLBACK_CONFLICT workflow in simple-developer.md. Do NOT call Skill({skill: "agent-team"}).
+```
+
+**quality-reviewer**
+```
+ROLE: quality-reviewer
+MODE: ROLLBACK_CONFLICT
+TEAM: rollback
+WORK_DIR: /app
+COUNTERPART: simple-developer
+TEAM_LEAD: team-lead
+
+Follow the ROLLBACK_CONFLICT workflow in quality-reviewer.md. Do NOT call any tool until simple-developer sends "ready, please review".
+```
+
+**merger**
+```
+ROLE: merger
+MODE: ROLLBACK_CONFLICT
+TEAM: rollback
+WORK_DIR: /app
+REMAINING_REVERTS:
+  - [-m 1 ] <sha>    # <subject>
+  - ...
+COUNTERPARTS:
+  - developer: simple-developer
+TEAM_LEAD: team-lead
+
+Follow the ROLLBACK_CONFLICT workflow in merger.md. Do NOT call any tool until simple-developer sends a "ready: finalise revert" message.
+```
+
+---
+
+### STATE R-WAIT — ROLLBACK passive wait (text-only turns)
+
+Wait for a `<teammate-message>` from `merger` containing `ROLLBACK_DONE` or `ROLLBACK_FAILED: <reason>`.
+
+**No tool calls.** Each turn, emit one short text line in the user's language only if it would differ from your last visible message (e.g. *"Still working on the rollback..."*). Otherwise stay silent. Never expose internal events — same translation rules as STATE C.
+
+When the merger reports → STATE R-TEARDOWN.
+
+---
+
+### STATE R-TEARDOWN — ROLLBACK teardown (ONE assistant message)
+
+**ONE assistant message. Do exactly this and nothing else:**
+
+1. Three `SendMessage({type: "shutdown_request"})` — to `simple-developer`, `quality-reviewer`, `merger`.
+2. One text line: *"Wrapping up..."*
+
+**End this turn.**
+
+On the **first** turn where `shutdown_approved` arrives (or after a 60s timeout):
+1. `TeamDelete({})` — once.
+2. Reply to the user in their language, one short line:
+   - On `ROLLBACK_DONE` → *"All changes from this session have been undone."*
+   - On `ROLLBACK_FAILED: ...` → *"We couldn't fully undo your changes. Some of them may still be in place — please ask your administrator for help."*
+3. Enter STATE R-DONE.
+
+---
+
+### STATE R-DONE — terminal
+
+Same rules as STATE DONE. Do not re-call `TeamDelete`. Ignore residual notifications.
 
 ---
 
