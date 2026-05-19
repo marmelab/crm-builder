@@ -60,14 +60,9 @@ fi
 #     sets agent_type to the FULL agent name including the TASK suffix, e.g.
 #     "developer-TASK-001". Match with "developer|developer-*" to cover both
 #     the bare subagent_type and the suffixed in_process_teammate form.
-#  3. In rollback mode the caller is the bare "simple-developer" — treat it
-#     as a developer so the validation chain runs against /app.
 CALLER_IS_DEVELOPER=0
 case "${CLAUDE_AGENT_NAME:-}" in
   developer-*) CALLER_IS_DEVELOPER=1 ;;
-  simple-developer)
-    if [ "${CLAUDE_ROLLBACK_MODE:-}" = "1" ]; then CALLER_IS_DEVELOPER=1; fi
-    ;;
 esac
 _AGENT_TYPE=$(node -e '
 try {
@@ -85,9 +80,6 @@ echo "[$(date -Iseconds)] validate-before-review INVOKE agent_env='${CLAUDE_AGEN
 if [ "$CALLER_IS_DEVELOPER" = "0" ]; then
   case "$_AGENT_TYPE" in
     developer|developer-*) CALLER_IS_DEVELOPER=1 ;;
-    simple-developer)
-      if [ "${CLAUDE_ROLLBACK_MODE:-}" = "1" ]; then CALLER_IS_DEVELOPER=1; fi
-      ;;
   esac
 fi
 if [ "$CALLER_IS_DEVELOPER" = "0" ]; then
@@ -108,7 +100,7 @@ else
 fi
 
 case "$TO" in
-  quality-reviewer-*|test-validator-*|merger-*|merger|quality-reviewer|quality-reviewer@*|test-validator@*|merger@*)
+  quality-reviewer-*|test-validator-*|merger-*|merger|quality-reviewer@*|test-validator@*|merger@*)
     : # gate enabled
     ;;
   *)
@@ -127,46 +119,6 @@ try {
 } catch { process.stdout.write(""); }
 ' "$STDIN" 2>/dev/null || echo "")
 if echo "$MSG_BODY" | grep -q "shutdown_request"; then
-  exit 0
-fi
-
-# Rollback mode: bypass TASK_ID lookup + two-reviewer gate. Validate /app
-# (where the in-progress revert lives) and exit early — flags and the
-# "notify both reviewers before merger" rule are tickets-flow specific.
-if [ "${CLAUDE_ROLLBACK_MODE:-}" = "1" ]; then
-  export VALIDATE_WORKTREE="/app"
-  _LOG_WT="/app"
-  echo "[$(date -Iseconds)] validate-before-review ROLLBACK to=$TO wt=/app" >> "$LOG" 2>/dev/null || true
-
-  case "${VALIDATE_DRY_RUN:-}" in
-    1) exit 0 ;;
-    fail) echo "Validation failed (simulated)." >&2; exit 2 ;;
-  esac
-
-  HOOK_DIR="$(dirname "$0")"
-  SCRIPTS=(
-    typecheck-on-commit.sh
-    prettier-on-stop.sh
-    run-unit-tests-app.sh
-    run-unit-tests-functions.sh
-    run-e2e-tests.sh
-  )
-  for script in "${SCRIPTS[@]}"; do
-    full="$HOOK_DIR/$script"
-    [ -x "$full" ] || continue
-    EMPTY_STDIN='{"hook_event_name":"PreToolUse_SendMessage","matcher":"SendMessage"}'
-    if echo "$EMPTY_STDIN" | "$full" >/tmp/validate-stderr-$$.log 2>&1; then
-      echo "[$(date -Iseconds)] validate-before-review ROLLBACK $script OK" >> "$LOG" 2>/dev/null || true
-    else
-      EXIT=$?
-      echo "[$(date -Iseconds)] validate-before-review ROLLBACK $script FAILED exit=$EXIT" >> "$LOG" 2>/dev/null || true
-      cat /tmp/validate-stderr-$$.log >&2
-      rm -f /tmp/validate-stderr-$$.log
-      exit 2
-    fi
-    rm -f /tmp/validate-stderr-$$.log
-  done
-  echo "[$(date -Iseconds)] validate-before-review ROLLBACK ALL OK to=$TO" >> "$LOG" 2>/dev/null || true
   exit 0
 fi
 

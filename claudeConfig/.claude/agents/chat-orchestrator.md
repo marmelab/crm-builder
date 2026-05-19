@@ -403,6 +403,8 @@ For ROLLBACK only. The incoming user turn looks like:
 
 ```
 <intent>rollback-conflict</intent>
+WORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>
+BRANCH_NAME: rollback/<SESSION_SHORT_ID>
 FAILED_COMMIT: <short> ("<subject>")
 CONFLICT_FILES:
   - <path>
@@ -413,24 +415,28 @@ REMAINING_REVERTS:
   (or "(none)")
 ```
 
-No planner, no worktree — `simple-developer`, `quality-reviewer`, and `merger` resolve the conflict directly in `/app` (a `git revert` is mid-flight; `/app/.git/REVERT_HEAD` is set). Their `ROLLBACK_CONFLICT` workflows live in their own agent files; you only dispatch them and act as `team-lead`.
+Copy `WORKTREE_PATH`, `BRANCH_NAME`, `FAILED_COMMIT`, `CONFLICT_FILES`, `REMAINING_REVERTS` **verbatim** from the user turn into each spawn frame below. Do not recompute `WORKTREE_PATH` or `BRANCH_NAME` from `SESSION_SHORT_ID` — chat-service already created the worktree at this path and the `git revert` is mid-flight inside it.
+
+No planner — `rollback-developer`, `rollback-reviewer`, and `rollback-merger` resolve the conflict inside the dedicated rollback worktree at `/app/worktrees/<SESSION_SHORT_ID>`, where the chat-service kicked off the `git revert` (in-progress revert state lives inside that worktree's `.git/`). Their `ROLLBACK_CONFLICT` workflows live in their own agent files; you only dispatch them and act as `team-lead`.
+
+**Why these specific names**: the `simple-developer|developer`, `quality-reviewer*`, `test-validator*`, and `merger*` patterns trigger session-wide hooks (`setup-worktree`, `member-idle-gate`, `validate-before-review`, `cleanup-worktree`, etc.) that are wired for the ticket-flow and would mis-fire in rollback context (no `TASK-XXX`, no two-reviewer gate, worktree pre-created by chat-service). Using `rollback-*` names dodges every matcher; only the SubagentStop hooks on `simple-developer` / `merger` (matched by `subagent_type`) still fire — and those run the validation chain on the rollback worktree, which is exactly what we want.
 
 **ONE assistant message. Do exactly this and nothing else:**
 
 1. `TeamCreate({team_name: "rollback", description: "Rollback conflict resolution"})`
-2. Dispatch the three bare members (no TASK suffix):
+2. Dispatch the three rollback-prefixed members:
    ```
-   Agent({subagent_type: "simple-developer", name: "simple-developer", team_name: "rollback", model: "sonnet",
+   Agent({subagent_type: "simple-developer", name: "rollback-developer", team_name: "rollback", model: "sonnet",
           description: "Resolve rollback conflict",
-          prompt: "<see SIMPLE-DEVELOPER frame below>"})
-   Agent({subagent_type: "quality-reviewer", name: "quality-reviewer", team_name: "rollback", model: "sonnet",
+          prompt: "<see ROLLBACK-DEVELOPER frame below>"})
+   Agent({subagent_type: "quality-reviewer", name: "rollback-reviewer", team_name: "rollback", model: "sonnet",
           description: "Review rollback resolution",
-          prompt: "<see QUALITY-REVIEWER frame below>"})
-   Agent({subagent_type: "merger", name: "merger", team_name: "rollback", model: "haiku",
+          prompt: "<see ROLLBACK-REVIEWER frame below>"})
+   Agent({subagent_type: "merger", name: "rollback-merger", team_name: "rollback", model: "haiku",
           description: "Finalise rollback reverts",
-          prompt: "<see MERGER frame below>"})
+          prompt: "<see ROLLBACK-MERGER frame below>"})
    ```
-3. `SendMessage({to: "simple-developer", message: "GO — resolve the rollback conflict. failed_commit=<short>; remaining=<N>"})`
+3. `SendMessage({to: "rollback-developer", message: "GO — resolve the rollback conflict. failed_commit=<short>; remaining=<N>"})`
 4. One text line in the user's language: *"Working on the rollback..."*
 
 **End this turn.**
@@ -439,57 +445,59 @@ No planner, no worktree — `simple-developer`, `quality-reviewer`, and `merger`
 
 #### Spawn prompt frames
 
-Copy `FAILED_COMMIT`, `CONFLICT_FILES`, `REMAINING_REVERTS` verbatim from the user turn.
+Substitute `<WORKTREE_PATH>`, `<BRANCH_NAME>`, and the three commit-list fields with the literal values from the synthetic user turn.
 
-**simple-developer**
+**rollback-developer** (subagent_type: simple-developer)
 ```
 ROLE: simple-developer
 MODE: ROLLBACK_CONFLICT
 TEAM: rollback
-WORK_DIR: /app
+WORKTREE_PATH: <WORKTREE_PATH from user turn>
+BRANCH_NAME: <BRANCH_NAME from user turn>
 FAILED_COMMIT: <short> ("<subject>")
 CONFLICT_FILES: <comma-separated, or "(see git status)">
 COUNTERPARTS:
-  - reviewer: quality-reviewer
-  - merger: merger
+  - reviewer: rollback-reviewer
+  - merger: rollback-merger
 TEAM_LEAD: team-lead
 
 Follow the ROLLBACK_CONFLICT workflow in simple-developer.md. Do NOT call Skill({skill: "agent-team"}).
 ```
 
-**quality-reviewer**
+**rollback-reviewer** (subagent_type: quality-reviewer)
 ```
 ROLE: quality-reviewer
 MODE: ROLLBACK_CONFLICT
 TEAM: rollback
-WORK_DIR: /app
-COUNTERPART: simple-developer
+WORKTREE_PATH: <WORKTREE_PATH from user turn>
+COUNTERPART: rollback-developer
 TEAM_LEAD: team-lead
 
-Follow the ROLLBACK_CONFLICT workflow in quality-reviewer.md. Do NOT call any tool until simple-developer sends "ready, please review".
+Follow the ROLLBACK_CONFLICT workflow in quality-reviewer.md. Do NOT call any tool until rollback-developer sends "ready, please review".
 ```
 
-**merger**
+**rollback-merger** (subagent_type: merger)
 ```
 ROLE: merger
 MODE: ROLLBACK_CONFLICT
 TEAM: rollback
-WORK_DIR: /app
+WORKTREE_PATH: <WORKTREE_PATH from user turn>
+BRANCH_NAME: <BRANCH_NAME from user turn>
 REMAINING_REVERTS:
   - [-m 1 ] <sha>    # <subject>
   - ...
 COUNTERPARTS:
-  - developer: simple-developer
+  - developer: rollback-developer
 TEAM_LEAD: team-lead
 
-Follow the ROLLBACK_CONFLICT workflow in merger.md. Do NOT call any tool until simple-developer sends a "ready: finalise revert" message.
+Follow the ROLLBACK_CONFLICT workflow in merger.md. Do NOT call any tool until rollback-developer sends a "ready: finalise revert" message.
 ```
 
 ---
 
 ### STATE R-WAIT — ROLLBACK passive wait (text-only turns)
 
-Wait for a `<teammate-message>` from `merger` containing `ROLLBACK_DONE` or `ROLLBACK_FAILED: <reason>`.
+Wait for a `<teammate-message>` from `rollback-merger` containing either `merged TASK-rollback` (success) or `rollback merge failed: <reason>` (failure). These two patterns are recognised by `block-premature-shutdowns.sh` (regexes `merged\s+TASK-` and `merge\s+failed`) so the orchestrator can teardown cleanly.
 
 **No tool calls.** Each turn, emit one short text line in the user's language only if it would differ from your last visible message (e.g. *"Still working on the rollback..."*). Otherwise stay silent. Never expose internal events — same translation rules as STATE C.
 
@@ -501,7 +509,7 @@ When the merger reports → STATE R-TEARDOWN.
 
 **ONE assistant message. Do exactly this and nothing else:**
 
-1. Three `SendMessage({type: "shutdown_request"})` — to `simple-developer`, `quality-reviewer`, `merger`.
+1. Three `SendMessage({type: "shutdown_request"})` — to `rollback-developer`, `rollback-reviewer`, `rollback-merger`.
 2. One text line: *"Wrapping up..."*
 
 **End this turn.**
@@ -509,8 +517,8 @@ When the merger reports → STATE R-TEARDOWN.
 On the **first** turn where `shutdown_approved` arrives (or after a 60s timeout):
 1. `TeamDelete({})` — once.
 2. Reply to the user in their language, one short line:
-   - On `ROLLBACK_DONE` → *"All changes from this session have been undone."*
-   - On `ROLLBACK_FAILED: ...` → *"We couldn't fully undo your changes. Some of them may still be in place — please ask your administrator for help."*
+   - On `merged TASK-rollback` → *"All changes from this session have been undone."*
+   - On `rollback merge failed: ...` → *"We couldn't fully undo your changes. Some of them may still be in place — please ask your administrator for help."*
 3. Enter STATE R-DONE.
 
 ---

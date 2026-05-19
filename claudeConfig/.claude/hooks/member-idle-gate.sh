@@ -38,15 +38,6 @@ set -u
 LOG="${CHAT_SESSION_DIR:-/chat-service/logs}/hooks.log"
 mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
 
-# In rollback mode the team is a 3-member rollback team with bare names
-# (simple-developer / quality-reviewer / merger) and no TASK_ID. The natural
-# SendMessage handoff (dev → reviewer → merger) provides the sync — no need
-# for the flag-based gate.
-if [ "${CLAUDE_ROLLBACK_MODE:-}" = "1" ]; then
-  echo "[$(date -Iseconds)] member-idle-gate SKIP rollback mode" >> "$LOG" 2>/dev/null || true
-  exit 0
-fi
-
 STDIN=$(cat)
 
 # Determine agent identity. Prefer CLAUDE_AGENT_NAME (full suffixed name) when set.

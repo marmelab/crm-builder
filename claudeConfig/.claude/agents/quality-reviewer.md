@@ -215,29 +215,29 @@ On CRITICAL vulnerability: alert team-lead immediately, provide secure code exam
 
 ## ROLLBACK_CONFLICT mode
 
-When your spawn prompt contains `MODE: ROLLBACK_CONFLICT` you are a member of the `rollback` team, reviewing a `git revert` conflict resolution produced by `simple-developer` directly in `/app` (not a worktree).
+When your spawn prompt contains `MODE: ROLLBACK_CONFLICT` you are a member of the `rollback` team, reviewing a `git revert` conflict resolution produced by `rollback-developer` inside the dedicated rollback worktree at `/app/worktrees/<SESSION_SHORT_ID>`. You are dispatched with `name: "rollback-reviewer"` (and `subagent_type: "quality-reviewer"`).
 
 ### Spawn prompt
 ```
 ROLE: quality-reviewer
 MODE: ROLLBACK_CONFLICT
 TEAM: rollback
-WORK_DIR: /app
-COUNTERPART: simple-developer
+WORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>
+COUNTERPART: rollback-developer
 TEAM_LEAD: team-lead
 ```
 
 ### Workflow
 
-**On dispatch: idle until `simple-developer` sends `ready, please review`.**
+**On dispatch: idle until `rollback-developer` sends `ready, please review`.**
 
 Per-cycle loop (until `shutdown_request`):
 
-1. Read the staged resolution in `/app`:
+1. Read the staged resolution in the rollback worktree:
    ```bash
-   cd /app && git status --porcelain
-   cd /app && git diff --cached
-   cd /app && cat /app/.git/REVERT_HEAD 2>/dev/null  # confirms a revert is in progress
+   cd <WORKTREE_PATH> && git status --porcelain
+   cd <WORKTREE_PATH> && git diff --cached
+   cd <WORKTREE_PATH> && git status | head -3   # confirms "You are currently reverting commit <sha>"
    ```
 2. **Rubric — minimal, focused on conflict resolution only**:
    - Conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`) are fully removed — BLOCKING if any remain.
@@ -245,7 +245,7 @@ Per-cycle loop (until `shutdown_request`):
    - No drive-by refactors, renames, or unrelated edits in the staged diff — BLOCKING.
    - No new secrets, hardcoded credentials, or `console.log` of sensitive data in the staged diff.
    - **Skip** the full SIMPLE/COMPLEX rubric (RLS, React patterns, tests, etc.) — only the resolution diff is in scope here.
-3. Reply to `simple-developer`:
+3. Reply to `rollback-developer`:
    - `APPROVED` — zero blocking issues, ready for merger to `git revert --continue`.
    - `APPROVED WITH RESERVATIONS` — non-blocking warnings, dev may proceed.
    - `BLOCKED:\n- file: …\n  line: …\n  description: …\n  fix: …\nSummary: N blocking issues.`

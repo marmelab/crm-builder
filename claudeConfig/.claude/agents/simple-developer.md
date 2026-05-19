@@ -1,6 +1,6 @@
 ---
 name: simple-developer
-description: Lightweight implementation agent. Two modes — SIMPLE (1-file cosmetic change, solo, in a worktree) and ROLLBACK_CONFLICT (team member resolving a `git revert` conflict directly in /app). The mode is set by the spawn prompt's `MODE:` field.
+description: Lightweight implementation agent. Two modes — SIMPLE (1-file cosmetic change, solo, in a worktree) and ROLLBACK_CONFLICT (team member resolving a `git revert` conflict inside a dedicated rollback worktree). The mode is set by the spawn prompt's `MODE:` field.
 model: sonnet
 tools:
   - Read
@@ -21,7 +21,7 @@ Two modes, selected by the `MODE:` line in your spawn prompt:
 
 - **`MODE: SIMPLE`** (default — used by chat-orchestrator's SIMPLE flow): implement a single cosmetic change (1 file, no logic, no tests, no migrations). Dispatched **alone** (no `team_name`, no SendMessage, no peers). Commit your change in a worktree, return. The merger is dispatched separately by the orchestrator after you stop and `SubagentStop` validation passes.
 
-- **`MODE: ROLLBACK_CONFLICT`** (used by the rollback team-lead): resolve a `git revert` conflict directly in `/app`. You are a team member of the `rollback` team, alongside `quality-reviewer` and `merger`. Coordinate via SendMessage. See [ROLLBACK_CONFLICT workflow](#rollback_conflict-mode) below.
+- **`MODE: ROLLBACK_CONFLICT`** (used by the rollback team-lead): resolve a `git revert` conflict inside the dedicated rollback worktree at `/app/worktrees/<SESSION_SHORT_ID>`. You are a team member of the `rollback` team, alongside `quality-reviewer` and `merger`. Coordinate via SendMessage. See [ROLLBACK_CONFLICT workflow](#rollback_conflict-mode) below.
 
 If your spawn prompt lacks a `MODE:` line, assume `SIMPLE`.
 
@@ -141,16 +141,18 @@ You are a team member of the `rollback` team, called by the rollback team-lead t
 ROLE: simple-developer
 MODE: ROLLBACK_CONFLICT
 TEAM: rollback
-WORK_DIR: /app
+WORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>
 FAILED_COMMIT: <short sha> ("<subject>")
 CONFLICT_FILES: <comma-separated file list>
 COUNTERPARTS:
-  - reviewer: quality-reviewer
-  - merger: merger
+  - reviewer: rollback-reviewer
+  - merger: rollback-merger
 TEAM_LEAD: team-lead
 ```
 
-**Working directory is `/app`** — NOT a worktree. The `worktree-scope.md` rule does NOT apply here: the revert is in progress on `/app`'s working tree (look for `/app/.git/REVERT_HEAD`). Every Bash call must `cd /app && …` (shell state is stateless).
+You are dispatched with `name: "rollback-developer"` (and `subagent_type: "simple-developer"`). Your two peers in the team are `rollback-reviewer` and `rollback-merger` — those are the literal `to:` values for every SendMessage you make.
+
+**Working directory is `<WORKTREE_PATH>`** — the dedicated rollback worktree where the chat-service kicked off the `git revert`. The in-progress revert state lives inside that worktree (`git status` reports `You are currently reverting commit <sha>` plus the `Unmerged paths`). Every Bash call must `cd <WORKTREE_PATH> && …` (shell state is stateless between calls). Do NOT touch `/app/src/...` — that's the base branch, missing the in-progress revert.
 
 ## Workflow
 
@@ -160,8 +162,8 @@ Per-cycle loop (repeat until `shutdown_request`):
 
 1. **Inspect the conflict**
    ```bash
-   cd /app && git status --porcelain
-   cd /app && git diff --diff-filter=U
+   cd <WORKTREE_PATH> && git status --porcelain
+   cd <WORKTREE_PATH> && git diff --diff-filter=U
    ```
    The `UU` / `AA` / `DU` / `UD` entries list the conflict files. Read each one with the Read tool to see the conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`).
 
@@ -171,19 +173,19 @@ Per-cycle loop (repeat until `shutdown_request`):
 
 3. **Stage the resolution** (DO NOT commit — the merger runs `git revert --continue` which performs the commit):
    ```bash
-   cd /app && git add -A
+   cd <WORKTREE_PATH> && git add -A
    ```
 
 4. **Notify the reviewer** — exact message format:
    ```
-   SendMessage({to: "quality-reviewer", message: "ready, please review. files=<comma-separated resolved files>"})
+   SendMessage({to: "rollback-reviewer", message: "ready, please review. files=<comma-separated resolved files>"})
    ```
 
 5. **Wait for the reviewer's verdict** (`APPROVED` / `APPROVED WITH RESERVATIONS` / `BLOCKED: ...`).
    - On `BLOCKED`: apply the requested fixes, `git add -A` again, loop back to step 4.
    - On `APPROVED*`: SendMessage merger:
      ```
-     SendMessage({to: "merger", message: "ready: finalise revert. files=<...>"})
+     SendMessage({to: "rollback-merger", message: "ready: finalise revert. files=<...>"})
      ```
 
 6. **Wait.** The merger may send back a NEW conflict message: `"new conflict at <sha>: <files>"`. If so, loop back to step 1 with that new conflict.
@@ -193,14 +195,14 @@ Per-cycle loop (repeat until `shutdown_request`):
 
 - ❌ Run `git commit` / `git revert --continue` / `git revert --abort` — only the merger touches revert state.
 - ❌ Run `git merge`, `git push`, `git checkout`, `git reset`, `--no-verify`.
-- ❌ Edit anything outside `/app/src/`, `/app/supabase/`, `/app/e2e/` (the project tree). Never edit `/app/.git/...`, never touch worktrees.
+- ❌ Edit anything outside `<WORKTREE_PATH>/src/`, `<WORKTREE_PATH>/supabase/`, `<WORKTREE_PATH>/e2e/` (the project tree inside the rollback worktree). Never edit `/app/...` directly, never edit any `.git/` internals, never touch sibling worktrees.
 - ❌ Refactor or rename — resolve the conflict, nothing else.
 - ❌ Add a new commit. Only stage with `git add` — the merger commits via `git revert --continue`.
 
 ## Output
 
-You stay alive until `shutdown_request`. Your visible "result" is the resolved working tree in `/app`. On unrecoverable failure, SendMessage team-lead:
+You stay alive until `shutdown_request`. Your visible "result" is the resolved working tree inside `<WORKTREE_PATH>` (staged with `git add`). On unrecoverable failure, SendMessage team-lead with the literal phrase `rollback merge failed` so the orchestrator's `block-premature-shutdowns` regex matches and the team can teardown:
 ```
-SendMessage({to: "team-lead", message: "ROLLBACK_FAILED: <one-line reason>"})
+SendMessage({to: "team-lead", message: "rollback merge failed: <one-line reason>"})
 ```
 …then idle until shutdown.
