@@ -138,16 +138,21 @@ Treat it as your contract:
 **View update rule** — when a migration adds or removes a column on a table,
 check `supabase/schemas/03_views.sql` for any view that `SELECT`s from that
 table. If one exists, the migration **must** also recreate it with the new
-column. Use `CREATE OR REPLACE VIEW` and append new columns at the end (Postgres
-forbids inserting them mid-list). Forgetting this is the single most common
-migration bug: the column exists on the base table but is invisible to the app
-because PostgREST queries the view, not the table directly.
+column. Use `CREATE OR REPLACE VIEW` and append new columns at the **absolute
+end** of the SELECT list — after all existing columns, including computed ones
+(AS aliases). Never insert in the middle, even if the position looks more
+logical. PostgreSQL forbids any change that shifts the ordinal position of an
+existing column (error 42P16), and computed columns count just like raw ones.
+Forgetting this is the single most common migration bug: the column exists on
+the base table but is invisible to the app because PostgREST queries the view,
+not the table directly.
 
 ```sql
--- example: adding `importance` to companies requires updating companies_summary
-CREATE OR REPLACE VIEW public.companies_summary AS
-  SELECT c.id, ..., c.nb_deals, c.nb_contacts, c.importance  -- new col at end
-  FROM companies c ...;
+-- example: adding `importance` to contacts requires updating contacts_summary
+CREATE OR REPLACE VIEW public.contacts_summary AS
+  SELECT co.id, ..., email_fts, phone_fts, nb_tasks,
+         co.importance  -- ✅ new col after every existing col, including computed ones
+  FROM contacts co ...;
 ```
 
 If during implementation you discover the planner was wrong (e.g. you can
