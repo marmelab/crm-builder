@@ -13,11 +13,12 @@ import { join } from 'node:path';
 export function detectPrompt(text) {
   // Match ❯ or > at the very end of the text (after trimming trailing whitespace),
   // only when preceded by a newline or start-of-string — i.e. it's on its own line.
+  // The welcome-screen "❯ <suggestion>" does NOT match (❯ is mid-text there).
   return /(?:^|\n)[❯>]\s*$/.test(text.trimEnd());
 }
 
-const TURN_TIMEOUT_MS = 1500;     // silence after last PTY chunk → turn done
-const STARTUP_TIMEOUT_MS = 30_000; // safety: Claude never responded at all
+const TURN_TIMEOUT_MS = 15_000;   // fallback: silence after last PTY chunk → turn done (Stop hook is primary)
+const STARTUP_TIMEOUT_MS = 12_000; // safety: Claude TUI initializes in ~1.5s; 12s is reliably safe
 // Claude project dir slug: '/app' → '-app'
 const PROJECT_SLUG = CWD.replace(/\//g, '-');
 const PROJECT_DIR = join(CLAUDE_HOME, '.claude', 'projects', PROJECT_SLUG);
@@ -44,9 +45,16 @@ export class PtySession extends EventEmitter {
     const model = getOrchestratorModel();
     const mode = process.env.MODE || 'demo';
 
+    // Inject mode + session_dir into the system prompt so the orchestrator can
+    // read them (it expects <mode> and <session_dir> in its system context).
+    // Sending them in the user message via PTY confuses Claude's TUI and causes
+    // it to try to process the XML tags rather than generate a response.
+    const appendedPrompt = `<mode>${mode}</mode>\n<session_dir>${sessionDir}</session_dir>`;
+
     const args = ['--dangerously-skip-permissions'];
     if (claudeSessionId) args.push('--resume', claudeSessionId);
     if (model) args.push('--model', model);
+    args.push('--append-system-prompt', appendedPrompt);
 
     this.#pty = pty.spawn('claude', args, {
       name: 'xterm-256color',
@@ -111,7 +119,7 @@ export class PtySession extends EventEmitter {
   #doSend(message) {
     this.#resultEmitted = false; // open new turn
     // Safety timeout: if Claude never outputs anything after sending,
-    // emit result after 30 s. #onData resets this to TURN_TIMEOUT_MS on first chunk.
+    // emit result after STARTUP_TIMEOUT_MS. #onData resets this to TURN_TIMEOUT_MS on first chunk.
     clearTimeout(this.#silenceTimer);
     this.#silenceTimer = setTimeout(() => this.#emitResult(), STARTUP_TIMEOUT_MS);
     this.#pty.write(message + '\r');
@@ -144,12 +152,19 @@ export class PtySession extends EventEmitter {
 
   #handleStopSentinel(sentinelPath) {
     unlink(sentinelPath).catch(() => {});
-    // 100 ms buffer: TranscriptWatcher debounce is 50 ms — give it time to
-    // deliver assistant events before we close the turn with `result`.
-    setTimeout(() => this.#emitResult(), 100);
+    // 150 ms: the file-watcher debounce is 50 ms, so by 150 ms the debounced
+    // #poll() will have run and emitted the assistant event. Without this margin
+    // the 50 ms sentinel delay raced the 50 ms file-watcher debounce.
+    setTimeout(() => this.#emitResult(), 150);
   }
 
   #onData(chunk) {
+    // Respond to terminal capability queries so Claude's Ink TUI can initialize.
+    // Without these, Ink blocks waiting for terminal responses and ❯ never appears.
+    if (chunk.includes('\x1b[>0q')) this.#pty.write('\x1bP>|xterm(314)\x1b\\'); // XTVERSION
+    if (chunk.includes('\x1b[c'))   this.#pty.write('\x1b[?1;2c');   // DA1
+    if (chunk.includes('\x1b[?2026$p')) this.#pty.write('\x1b[?2026;1$y');      // DECRQM mode 2026
+
     const text = stripAnsi(chunk);
     // Always buffer for friendlyError classification (e.g. auth/network errors).
     this.#outputBuffer = (this.#outputBuffer + text).slice(-OUTPUT_BUFFER_LIMIT);
@@ -171,10 +186,16 @@ export class PtySession extends EventEmitter {
     this.#silenceTimer = setTimeout(() => this.#emitResult(), TURN_TIMEOUT_MS);
   }
 
-  #emitResult() {
+  async #emitResult() {
     if (this.#resultEmitted) return; // idempotent
     this.#resultEmitted = true;
     clearTimeout(this.#silenceTimer);
+    await this.#watcher?.flush().catch(() => {});
+    // Second flush after a brief pause: catches assistant events that weren't
+    // on disk yet when the first flush ran (OS write buffering, or new-session
+    // JSONL discovery still in flight when the sentinel arrived).
+    await new Promise(r => setTimeout(r, 100));
+    await this.#watcher?.flush().catch(() => {});
     this.emit('event', { type: 'result', is_error: false, total_cost_usd: 0, modelUsage: {} });
   }
 }
