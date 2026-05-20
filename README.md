@@ -11,7 +11,6 @@ FakeRest in the browser             Local Supabase (Postgres)
 Starts in ~5 seconds                Starts in ~2-3 min (first time)
 No extra prerequisites              Requires host Docker socket
 Data resets on reload               Data is persisted
-Great for UI development            Required for auth, storage, RLS
 ```
 
 Note: The user can toggle mode with a single click from the User Interface.
@@ -48,13 +47,10 @@ docker run -it --rm \
 
 ### With docker compose (easier)
 ```bash
-cp .env.example .env    # then fill in ANTHROPIC_API_KEY (optional if you'll
-                        # authenticate via `make claude` instead)
-
 make up        # demo mode
 make up-full   # full mode
 
-# First-time login (only if you don't have ANTHROPIC_API_KEY set):
+# First-time login:
 # Run this from another shell — the stack pauses on first boot waiting for
 # credentials, and resumes automatically once login completes.
 make claude         # OAuth flow on first run — copy URL to browser, paste token back
@@ -81,12 +77,9 @@ make wipe up
       ↓
 3. Visual validation in the browser
       ↓
-4. switch-mode full  (in the Claude terminal)
+4. Claude generates and applies the Database migrations
       ↓
-5. Claude generates and applies the Supabase migration
-   (npx supabase db push)
-      ↓
-6. Verify on real data
+5. Verify on real data
 ```
 
 ---
@@ -120,7 +113,7 @@ switch-mode full    # → Supabase
 ### Phase 1 — Fast dev in demo mode
 
 ```
-You (in the Claude terminal):
+You (in the user interface):
   "Add a 'priority' field (low/medium/high) on contacts
    with a coloured badge in the list"
 
@@ -131,7 +124,7 @@ Claude:
   → Vite automatically reloads the browser
 ```
 
-Validate visually on `localhost:5173`.
+Validate visually on `localhost:5173` or `localhost:8080`.
 
 ### Phase 2 — Migration to Supabase
 
@@ -161,8 +154,8 @@ Claude:
 | UI components, forms | ✅ | ✅ |
 | New fields, views | ✅ | ✅ |
 | Filters, sorting, pagination | ✅ | ✅ |
+| Response speed | ✅ (instant, in-memory) | ⚠️ (network round-trip, migrations) |
 | Data persistence | ❌ (reload = reset) | ✅ |
 | Real authentication | ❌ | ✅ |
 | File attachments | ❌ | ✅ |
 | Security policies (RLS) | ❌ | ✅ |
-| E2E tests | ⚠️ (partial) | ✅ |
