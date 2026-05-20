@@ -1,0 +1,39 @@
+chat-service/lib/server/claude-spawn.js
+  s_6df008237283b3::t_b9a71ad2f4097a 2
+  s_6df008237283b3::t_84e35ce68329f1 40
+README.md
+  s_6df008237283b3::t_d22ebc166b35d6 83,86
+chat-service/lib/server/config.js
+  s_6df008237283b3::t_73227d8431386b 17-20
+chat-service/lib/server/http-routes.js
+  s_6df008237283b3::t_bac509eb80cec2 7
+  s_6df008237283b3::t_ee2c037bc5decd 337
+  s_6df008237283b3::t_e0fdda7100784f 404,406,410
+  s_6df008237283b3::t_c3d20e03ce7d9d 351,353,356-357
+Makefile
+  s_6df008237283b3::t_033247bb44e8f1 3
+  s_6df008237283b3::t_8fa274334c5dd9 29-30
+Dockerfile
+  s_6df008237283b3::t_46824a6e634692 110
+scripts/pending-deploys.mjs
+  s_6df008237283b3::t_9d62a6b56bc158 1-16,18-23,27-28,30,32,34-35,42
+chat-service/server.js
+  s_6df008237283b3::t_97d0de11ffa182 6
+  s_6df008237283b3::t_02e734811708c0 43-44
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.11",
+  "base_commit_sha": "1d59335a73a5bb7dd29f75a116a5f3056fc6f1f3",
+  "prompts": {},
+  "sessions": {
+    "s_6df008237283b3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "58df02cb-4e0a-4baa-90a2-8ee31d1f4e20",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Jerome <jerome@marmelab.com>"
+    }
+  }
+}
