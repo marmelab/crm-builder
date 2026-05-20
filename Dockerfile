@@ -62,6 +62,8 @@ RUN wget -q https://github.com/marmelab/atomic-crm/archive/refs/heads/main.zip \
 
 WORKDIR ${APP_DIR}
 RUN npm install
+# Pre-bundle Vite dependencies so the first dev-server start is instant
+RUN npx vite optimize 2>/dev/null || true
 
 # ── Playwright Chromium (for vitest browser mode) ─────────────
 # PLAYWRIGHT_BROWSERS_PATH=/ms-playwright → accessible to all users
@@ -104,11 +106,12 @@ COPY app-variants/App.supabase.tsx /app-variants/App.supabase.tsx
 
 # ── Utility scripts ───────────────────────────────────────────
 COPY scripts/switch-mode.sh /usr/local/bin/switch-mode
-RUN chmod +x /usr/local/bin/switch-mode
+COPY scripts/apply-migrations.sh /usr/local/bin/apply-migrations
+COPY scripts/pending-deploys.mjs /usr/local/bin/pending-deploys
+RUN chmod +x /usr/local/bin/switch-mode /usr/local/bin/apply-migrations /usr/local/bin/pending-deploys
 
-# ── Supervisor configs ────────────────────────────────────────
-COPY supervisord.demo.conf /etc/supervisor/conf.d/demo.conf
-COPY supervisord.full.conf /etc/supervisor/conf.d/full.conf
+# ── Supervisor config ─────────────────────────────────────────
+COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
 # ── Chat service ──────────────────────────────────────────────
 COPY chat-service/ /chat-service/

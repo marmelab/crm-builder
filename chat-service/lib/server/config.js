@@ -14,3 +14,7 @@ export const MIME_TYPES = {
 };
 
 export const ALLOWED_STATES = new Set(['in_progress', 'completed', 'cancelled', 'waiting']);
+
+export const MODE_DEMO = 'demo';
+export const MODE_FULL = 'full';
+export const VALID_MODES = new Set([MODE_DEMO, MODE_FULL]);

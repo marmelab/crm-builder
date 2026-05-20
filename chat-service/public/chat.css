@@ -75,6 +75,22 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
 #chat-debug svg,
 #chat-restore-btn svg { display: block; }
 
+#mode-toggle {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; padding: 10px 14px;
+  background: none; border: none; border-bottom: 1px solid #2c2c2e;
+  color: #8e8e93; cursor: pointer;
+  font-family: inherit; font-size: 13px; font-weight: 500; text-align: left;
+  transition: background .15s, color .15s;
+}
+.mode-toggle-icon { display: block; flex-shrink: 0; transition: color .2s; }
+#mode-toggle.mode-full { color: #34d399; }
+#mode-toggle.mode-starting { color: #fbbf24; }
+#mode-toggle:hover { background: #2c2c2e; color: #fff; }
+/* Collapsed: icon only, centered — mirrors #chat-new collapsed style */
+#chat-history-panel.collapsed #mode-toggle { justify-content: center; padding: 10px 0; }
+#chat-history-panel.collapsed #mode-toggle .mode-toggle-label { display: none; }
+
 /* Sessions panel — full-height sidebar pinned to the left edge of the
    viewport, always visible while the widget is open. */
 #chat-history-panel {

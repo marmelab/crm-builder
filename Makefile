@@ -1,10 +1,10 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help build up up-full down wipe restart logs shell claude test test-unit test-smoke bench bench-update clean-sessions reset \
+.PHONY: help build up up-full down wipe restart restart-full logs shell claude test test-unit test-smoke bench bench-update clean-sessions reset \
         start demo full stop kill image log tail bash exec tests smoke clean archive reload
 
 # Detect running container — used by claude/shell targets
-RUNNING_CONTAINER = $$(docker ps --filter "name=atomic-crm-" --filter "status=running" --format "{{.Names}}" | head -1)
+RUNNING_CONTAINER = $$(docker ps --filter "name=atomic-crm" --filter "status=running" --format "{{.Names}}" | head -1)
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*##"; printf "Usage: make <target>\n\nTargets:\n"} /^[a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -12,19 +12,21 @@ help: ## Show this help
 build: ## Build the atomic-crm-dev Docker image
 	docker build -t atomic-crm-dev .
 
-up: ## Start the stack in demo mode (FakeRest, no Supabase)
-	docker compose --profile demo up
+up: ## Start in demo mode (FakeRest, no Supabase)
+	docker compose up
 
-up-full: ## Start the stack in full mode (Supabase, host network)
-	docker compose --profile full up
+up-full: ## Start in full mode (Supabase)
+	MODE=full docker compose up
 
-down: ## Stop and remove containers (volumes preserved)
-	docker compose --profile demo --profile full down
+down: ## Stop container (graceful Supabase teardown if needed)
+	./scripts/down.sh
 
-wipe: ## Stop and remove containers AND volumes (wipes atomic-crm checkout, deps, sessions)
-	docker compose --profile demo --profile full down -v
+wipe: ## Stop container AND remove all volumes (wipes crm checkout, deps, sessions)
+	./scripts/down.sh -v
 
 restart: down up ## Restart the demo stack
+
+restart-full: down up-full ## Restart the full stack
 
 logs: ## Tail logs of the running stack
 	docker compose logs -f

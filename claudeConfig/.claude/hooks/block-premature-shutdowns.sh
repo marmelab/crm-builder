@@ -102,14 +102,10 @@ agent-team skill Phase 3.
 EOF
 }
 
-# If the inbox file doesn't exist, the merger definitely hasn't reported.
-if [ ! -f "$INBOX" ]; then
-  block_with_reason "The team-lead inbox at $INBOX does not exist yet."
-  exit 2
-fi
-
-# Count "merged" / "merge failed" reports from the merger.
-COUNT=$(node -e '
+# Check 1: inbox file messages from merger.
+INBOX_COUNT=0
+if [ -f "$INBOX" ]; then
+  INBOX_COUNT=$(node -e '
 try {
   const fs = require("fs");
   const inbox = JSON.parse(fs.readFileSync(process.argv[1], "utf8") || "[]");
@@ -124,11 +120,30 @@ try {
   process.stdout.write(String(n));
 } catch { process.stdout.write("0"); }
 ' "$INBOX" 2>/dev/null || echo "0")
-
-if [ "$COUNT" -lt 1 ]; then
-  block_with_reason "The team-lead inbox at $INBOX has 0 messages from the merger matching \"merged TASK-...\" or \"...merge failed\"."
-  exit 2
 fi
 
-# At least one merger report present — allow the shutdown.
-exit 0
+if [ "$INBOX_COUNT" -ge 1 ]; then
+  # At least one merger report in inbox — allow the shutdown.
+  exit 0
+fi
+
+# Check 2 (fallback): any TASK-*.json in TICKETS_DIR with "status": "merged".
+# Catches cases where the merger used a non-standard SendMessage format so the
+# inbox check above missed it, but the merger did update the ticket JSON.
+TICKETS_DIR="${CHAT_SESSION_DIR:-}"
+TICKET_MERGED_COUNT=0
+if [ -n "$TICKETS_DIR" ] && [ -d "$TICKETS_DIR" ]; then
+  TICKET_MERGED_COUNT=$(grep -rl '"status": "merged"' "$TICKETS_DIR"/TASK-*.json 2>/dev/null | wc -l | tr -d ' ')
+fi
+
+if [ "$TICKET_MERGED_COUNT" -ge 1 ]; then
+  exit 0
+fi
+
+# Nothing found — block.
+if [ -f "$INBOX" ]; then
+  block_with_reason "The team-lead inbox at $INBOX has 0 messages from the merger matching \"merged TASK-...\" or \"...merge failed\", and no TASK-*.json in $TICKETS_DIR shows status=merged."
+else
+  block_with_reason "The team-lead inbox at $INBOX does not exist yet, and no TASK-*.json in $TICKETS_DIR shows status=merged."
+fi
+exit 2
