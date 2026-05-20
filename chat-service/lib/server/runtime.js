@@ -68,7 +68,7 @@ export function createRuntime(session) {
       // is locked on the FIRST dispatch from its subagent_type so SIMPLE/
       // MEMORY flows show a stable total upfront. `dispatchedSubagentTypes`
       // keeps subagent_type in dispatch order — length is the dispatched
-      // count; per-position role drives the remaining time in agent-progress.js.
+      // count; per-position role drives the remaining time in ticket-progress.js.
       agentsCompleted: 0,
       flowExpected: 0,
       dispatchedSubagentTypes: [],

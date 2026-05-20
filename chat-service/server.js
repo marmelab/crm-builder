@@ -9,7 +9,7 @@ import { openSession } from './lib/server/session-store.js';
 import { createRequestHandler, switchMode } from './lib/server/http-routes.js';
 import { runtimes, wsToRuntime, runtimeForWs, createRuntime, safeSend } from './lib/server/runtime.js';
 import { sendToWs } from './lib/server/ws-bus.js';
-import { sendProgress } from './lib/server/agent-progress.js';
+import { sendProgress } from './lib/server/ticket-progress.js';
 import { regenerateTitleWithHaiku, extractText, extractToolUses } from './lib/server/claude-spawn.js';
 import { processMessage } from './lib/server/turn.js';
 import { endsWithQuestion } from './lib/server/session-store.js';

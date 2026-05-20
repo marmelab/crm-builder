@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { LOG_DIR, CLAUDE_HOME, CWD } from './config.js';
 import { broadcast, sendStats } from './ws-bus.js';
 import { runtimes, transitionState } from './runtime.js';
-import { sendProgress, predictedFlowExpected } from './agent-progress.js';
+import { sendProgress, predictedFlowExpected } from './ticket-progress.js';
 import { spawnClaude, extractText, extractToolUses, friendlyError } from './claude-spawn.js';
 import { endsWithQuestion } from './session-store.js';
 import {
