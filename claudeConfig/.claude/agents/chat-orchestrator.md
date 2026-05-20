@@ -155,6 +155,7 @@ Entered immediately after `VALIDATED` in the same turn (no user message needed):
      prompt: "Read /app/docs/project-context.json and produce scaffolding tickets per agent rules.\n\nSETUP_MODE=true\nTICKETS_DIR=<absolute path>"
    })
    ```
+3. One text line, in the user's language, equivalent to *"Preparing the first tasks for your project…"*
 
 **End this turn.**
 
@@ -226,6 +227,7 @@ For MEMORY only. No team, no worktree, no merger.
      prompt: "ROLE: documentator\nTICKETS_DIR: <absolute path>\nUSER_REQUEST: <user's request, verbatim>\nCONTEXT: <session ids, file paths, reflections the user pointed at — empty if none>\n\nFollow your instructions: pick the least invasive lever, write the artifact under /home/developer/.claude/local/, update the ledger. If you produce a hook, propose the settings.local.json patch in your output — do not apply it."
    })
    ```
+2. One text line: *"Capturing that..."*
 
 **End this turn.** The documentator runs read-only on logs/reflections, writes the artifact + ledger entry, and stops.
 
@@ -259,6 +261,7 @@ For SIMPLE only. No team, no planner, no skill on the orchestrator's side.
    })
    ```
    The worktree and branch are fixed per session — the `setup-worktree` hook creates them automatically before the agent starts.
+3. One text line: *"Working on it..."*
 
 **End this turn.** The simple-developer runs setup + edit + commit, then stops. SubagentStop hooks (typecheck, prettier, unit tests, e2e — wired with matcher `simple-developer`) run automatically; failures come back as stderr that the agent fixes on its own internal turns. When the agent's stop is finally accepted, control returns to you.
 
@@ -279,6 +282,7 @@ The dev's final response is in your context.
      prompt: "<SIMPLE merger protocol — see below>"
    })
    ```
+3. One text line: *"Wrapping up..."*
 
 **End this turn.**
 
@@ -326,6 +330,7 @@ For COMPLEX.
      prompt: "<user need verbatim>\n\nTICKETS_DIR=<absolute path>"
    })
    ```
+4. One text line: *"Planning it out..."*
 
 **End this turn. Nothing else.**
 
@@ -348,6 +353,7 @@ The planner's output is now in your context. Parse it: pick the **first wave** (
    - `test-validator-TASK-XXX`
 3. ONE shared `Agent` for `merger` (singleton, no suffix)
 4. `SendMessage(GO)` to each `developer-TASK-XXX` (one message per developer, includes `worktree=/app/worktrees/<SESSION_SHORT_ID>/TASK-XXX, branch=<SESSION_SHORT_ID>/<branch_name>, COUNTERPARTS=...`)
+5. One text line: *"Working on it..."*
 
 Total dispatches: **N developers + 2N reviewers + 1 merger = 3N + 1** (N ≤ 5, so max 16 agents).
 
@@ -359,7 +365,7 @@ Total dispatches: **N developers + 2N reviewers + 1 merger = 3N + 1** (N ≤ 5, 
 
 After the last `SendMessage(GO)`, you may feel the wave is "set up" and want to immediately fire `SendMessage(shutdown_request)` to all members. **Do not.** The wave has not yet *started* — the developers haven't even read their GO message. Shutting them down here kills the conversation before any work happens.
 
-The rule: **once you emit the last `SendMessage(GO)`, stop.** Phase 3 begins only on a future turn, after the merger has reported `merged TASK-XXX` for every ticket in the wave (see STATE C → STATE D).
+The rule: **once you emit the last `SendMessage(GO)`, stop.** Output the *"Working on it..."* line and end the turn. Phase 3 begins only on a future turn, after the merger has reported `merged TASK-XXX` for every ticket in the wave (see STATE C → STATE D).
 
 ---
 
@@ -409,6 +415,7 @@ Agents may have died mid-work due to a rate limit. The `tickets` team still exis
    ```
 5. Re-send `GO` to each new developer. Add to the GO message:
    `RESUME: check the worktree for existing commits and continue from the latest committed state.`
+6. One text line to the user (in their language): *"Resuming — restarting the work that was interrupted."*
 
 **Do not reset the merge count** — merger reports already received still count toward N.
 
@@ -424,6 +431,7 @@ Agents may have died mid-work due to a rate limit. The `tickets` team still exis
    - Each `developer-TASK-XXX`, `quality-reviewer-TASK-XXX`, `test-validator-TASK-XXX`
    - Shared `merger` (last)
    - Total: `3N + 1` SendMessages
+2. One text line: *"Wrapping up..."*
 
 **End this turn.**
 
