@@ -14,18 +14,18 @@ export function sendProgress(runtime) {
   const subagents = Math.max(dispatched, stats.flowExpected);
   const total = 1 + subagents;
   const done = (dispatched > 0 ? 1 : 0) + stats.agentsCompleted;
-  const etaMs = estimateRemainingMs(runtime);
+  const remainingTimeMs = estimateRemainingMs(runtime);
   // Skip the broadcast when nothing observable changed — back-to-back
   // dispatches in a single event would otherwise emit duplicate frames.
   const last = stats.lastProgressSent;
-  if (last && last.total === total && last.done === done && last.etaMs === etaMs) return;
-  stats.lastProgressSent = { total, done, etaMs };
-  broadcast(runtime, { type: 'progress', total, done, etaMs });
+  if (last && last.total === total && last.done === done && last.remainingTimeMs === remainingTimeMs) return;
+  stats.lastProgressSent = { total, done, remainingTimeMs };
+  broadcast(runtime, { type: 'progress', total, done, remainingTimeMs });
 }
 
 // Ordered role plan for SIMPLE/MEMORY flows. Length doubles as the expected-
-// subagent prediction; per-position role drives the ETA for "expected but not
-// yet dispatched" subagents.
+// subagent prediction; per-position role drives the remaining time for
+// "expected but not yet dispatched" subagents.
 const FLOW_PLANS = {
   'simple-developer': ['simple-developer', 'merger'],
   'documentator':     ['documentator'],
@@ -40,8 +40,9 @@ export function predictedFlowExpected(subagentType) {
   return FLOW_PLANS[subagentType]?.length || 0;
 }
 
-// Fixed per-role average step durations driving the ETA. Hand-tuned wall-
-// clock estimates for one dispatch of that role, including model latency.
+// Fixed per-role average step durations driving the remaining time. Hand-
+// tuned wall-clock estimates for one dispatch of that role, including model
+// latency.
 const AGENT_DURATIONS_MS = {
   orchestrator:      30_000,
   'simple-developer': 30_000,
@@ -51,6 +52,7 @@ const AGENT_DURATIONS_MS = {
   planner:           30_000,
   architect:         60_000,
   developer:        120_000,
+  
   documentator:      30_000,
   devops:            60_000,
 };

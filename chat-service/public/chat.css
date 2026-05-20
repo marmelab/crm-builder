@@ -440,11 +440,11 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
 .msg-working-progress-label {
   font-size: 11px; color: #8e8e93; letter-spacing: .02em;
 }
-.msg-working-progress-eta {
+.msg-working-progress-remaining-time {
   font-size: 11px; color: #636366; letter-spacing: .02em;
   font-style: italic;
 }
-.msg-working-progress-eta:empty { display: none; }
+.msg-working-progress-remaining-time:empty { display: none; }
 .msg-working-hint {
   font-size: 11px; color: #8e8e93; letter-spacing: .02em;
   font-style: italic;

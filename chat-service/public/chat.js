@@ -30,12 +30,12 @@ const statsCloseBtn = document.getElementById('chat-stats-close');
 let working  = false;
 let progressTotal = 0;
 let progressDone  = 0;
-// ETA is computed server-side from fixed per-role durations and shipped in
-// the `progress` payload. We anchor the snapshot to its reception time so
-// the displayed value can tick down smoothly between events.
-let etaMsAtReceipt = 0;
-let etaReceivedAt = 0;
-let etaTickHandle = null;
+// Remaining time is computed server-side from fixed per-role durations and
+// shipped in the `progress` payload. We anchor the snapshot to its reception
+// time so the displayed value can tick down smoothly between events.
+let remainingTimeMsAtReceipt = 0;
+let remainingTimeReceivedAt = 0;
+let remainingTimeTickHandle = null;
 let debugMode = false;
 let statsMode = false;
 
@@ -145,9 +145,9 @@ function resetChatUi() {
   stats.textContent = '';
   progressTotal = 0;
   progressDone = 0;
-  etaMsAtReceipt = 0;
-  etaReceivedAt = 0;
-  stopEtaTicker();
+  remainingTimeMsAtReceipt = 0;
+  remainingTimeReceivedAt = 0;
+  stopRemainingTimeTicker();
   debugEventBuffer.length = 0;
 }
 
@@ -162,40 +162,41 @@ function formatRemaining(ms) {
   return m ? `Estimated: ~${h}h ${m}min remaining` : `Estimated: ~${h}h remaining`;
 }
 
-function startEtaTicker() {
-  if (etaTickHandle) return;
+function startRemainingTimeTicker() {
+  if (remainingTimeTickHandle) return;
   // 5s cadence — fast enough that the estimate "breathes" with elapsed time,
   // slow enough to avoid layout churn while the user reads other messages.
-  etaTickHandle = setInterval(tickEta, 5000);
+  remainingTimeTickHandle = setInterval(tickRemainingTime, 5000);
 }
 
-function stopEtaTicker() {
-  if (!etaTickHandle) return;
-  clearInterval(etaTickHandle);
-  etaTickHandle = null;
+function stopRemainingTimeTicker() {
+  if (!remainingTimeTickHandle) return;
+  clearInterval(remainingTimeTickHandle);
+  remainingTimeTickHandle = null;
 }
 
-// ETA text computed from the server snapshot, decremented by wall-clock so
-// the countdown stays smooth between progress events. Clamps to 0 — if work
-// outlives the estimate, show a soft "wrapping up" instead of negative time.
-function etaText(remaining) {
+// Remaining-time text computed from the server snapshot, decremented by
+// wall-clock so the countdown stays smooth between progress events. Clamps
+// to 0 — if work outlives the estimate, show a soft "wrapping up" instead
+// of negative time.
+function remainingTimeText(remaining) {
   if (remaining <= 0) return '';
-  if (etaMsAtReceipt > 0 && etaReceivedAt > 0) {
-    const live = etaMsAtReceipt - (Date.now() - etaReceivedAt);
+  if (remainingTimeMsAtReceipt > 0 && remainingTimeReceivedAt > 0) {
+    const live = remainingTimeMsAtReceipt - (Date.now() - remainingTimeReceivedAt);
     return live > 0 ? formatRemaining(live) || '' : 'Wrapping up…';
   }
   return 'Estimating remaining time…';
 }
 
-// Lean tick — only the ETA <span> can change between progress events, so
-// avoid querying/rewriting the bar, fill and label every 5s.
-function tickEta() {
+// Lean tick — only the remaining-time <span> can change between progress
+// events, so avoid querying/rewriting the bar, fill and label every 5s.
+function tickRemainingTime() {
   const bubble = messages.querySelector('.msg-working');
-  if (!bubble) { stopEtaTicker(); return; }
-  const etaEl = bubble._etaEl;
-  if (!etaEl) return;
+  if (!bubble) { stopRemainingTimeTicker(); return; }
+  const remainingTimeEl = bubble._remainingTimeEl;
+  if (!remainingTimeEl) return;
   const safeDone = Math.max(0, Math.min(progressDone, progressTotal));
-  etaEl.textContent = etaText(progressTotal - safeDone);
+  remainingTimeEl.textContent = remainingTimeText(progressTotal - safeDone);
 }
 
 function updateWorkingProgress() {
@@ -207,7 +208,7 @@ function updateWorkingProgress() {
   // dispatched yet), show a soft hint instead of the bar — Claude is
   // sizing up the work.
   if (progressTotal <= 1) {
-    if (wrap) { wrap.remove(); bubble._etaEl = null; bubble._maxPct = 0; }
+    if (wrap) { wrap.remove(); bubble._remainingTimeEl = null; bubble._maxPct = 0; }
     if (!hint) {
       hint = document.createElement('span');
       hint.className = 'msg-working-hint';
@@ -230,13 +231,13 @@ function updateWorkingProgress() {
     bar.appendChild(fill);
     const label = document.createElement('span');
     label.className = 'msg-working-progress-label';
-    const eta = document.createElement('span');
-    eta.className = 'msg-working-progress-eta';
-    wrap.append(bar, label, eta);
+    const remainingTime = document.createElement('span');
+    remainingTime.className = 'msg-working-progress-remaining-time';
+    wrap.append(bar, label, remainingTime);
     bubble.appendChild(wrap);
     bubble._fillEl = fill;
     bubble._labelEl = label;
-    bubble._etaEl = eta;
+    bubble._remainingTimeEl = remainingTime;
     bubble._maxPct = 0;
   }
   // Monotonic clamp on the visual fill: when COMPLEX dispatches a wave bigger
@@ -248,7 +249,7 @@ function updateWorkingProgress() {
   bubble._fillEl.style.width = displayPct + '%';
   bubble._labelEl.textContent =
     `${safeDone}/${progressTotal} step${progressTotal > 1 ? 's' : ''} done · ${remaining} to go`;
-  bubble._etaEl.textContent = etaText(remaining);
+  bubble._remainingTimeEl.textContent = remainingTimeText(remaining);
 }
 
 function renderWorkingUi() {
@@ -326,9 +327,9 @@ function handleWsMessage(event) {
     });
     if (msg.working) {
       working = true;
-      // On resume, the ETA stays as "Estimating…" until the next `progress`
-      // event lands with a fresh server-side estimate.
-      startEtaTicker();
+      // On resume, the remaining time stays as "Estimating…" until the next
+      // `progress` event lands with a fresh server-side estimate.
+      startRemainingTimeTicker();
       renderWorkingUi();
     }
     historyApi.refreshHistory();
@@ -360,16 +361,16 @@ function handleWsMessage(event) {
     const wasWorking = working;
     working = msg.working;
     if (!wasWorking && working) {
-      startEtaTicker();
+      startRemainingTimeTicker();
       const oldestQueued = messages.querySelector('.msg-queued');
       if (oldestQueued) {
         oldestQueued.classList.remove('msg-queued');
         oldestQueued.querySelector('.queued-badge')?.remove();
       }
     } else if (wasWorking && !working) {
-      stopEtaTicker();
-      etaMsAtReceipt = 0;
-      etaReceivedAt = 0;
+      stopRemainingTimeTicker();
+      remainingTimeMsAtReceipt = 0;
+      remainingTimeReceivedAt = 0;
     }
     renderWorkingUi();
     if (statsMode && wasWorking !== working) statsRefresh.schedule();
@@ -384,9 +385,9 @@ function handleWsMessage(event) {
   if (msg.type === 'progress') {
     progressTotal = msg.total || 0;
     progressDone  = msg.done  || 0;
-    if (typeof msg.etaMs === 'number') {
-      etaMsAtReceipt = msg.etaMs;
-      etaReceivedAt = Date.now();
+    if (typeof msg.remainingTimeMs === 'number') {
+      remainingTimeMsAtReceipt = msg.remainingTimeMs;
+      remainingTimeReceivedAt = Date.now();
     }
     updateWorkingProgress();
     return;
