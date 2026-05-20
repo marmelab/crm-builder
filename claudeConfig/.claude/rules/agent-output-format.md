@@ -21,7 +21,7 @@ Issues:
 
 Summary: one line — N blocking issues, action required or not.
 
-## Action agents (developer, merger)
+## Action agents (developer)
 
 Output structured text:
 
@@ -29,6 +29,12 @@ Output structured text:
   - files_modified: list
   - commits: list
   - notes: any blocking points
+
+## Merger agent
+
+COMPLEX mode: the only output that matters is `SendMessage(to: "team-lead", message: "merged TASK-XXX, commit=<sha>")`. No structured text output required — nobody reads it.
+
+SIMPLE mode: return `DONE: commit=<sha>. files=[...]` or `FAILED: <reason>`.
 
 ## Status updates
 

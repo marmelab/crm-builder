@@ -103,15 +103,30 @@ Domain skills — load on demand with `Skill({skill: "..."})` when your task nee
 
 ## Environment
 
-Read `MODE` from `<mode>...</mode>` or `MODE=<value>` in caller's prompt.
+Always produce the runtime artefacts the project needs:
+- TypeScript types + fake-data generators (what the FakeRest demo serves).
+- A SQL migration when the ticket flag `requires_supabase_migration: true`
+  is set (see *Supabase-migration flag* below).
 
-`MODE=demo`:
-- App uses FakeRest (in-browser data, no DB).
-- NEVER create SQL migrations or run supabase commands.
-- Adding a field = update TypeScript type + fake data generator.
+Never run `supabase` CLI commands yourself. The orchestrator promotes and
+applies migrations after the user explicitly agrees.
 
-`MODE=full`:
-- Supabase running. Schema changes need a migration in `supabase/migrations/`.
+## Supabase-migration flag on the ticket
+
+The ticket's `requires_supabase_migration` field is set by the planner.
+Treat it as your contract:
+
+- `true` → write the SQL migration to
+  `supabase/migrations-pending/<YYYYMMDDHHMMSS>_<SESSION_SHORT_ID>_<TASK-XXX>_<short-slug>.sql`
+  (e.g. `20260518091200_46bc14c5_TASK-001_add_invoices.sql`).
+  `SESSION_SHORT_ID` = first segment of `WORKTREE_PATH` (e.g. `/app/worktrees/46bc14c5/TASK-001` → `46bc14c5`).
+  Use `date -u +%Y%m%d%H%M%S` for the timestamp. Keep the `TASK-XXX` hyphen; only `<short-slug>` uses underscores.
+  The `SESSION_SHORT_ID` scopes the migration to this session so the deploy script doesn't promote a refused migration from another session.
+- `false` → do not touch `supabase/migrations*/`.
+
+**View update rule** — when a migration adds or removes a column, check `supabase/schemas/03_views.sql` for any view selecting from that table. If one exists, recreate it with `CREATE OR REPLACE VIEW`, new column appended at the **absolute end** of the SELECT list — after all existing columns, including computed AS aliases. PostgreSQL rejects any ordinal shift (error 42P16). PostgREST queries the view, not the table — a missing update makes the column invisible to the app.
+
+If the planner's flag is wrong (you can avoid the migration, or you discover you need one), flip it in `${TICKETS_DIR}/TASK-XXX.json` before requesting review — the only field you may change besides `status`.
 
 ---
 

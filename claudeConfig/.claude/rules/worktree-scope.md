@@ -17,7 +17,7 @@ Each ticket gets its own git worktree at `/app/worktrees/<SESSION_SHORT_ID>/TASK
 | Path prefix | Read | Write/Edit | Bash cwd |
 |---|---|---|---|
 | `<WORKTREE_PATH>/**` (i.e. `/app/worktrees/<SESSION_SHORT_ID>/TASK-XXX/`) | ✅ | ✅ | ✅ |
-| `${TICKETS_DIR}/TASK-XXX.json` (per-session folder, e.g. `/chat-service/logs/<uuid>/TASK-XXX.json`) | ✅ (ticket source of truth) | ⚠️ merger only, status field | — |
+| `${TICKETS_DIR}/TASK-XXX.json` (per-session folder, e.g. `/chat-service/logs/<uuid>/TASK-XXX.json`) | ✅ (ticket source of truth) | ⚠️ merger writes the `status` field; developer may flip `requires_supabase_migration` if the planner was wrong — no other writes | — |
 | `/app/docs/reflections/**` | ✅ (learn from past) | ⚠️ only in Mode 2 reflection, only `/app/docs/reflections/TASK-XXX-reflection.md` | — |
 | `/home/developer/.claude/**` | ✅ (skills, rules) | ❌ | — |
 
