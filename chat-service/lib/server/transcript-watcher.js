@@ -54,10 +54,12 @@ export class TranscriptWatcher extends EventEmitter {
       before = new Set();
     }
 
-    this.#dirWatcher = watch(this.#projectDir, { persistent: false }, (event, filename) => {
+    // Extracted so both the watcher callback and the post-attach re-check can use it.
+    // `before.add()` makes it idempotent against duplicate calls.
+    const handleNewFile = (filename) => {
       if (!filename || !filename.endsWith('.jsonl')) return;
       if (before.has(filename)) return;
-      before.add(filename); // deduplicate rapid fire events
+      before.add(filename);
 
       const id = basename(filename, '.jsonl');
       this.#sessionId = id;
@@ -68,7 +70,18 @@ export class TranscriptWatcher extends EventEmitter {
       this.#dirWatcher?.close();
       this.#dirWatcher = null;
       this.#watchFile();
+    };
+
+    this.#dirWatcher = watch(this.#projectDir, { persistent: false }, (_event, filename) => {
+      handleNewFile(filename);
     });
+
+    // Post-attach re-check: catches files created between readdir resolving and
+    // watch() registering (tiny window, but possible under load).
+    try {
+      const files = await readdir(this.#projectDir);
+      for (const f of files) handleNewFile(f);
+    } catch { /* ignore */ }
   }
 
   #watchFile() {

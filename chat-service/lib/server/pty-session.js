@@ -20,12 +20,17 @@ const STARTUP_TIMEOUT_MS = 30_000; // safety: Claude never responded at all
 const PROJECT_SLUG = CWD.replace(/\//g, '-');
 const PROJECT_DIR = join(CLAUDE_HOME, '.claude', 'projects', PROJECT_SLUG);
 
+const OUTPUT_BUFFER_LIMIT = 2048;
+
 export class PtySession extends EventEmitter {
   #pty;
   #watcher;
   #silenceTimer = null;
   #resultEmitted = true; // true = idle (no active turn), prevents spurious result on startup
+  #outputBuffer = '';    // last 2 KB of PTY output (after strip-ansi) for friendlyError
   closed = false;
+
+  get stderr() { return this.#outputBuffer; }
 
   constructor(claudeSessionId, sessionDir) {
     super();
@@ -79,8 +84,10 @@ export class PtySession extends EventEmitter {
   }
 
   #onData(chunk) {
-    if (this.#resultEmitted) return; // idle — ignore startup noise
     const text = stripAnsi(chunk);
+    // Always buffer for friendlyError classification (e.g. auth/network errors).
+    this.#outputBuffer = (this.#outputBuffer + text).slice(-OUTPUT_BUFFER_LIMIT);
+    if (this.#resultEmitted) return; // idle — don't drive turn-end detection
     // Reset to short silence window; overrides the 30 s startup safety timer.
     clearTimeout(this.#silenceTimer);
     this.#silenceTimer = setTimeout(() => this.#emitResult(), TURN_TIMEOUT_MS);
