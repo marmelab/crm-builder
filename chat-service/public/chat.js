@@ -30,6 +30,12 @@ const statsCloseBtn = document.getElementById('chat-stats-close');
 let working  = false;
 let progressTotal = 0;
 let progressDone  = 0;
+// ETA is computed server-side from fixed per-role durations and shipped in
+// the `progress` payload. We anchor the snapshot to its reception time so
+// the displayed value can tick down smoothly between events.
+let etaMsAtReceipt = 0;
+let etaReceivedAt = 0;
+let etaTickHandle = null;
 let debugMode = false;
 let statsMode = false;
 
@@ -139,30 +145,110 @@ function resetChatUi() {
   stats.textContent = '';
   progressTotal = 0;
   progressDone = 0;
+  etaMsAtReceipt = 0;
+  etaReceivedAt = 0;
+  stopEtaTicker();
   debugEventBuffer.length = 0;
 }
 
-function progressText() {
-  if (!progressTotal || progressTotal <= 0) return '';
+function formatRemaining(ms) {
+  if (!Number.isFinite(ms) || ms <= 0) return null;
+  const sec = Math.round(ms / 1000);
+  if (sec < 60) return 'Estimated: less than a minute remaining';
+  const min = Math.round(sec / 60);
+  if (min < 60) return `Estimated: ~${min} min remaining`;
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return m ? `Estimated: ~${h}h ${m}min remaining` : `Estimated: ~${h}h remaining`;
+}
+
+function startEtaTicker() {
+  if (etaTickHandle) return;
+  // 5s cadence — fast enough that the estimate "breathes" with elapsed time,
+  // slow enough to avoid layout churn while the user reads other messages.
+  etaTickHandle = setInterval(tickEta, 5000);
+}
+
+function stopEtaTicker() {
+  if (!etaTickHandle) return;
+  clearInterval(etaTickHandle);
+  etaTickHandle = null;
+}
+
+// ETA text computed from the server snapshot, decremented by wall-clock so
+// the countdown stays smooth between progress events. Clamps to 0 — if work
+// outlives the estimate, show a soft "wrapping up" instead of negative time.
+function etaText(remaining) {
+  if (remaining <= 0) return '';
+  if (etaMsAtReceipt > 0 && etaReceivedAt > 0) {
+    const live = etaMsAtReceipt - (Date.now() - etaReceivedAt);
+    return live > 0 ? formatRemaining(live) || '' : 'Wrapping up…';
+  }
+  return 'Estimating remaining time…';
+}
+
+// Lean tick — only the ETA <span> can change between progress events, so
+// avoid querying/rewriting the bar, fill and label every 5s.
+function tickEta() {
+  const bubble = messages.querySelector('.msg-working');
+  if (!bubble) { stopEtaTicker(); return; }
+  const etaEl = bubble._etaEl;
+  if (!etaEl) return;
   const safeDone = Math.max(0, Math.min(progressDone, progressTotal));
-  return `tasks completed ${safeDone}/${progressTotal}`;
+  etaEl.textContent = etaText(progressTotal - safeDone);
 }
 
 function updateWorkingProgress() {
   const bubble = messages.querySelector('.msg-working');
   if (!bubble) return;
-  const text = progressText();
-  let line = bubble.querySelector('.msg-working-progress');
-  if (!text) {
-    if (line) line.remove();
+  let wrap = bubble.querySelector('.msg-working-progress');
+  let hint = bubble.querySelector('.msg-working-hint');
+  // While only the orchestrator is running (total <= 1, no subagent
+  // dispatched yet), show a soft hint instead of the bar — Claude is
+  // sizing up the work.
+  if (progressTotal <= 1) {
+    if (wrap) { wrap.remove(); bubble._etaEl = null; bubble._maxPct = 0; }
+    if (!hint) {
+      hint = document.createElement('span');
+      hint.className = 'msg-working-hint';
+      hint.textContent = 'Estimating the duration of the work…';
+      bubble.appendChild(hint);
+    }
     return;
   }
-  if (!line) {
-    line = document.createElement('span');
-    line.className = 'msg-working-progress';
-    bubble.appendChild(line);
+  if (hint) hint.remove();
+  const safeDone = Math.max(0, Math.min(progressDone, progressTotal));
+  const remaining = progressTotal - safeDone;
+  const pct = Math.round((safeDone / progressTotal) * 100);
+  if (!wrap) {
+    wrap = document.createElement('div');
+    wrap.className = 'msg-working-progress';
+    const bar = document.createElement('div');
+    bar.className = 'msg-working-progress-bar';
+    const fill = document.createElement('div');
+    fill.className = 'msg-working-progress-fill';
+    bar.appendChild(fill);
+    const label = document.createElement('span');
+    label.className = 'msg-working-progress-label';
+    const eta = document.createElement('span');
+    eta.className = 'msg-working-progress-eta';
+    wrap.append(bar, label, eta);
+    bubble.appendChild(wrap);
+    bubble._fillEl = fill;
+    bubble._labelEl = label;
+    bubble._etaEl = eta;
+    bubble._maxPct = 0;
   }
-  line.textContent = text;
+  // Monotonic clamp on the visual fill: when COMPLEX dispatches a wave bigger
+  // than the predicted minimum, the denominator jumps (e.g. 6 → 12) and the
+  // raw pct would shrink. The label keeps the truthful "done/total" so the
+  // user still sees the real numbers; only the bar is forced to never recede.
+  const displayPct = Math.max(pct, bubble._maxPct);
+  bubble._maxPct = displayPct;
+  bubble._fillEl.style.width = displayPct + '%';
+  bubble._labelEl.textContent =
+    `${safeDone}/${progressTotal} step${progressTotal > 1 ? 's' : ''} done · ${remaining} to go`;
+  bubble._etaEl.textContent = etaText(remaining);
 }
 
 function renderWorkingUi() {
@@ -240,6 +326,9 @@ function handleWsMessage(event) {
     });
     if (msg.working) {
       working = true;
+      // On resume, the ETA stays as "Estimating…" until the next `progress`
+      // event lands with a fresh server-side estimate.
+      startEtaTicker();
       renderWorkingUi();
     }
     historyApi.refreshHistory();
@@ -271,11 +360,16 @@ function handleWsMessage(event) {
     const wasWorking = working;
     working = msg.working;
     if (!wasWorking && working) {
+      startEtaTicker();
       const oldestQueued = messages.querySelector('.msg-queued');
       if (oldestQueued) {
         oldestQueued.classList.remove('msg-queued');
         oldestQueued.querySelector('.queued-badge')?.remove();
       }
+    } else if (wasWorking && !working) {
+      stopEtaTicker();
+      etaMsAtReceipt = 0;
+      etaReceivedAt = 0;
     }
     renderWorkingUi();
     if (statsMode && wasWorking !== working) statsRefresh.schedule();
@@ -290,6 +384,10 @@ function handleWsMessage(event) {
   if (msg.type === 'progress') {
     progressTotal = msg.total || 0;
     progressDone  = msg.done  || 0;
+    if (typeof msg.etaMs === 'number') {
+      etaMsAtReceipt = msg.etaMs;
+      etaReceivedAt = Date.now();
+    }
     updateWorkingProgress();
     return;
   }

@@ -64,6 +64,14 @@ export function createRuntime(session) {
       // matching task_started events — e.g., MCP tools emit completion without
       // our tracked start).
       activeAgentIds: new Set(),
+      // Per-turn agent step counters driving the progress bar. `flowExpected`
+      // is locked on the FIRST dispatch from its subagent_type so SIMPLE/
+      // MEMORY flows show a stable total upfront. `dispatchedSubagentTypes`
+      // keeps subagent_type in dispatch order — length is the dispatched
+      // count; per-position role drives the ETA in agent-progress.js.
+      agentsCompleted: 0,
+      flowExpected: 0,
+      dispatchedSubagentTypes: [],
     },
   };
 }

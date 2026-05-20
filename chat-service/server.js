@@ -9,7 +9,7 @@ import { openSession } from './lib/server/session-store.js';
 import { createRequestHandler, switchMode } from './lib/server/http-routes.js';
 import { runtimes, wsToRuntime, runtimeForWs, createRuntime, safeSend } from './lib/server/runtime.js';
 import { sendToWs } from './lib/server/ws-bus.js';
-import { sendProgress } from './lib/server/ticket-progress.js';
+import { sendProgress } from './lib/server/agent-progress.js';
 import { regenerateTitleWithHaiku, extractText, extractToolUses } from './lib/server/claude-spawn.js';
 import { processMessage } from './lib/server/turn.js';
 import { endsWithQuestion } from './lib/server/session-store.js';
@@ -95,8 +95,8 @@ wss.on('connection', async (ws, req) => {
     isNew: session.isNew,
   });
   // Send the current progress snapshot so a (re)joining tab paints the
-  // counter immediately instead of waiting for the next merge / write event.
-  sendProgress(runtime).catch(() => {});
+  // counter immediately instead of waiting for the next agent event.
+  sendProgress(runtime);
   // Repaint the cumulative tokens/cost ticker on (re)connect — runtime.stats
   // is seeded from the log digest, but resetChatUi just cleared the DOM.
   // Skip when there's nothing to show (fresh session) to avoid a "0 tokens
