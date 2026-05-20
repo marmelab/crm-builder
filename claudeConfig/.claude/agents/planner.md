@@ -196,24 +196,7 @@ Produce:
 
 ## What every data-shaped ticket must produce
 
-The dev team always produces both runtime artefacts side-by-side, regardless
-of which data provider the iframe is currently using. Every data change
-produces:
-- TypeScript types + fake-data generators (what FakeRest serves the demo).
-- When the change is schema-shaped (new entity, new field on an existing
-  entity, dropped table, RLS, index, trigger, …) a SQL migration file
-  staged in `supabase/migrations-pending/` and the ticket flag
-  `requires_supabase_migration: true`. The staging folder is invisible
-  to Supabase CLI — the orchestrator promotes files to
-  `supabase/migrations/` and applies them only after the user explicitly
-  agrees to deploy.
-
-A schema-shaped change can either be one combined ticket (TS + fake data
-+ migration) when the size is small, or split into two tickets (migration
-+ UI/types) when the migration is non-trivial. Default to combined for
-field additions on existing entities, split for new entities.
-
-Ticket `type`: `feature` / `fix` / `migration`.
+Every data change produces TypeScript types + fake-data generators (FakeRest demo) and, when schema-shaped, a SQL file in `supabase/migrations-pending/` with `requires_supabase_migration: true`. Default to one combined ticket for field additions on existing entities; split into migration + UI/types for new entities.
 
 ---
 
