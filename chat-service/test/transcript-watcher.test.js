@@ -20,6 +20,7 @@ test('TranscriptWatcher: emits session_id when new .jsonl appears in dir', async
   const watcher = new TranscriptWatcher(null, dir);
   const eventPromise = waitForEvent(watcher, 'event');
   await watcher.start();
+  await new Promise(r => setTimeout(r, 50)); // wait for fs.watch to attach
 
   // Simulate Claude creating its session file
   const sessionId = 'abc123-test-session-id';
@@ -88,11 +89,10 @@ test('TranscriptWatcher: skips existing lines on resume, only emits new ones', a
   };
   await appendFile(jsonlPath, JSON.stringify(newEntry) + '\n');
 
-  // Give the watcher time to pick it up
-  await new Promise(r => setTimeout(r, 300));
-
+  // Wait for the event to fire (event-based, not fixed sleep)
+  const ev = await waitForEvent(watcher, 'event');
   assert.equal(events.length, 1, 'should emit only the new entry, not the old one');
-  assert.equal(events[0].message.content[0].text, 'New message');
+  assert.equal(ev.message.content[0].text, 'New message');
 
   watcher.close();
   await rm(dir, { recursive: true });
@@ -113,7 +113,7 @@ test('TranscriptWatcher: ignores non-assistant JSONL entries', async () => {
 
   const userEntry = { type: 'user', message: { role: 'user', content: 'hi' }, uuid: 'u2', sessionId };
   await appendFile(jsonlPath, JSON.stringify(userEntry) + '\n');
-  await new Promise(r => setTimeout(r, 300));
+  await new Promise(r => setTimeout(r, 500));
 
   assert.equal(events.length, 0, 'should not emit user entries');
 
