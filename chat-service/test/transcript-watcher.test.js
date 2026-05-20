@@ -22,9 +22,12 @@ test('TranscriptWatcher: emits session_id when new .jsonl appears in dir', async
   await watcher.start();
   await new Promise(r => setTimeout(r, 50)); // wait for fs.watch to attach
 
-  // Simulate Claude creating its session file
+  // Simulate Claude creating its session file.
+  // Interactive sessions start with a permission-mode entry — the watcher
+  // uses this to distinguish them from --print title-generation sessions.
   const sessionId = 'abc123-test-session-id';
-  await writeFile(join(dir, `${sessionId}.jsonl`), '');
+  const permLine = JSON.stringify({ type: 'permission-mode', permissionMode: 'bypassPermissions', sessionId }) + '\n';
+  await writeFile(join(dir, `${sessionId}.jsonl`), permLine);
 
   const ev = await eventPromise;
   assert.equal(ev.session_id, sessionId);

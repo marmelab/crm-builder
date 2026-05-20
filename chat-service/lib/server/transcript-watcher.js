@@ -58,11 +58,24 @@ export class TranscriptWatcher extends EventEmitter {
       before = new Set();
     }
 
-    // Extracted so both the watcher callback and the post-attach re-check can use it.
-    // `before.add()` makes it idempotent against duplicate calls.
-    const handleNewFile = (filename) => {
+    // Latch onto a new JSONL only if it belongs to an interactive session.
+    // Sessions started with --print (e.g. title generation via regenerateTitleWithHaiku)
+    // begin with queue-operation entries. Interactive sessions (--dangerously-skip-permissions)
+    // begin with a permission-mode entry. Checking this prevents the watcher from
+    // accidentally tracking the title-generation spawn instead of the orchestrator session.
+    const isInteractiveSession = async (filename) => {
+      try {
+        const content = await readFile(join(this.#projectDir, filename), 'utf8');
+        const firstLine = content.split('\n').find(l => l.trim());
+        if (!firstLine) return false; // empty file, not ready yet
+        return JSON.parse(firstLine).type === 'permission-mode';
+      } catch { return false; }
+    };
+
+    const handleNewFile = async (filename) => {
       if (!filename || !filename.endsWith('.jsonl')) return;
       if (before.has(filename)) return;
+      if (!await isInteractiveSession(filename)) return; // skip --print sessions
       before.add(filename);
 
       const id = basename(filename, '.jsonl');
@@ -77,14 +90,14 @@ export class TranscriptWatcher extends EventEmitter {
     };
 
     this.#dirWatcher = watch(this.#projectDir, { persistent: false }, (_event, filename) => {
-      handleNewFile(filename);
+      handleNewFile(filename).catch(() => {});
     });
 
     // Post-attach re-check: catches files created between readdir resolving and
     // watch() registering (tiny window, but possible under load).
     try {
       const files = await readdir(this.#projectDir);
-      for (const f of files) handleNewFile(f);
+      for (const f of files) await handleNewFile(f);
     } catch { /* ignore */ }
   }
 
