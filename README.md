@@ -1,8 +1,8 @@
-# Atomic CRM — Isolated dev environment with Claude Code
+# Atomic CRM Builder
 
-Single Docker image, two development modes depending on your needs.
+Customizing a CRM can be tedious. We built Atomic CRM Builder to provide a containerized environment thatr helps you create your custom CRM based on [Atomic CRM](https://github.com/marmelab/atomic-crm).
 
-## The two modes
+The builder provides two modes:
 
 ```
 MODE=demo (default)                 MODE=full
@@ -14,31 +14,14 @@ Data resets on reload               Data is persisted
 Great for UI development            Required for auth, storage, RLS
 ```
 
-## Recommended workflow
+Note: The user can toggle mode with a single click from the User Interface.
 
-```
-1. Start in demo mode
-      ↓
-2. Claude develops features via prompts
-   (components, fields, views...)
-      ↓
-3. Visual validation in the browser
-      ↓
-4. switch-mode full  (in the Claude terminal)
-      ↓
-5. Claude generates and applies the Supabase migration
-   (npx supabase db push)
-      ↓
-6. Verify on real data
-```
-
----
 
 ## Quick start
 
 ### Prerequisites
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed
-- Anthropic API key: [console.anthropic.com](https://console.anthropic.com)
+- Anthropic API key: [console.anthropic.com](https://console.anthropic.com) or a Claude Code subscription
 
 ### 1. Build (once, ~5 min)
 ```bash
@@ -84,6 +67,26 @@ make restart # or make restart-full
 
 # Full reset — deletes volumes (loses code changes)
 make wipe up
+```
+
+---
+
+## Recommended workflow
+
+```
+1. Start in demo mode
+      ↓
+2. Claude develops features via prompts
+   (components, fields, views...)
+      ↓
+3. Visual validation in the browser
+      ↓
+4. switch-mode full  (in the Claude terminal)
+      ↓
+5. Claude generates and applies the Supabase migration
+   (npx supabase db push)
+      ↓
+6. Verify on real data
 ```
 
 ---
