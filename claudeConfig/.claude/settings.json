@@ -16,6 +16,7 @@
         "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
     },
     "skillListingMaxDescChars": 512,
+    "skipDangerousModePermissionPrompt": true,
     "permissions": {
         "allow": []
     },
@@ -120,6 +121,17 @@
                         "command": "/home/developer/.claude/hooks/setup-worktree.sh",
                         "timeout": 60,
                         "statusMessage": "Setting up worktree..."
+                    }
+                ]
+            }
+        ],
+        "Stop": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "/home/developer/.claude/hooks/turn-complete.sh",
+                        "timeout": 5
                     }
                 ]
             }

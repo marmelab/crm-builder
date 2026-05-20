@@ -1,6 +1,8 @@
 import pty from 'node-pty';
 import stripAnsi from 'strip-ansi';
 import { EventEmitter } from 'node:events';
+import { access, unlink } from 'node:fs/promises';
+import { watch } from 'node:fs';
 import { CWD, CLAUDE_HOME } from './config.js';
 import { getOrchestratorModel } from './system-prompt.js';
 import { buildSpawnEnv } from '../spawn-env.js';
@@ -25,17 +27,20 @@ const OUTPUT_BUFFER_LIMIT = 2048;
 export class PtySession extends EventEmitter {
   #pty;
   #watcher;
+  #sessionId;            // Claude session UUID, learned from TranscriptWatcher
   #silenceTimer = null;
   #resultEmitted = true; // true = idle (no active turn), prevents spurious result on startup
   #outputBuffer = '';    // last 2 KB of PTY output (after strip-ansi) for friendlyError
   #ready = false;        // true once Claude's TUI shows its first ❯ prompt
   #pendingSend = null;   // message queued before Claude was ready
+  #stopDirWatcher = null; // fs.watch on /tmp for stop sentinel file
   closed = false;
 
   get stderr() { return this.#outputBuffer; }
 
   constructor(claudeSessionId, sessionDir) {
     super();
+    this.#sessionId = claudeSessionId || null;
     const model = getOrchestratorModel();
     const mode = process.env.MODE || 'demo';
 
@@ -61,13 +66,24 @@ export class PtySession extends EventEmitter {
     this.#pty.onExit(({ exitCode }) => {
       this.closed = true;
       clearTimeout(this.#silenceTimer);
+      this.#stopDirWatcher?.close();
       this.#watcher?.close();
       this.emit('exit', exitCode ?? 1);
     });
 
     this.#watcher = new TranscriptWatcher(claudeSessionId, PROJECT_DIR);
-    this.#watcher.on('event', e => this.emit('event', e));
+    this.#watcher.on('event', e => {
+      // Discover session_id for new sessions so we can watch for the stop sentinel.
+      if (e.session_id && !this.#sessionId) {
+        this.#sessionId = e.session_id;
+        this.#watchForStop();
+      }
+      this.emit('event', e);
+    });
     this.#watcher.start().catch(() => {});
+
+    // Resumed sessions already know the session_id — set up the stop watcher now.
+    if (claudeSessionId) this.#watchForStop();
   }
 
   // Send a plain-text message to the Claude interactive session.
@@ -105,6 +121,34 @@ export class PtySession extends EventEmitter {
     if (!this.closed) this.#pty.kill();
   }
 
+  // Watch /tmp for the sentinel file written by the Stop hook (turn-complete.sh).
+  // The Stop hook fires AFTER Claude has flushed the JSONL transcript, so by
+  // the time we react to the sentinel the TranscriptWatcher has already (or will
+  // shortly, within its 50 ms debounce) delivered all assistant events.
+  #watchForStop() {
+    if (!this.#sessionId || this.#stopDirWatcher) return;
+    const sentinel = `pty-turn-done-${this.#sessionId}`;
+    const sentinelPath = `/tmp/${sentinel}`;
+
+    this.#stopDirWatcher = watch('/tmp', { persistent: false }, (_, filename) => {
+      if (filename === sentinel && !this.#resultEmitted) {
+        this.#handleStopSentinel(sentinelPath);
+      }
+    });
+
+    // Post-attach check: catch sentinel that appeared before watch() attached.
+    access(sentinelPath)
+      .then(() => { if (!this.#resultEmitted) this.#handleStopSentinel(sentinelPath); })
+      .catch(() => {});
+  }
+
+  #handleStopSentinel(sentinelPath) {
+    unlink(sentinelPath).catch(() => {});
+    // 100 ms buffer: TranscriptWatcher debounce is 50 ms — give it time to
+    // deliver assistant events before we close the turn with `result`.
+    setTimeout(() => this.#emitResult(), 100);
+  }
+
   #onData(chunk) {
     const text = stripAnsi(chunk);
     // Always buffer for friendlyError classification (e.g. auth/network errors).
@@ -120,10 +164,11 @@ export class PtySession extends EventEmitter {
       return;
     }
     if (this.#resultEmitted) return; // idle — don't drive turn-end detection
-    // Reset to short silence window; overrides the 30 s startup safety timer.
+    // Reset silence window (overrides the 30 s startup safety timer).
+    // Turn completion is driven by the Stop hook sentinel, not prompt detection —
+    // detecting the ❯ prompt here would race with the JSONL watcher (50 ms debounce).
     clearTimeout(this.#silenceTimer);
     this.#silenceTimer = setTimeout(() => this.#emitResult(), TURN_TIMEOUT_MS);
-    if (detectPrompt(text)) this.#emitResult();
   }
 
   #emitResult() {
