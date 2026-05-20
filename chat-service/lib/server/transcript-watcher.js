@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { readFile, readdir } from 'node:fs/promises';
+import { readFile, readdir, mkdir } from 'node:fs/promises';
 import { watch } from 'node:fs';
 import { join, basename } from 'node:path';
 
@@ -33,6 +33,10 @@ export class TranscriptWatcher extends EventEmitter {
       } catch { /* file doesn't exist yet — will be created shortly */ }
       this.#watchFile();
     } else {
+      // Ensure the project dir exists before watching — fs.watch() throws
+      // synchronously on a missing directory, which would silently swallow
+      // all events if the caller does .catch(() => {}).
+      await mkdir(this.#projectDir, { recursive: true }).catch(() => {});
       await this.#watchDir();
     }
   }

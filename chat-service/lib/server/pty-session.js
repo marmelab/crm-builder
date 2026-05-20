@@ -28,6 +28,8 @@ export class PtySession extends EventEmitter {
   #silenceTimer = null;
   #resultEmitted = true; // true = idle (no active turn), prevents spurious result on startup
   #outputBuffer = '';    // last 2 KB of PTY output (after strip-ansi) for friendlyError
+  #ready = false;        // true once Claude's TUI shows its first ❯ prompt
+  #pendingSend = null;   // message queued before Claude was ready
   closed = false;
 
   get stderr() { return this.#outputBuffer; }
@@ -71,8 +73,28 @@ export class PtySession extends EventEmitter {
   // Send a plain-text message to the Claude interactive session.
   send(message) {
     if (this.closed) return;
+    if (!this.#ready) {
+      // Claude's TUI hasn't shown its first prompt yet — queue and wait.
+      // The startup timeout ensures we don't wait forever.
+      this.#pendingSend = message;
+      clearTimeout(this.#silenceTimer);
+      this.#silenceTimer = setTimeout(() => {
+        // Force-flush: if Claude never shows a prompt, send anyway and hope.
+        if (this.#pendingSend !== null) {
+          const msg = this.#pendingSend;
+          this.#pendingSend = null;
+          this.#ready = true;
+          this.#doSend(msg);
+        }
+      }, STARTUP_TIMEOUT_MS);
+      return;
+    }
+    this.#doSend(message);
+  }
+
+  #doSend(message) {
     this.#resultEmitted = false; // open new turn
-    // Safety timeout: if Claude never outputs anything (hang/crash before PTY data),
+    // Safety timeout: if Claude never outputs anything after sending,
     // emit result after 30 s. #onData resets this to TURN_TIMEOUT_MS on first chunk.
     clearTimeout(this.#silenceTimer);
     this.#silenceTimer = setTimeout(() => this.#emitResult(), STARTUP_TIMEOUT_MS);
@@ -87,6 +109,16 @@ export class PtySession extends EventEmitter {
     const text = stripAnsi(chunk);
     // Always buffer for friendlyError classification (e.g. auth/network errors).
     this.#outputBuffer = (this.#outputBuffer + text).slice(-OUTPUT_BUFFER_LIMIT);
+    // Detect first-ever prompt while idle → Claude TUI is ready for input.
+    if (!this.#ready && detectPrompt(text)) {
+      this.#ready = true;
+      if (this.#pendingSend !== null) {
+        const msg = this.#pendingSend;
+        this.#pendingSend = null;
+        this.#doSend(msg);
+      }
+      return;
+    }
     if (this.#resultEmitted) return; // idle — don't drive turn-end detection
     // Reset to short silence window; overrides the 30 s startup safety timer.
     clearTimeout(this.#silenceTimer);
