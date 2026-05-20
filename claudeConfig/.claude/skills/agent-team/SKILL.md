@@ -154,7 +154,7 @@ Total: `3N + 1` SendMessages.
 
 ### 3b — Yield the turn
 
-Emit a brief assistant text (e.g. *"Wrapping up..."*) and stop. **No other tool calls.** The runtime delivers `shutdown_approved` on the next user turn — being read in the lead's stream marks them read, preventing embryos.
+**No other tool calls.** The runtime delivers `shutdown_approved` on the next user turn — being read in the lead's stream marks them read, preventing embryos.
 
 ### 3c — Verify on next turn
 
