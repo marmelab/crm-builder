@@ -113,12 +113,54 @@ applies migrations after the user explicitly agrees.
 
 ## Supabase-migration flag on the ticket
 
-- `true` → write the SQL migration to `supabase/migrations-pending/<YYYYMMDDHHMMSS>_<SESSION_SHORT_ID>_<TASK-XXX>_<short-slug>.sql` (e.g. `20260518091200_46bc14c5_TASK-001_add_invoices.sql`). `SESSION_SHORT_ID` = first segment of `WORKTREE_PATH`. Use `date -u +%Y%m%d%H%M%S`. Keep the `TASK-XXX` hyphen; only `<short-slug>` uses underscores. The `SESSION_SHORT_ID` scopes the migration to this session so the deploy script doesn't promote a refused migration from another session.
-- `false` → do not touch `supabase/migrations*/`.
+The ticket's `requires_supabase_migration` field is set by the planner.
+Treat it as your contract:
 
-**View update rule** — when a migration adds or removes a column, check `supabase/schemas/03_views.sql` for views selecting from that table. If one exists, recreate it with `CREATE OR REPLACE VIEW`, new column appended at the **absolute end** of the SELECT list (after all existing columns, including computed AS aliases). PostgreSQL rejects any ordinal shift (error 42P16). PostgREST queries the view, not the table — a missing update makes the column invisible to the app.
+- `true` → write the SQL migration to
+  `supabase/migrations-pending/<YYYYMMDDHHMMSS>_<SESSION_SHORT_ID>_<TASK-XXX>_<short-slug>.sql`
+  inside your worktree, e.g.
+  `supabase/migrations-pending/20260518091200_46bc14c5_TASK-001_add_invoices.sql`.
+  `SESSION_SHORT_ID` is the first segment of your worktree path (derive
+  it from `WORKTREE_PATH`: `/app/worktrees/46bc14c5/TASK-001` →
+  `46bc14c5`). Use `date -u +%Y%m%d%H%M%S` for the timestamp. The
+  `TASK-XXX` segment keeps its hyphen exactly as-is (e.g. `TASK-001`,
+  never `TASK_001`). Only the `<short-slug>` at the end has spaces and
+  dashes replaced with underscores (e.g. `add_priority_column`). The `SESSION_SHORT_ID` in
+  the name is what lets the deploy script scope your migration to this
+  chat session — without it, another session's refused migration could
+  be promoted by mistake. The `migrations-pending/` folder is the
+  staging area — Supabase CLI ignores it, so this file is NOT applied
+  yet. The orchestrator's post-dev deploy offer is what promotes it to
+  `supabase/migrations/` and runs `supabase migration up`.
+- `false` → do not touch `supabase/migrations/` or
+  `supabase/migrations-pending/`.
 
-If the planner's flag is wrong, flip it in `${TICKETS_DIR}/TASK-XXX.json` before requesting review (only field you may change besides `status`).
+**View update rule** — when a migration adds or removes a column on a table,
+check `supabase/schemas/03_views.sql` for any view that `SELECT`s from that
+table. If one exists, the migration **must** also recreate it with the new
+column. Use `CREATE OR REPLACE VIEW` and append new columns at the **absolute
+end** of the SELECT list — after all existing columns, including computed ones
+(AS aliases). Never insert in the middle, even if the position looks more
+logical. PostgreSQL forbids any change that shifts the ordinal position of an
+existing column (error 42P16), and computed columns count just like raw ones.
+Forgetting this is the single most common migration bug: the column exists on
+the base table but is invisible to the app because PostgREST queries the view,
+not the table directly.
+
+```sql
+-- example: adding `importance` to contacts requires updating contacts_summary
+CREATE OR REPLACE VIEW public.contacts_summary AS
+  SELECT co.id, ..., email_fts, phone_fts, nb_tasks,
+         co.importance  -- ✅ new col after every existing col, including computed ones
+  FROM contacts co ...;
+```
+
+If during implementation you discover the planner was wrong (e.g. you can
+implement the change with a JSONB column already present, or conversely
+you realise you DO need a schema change), Edit
+`${TICKETS_DIR}/TASK-XXX.json` to flip the flag before requesting review.
+This is the only field other than `status` you are allowed to update on
+the ticket file.
 
 ---
 

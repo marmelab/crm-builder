@@ -126,7 +126,26 @@ Any `[FAIL]` → BLOCKED. Omitting a criterion from the list is itself a bug.
 
 ### A.6b Supabase view migrations (BLOCKING)
 
-When the diff includes a migration that adds or removes a column: check `supabase/schemas/03_views.sql` for views selecting from that table. Missing update → BLOCKING (PostgREST queries the view, not the table — column becomes invisible to the app). New columns must be at the **absolute end** of the SELECT list; PostgreSQL rejects any ordinal shift (error 42P16), including computed AS aliases. `03_views.sql` must stay in sync with the migration (same column order, same aliases).
+When the diff includes a migration that adds or removes a column on a table:
+
+- Check `supabase/schemas/03_views.sql` for any view that `SELECT`s from that
+  table. If one exists and the migration does **not** update it, flag it as
+  BLOCKING — the column will be invisible to the app (PostgREST queries the
+  view, not the table directly).
+- New columns must appear at the **absolute end** of the SELECT list — after all
+  existing columns, including computed ones (AS aliases). PostgreSQL rejects any
+  `CREATE OR REPLACE VIEW` that shifts an existing column's ordinal position
+  (error 42P16). Inserting mid-list is a common mistake even when the position
+  looks "natural" (e.g. grouping raw columns together).
+- The declarative schema (`supabase/schemas/03_views.sql`) must be kept in sync
+  with the migration — same column order, same aliases.
+- If the developer used `DROP VIEW … CREATE VIEW` instead of `CREATE OR REPLACE
+  VIEW`, verify that dependent objects (RLS policies, PostgREST config) are
+  also recreated.
+
+**How to check**: read the migration SQL and count column positions. If any
+existing column (raw or computed) moved from its previous ordinal position,
+flag it as BLOCKING.
 
 ### A.7 Tests (BLOCKING)
 - Complex business logic → unit test required

@@ -472,12 +472,36 @@ i.e. STATE D (COMPLEX) and STATE SETUP-DONE (SETUP). It does NOT run for:
 - MODE-SWITCH (no code change)
 - failed dev waves where no ticket reached `status: merged`.
 
+### Signal: the per-ticket flag
+
+The planner sets `requires_supabase_migration: true|false` on every ticket
+it produces. The developer keeps it accurate during
+implementation. The flag means: "this ticket added or modified a SQL file
+under `supabase/migrations/`".
+
+The orchestrator never opens the migration files, never reads git history, only reads the ticket flags.
+
+### Tracking what is already deployed
+
+The orchestrator owns the file `${TICKETS_DIR}/.deploy-applied`, one
+`TASK-XXX` id per line. After a successful migration the orchestrator
+appends the deployed ticket ids. Missing file = nothing deployed yet.
+
 ### Detection (one Bash call inside STATE D / STATE SETUP-DONE)
 
-`Bash("pending-deploys ${TICKETS_DIR}")` — prints `TASK-XXX` ids that are `status: merged`, `requires_supabase_migration: true`, and not yet in `${TICKETS_DIR}/.deploy-applied` (one per line; missing file = nothing deployed yet).
+```
+Bash("pending-deploys ${TICKETS_DIR}")
+```
 
-- Empty → reply normally, enter STATE DONE.
-- Non-empty → carry the pending ids in context, enter STATE PD-ASK.
+The `pending-deploys` helper reads every ticket file in TICKETS_DIR, keeps
+those with `status: "merged"` and `requires_supabase_migration: true`,
+removes the ones already listed in `${TICKETS_DIR}/.deploy-applied`, and
+prints the remaining `TASK-XXX` ids — one per line.
+
+- Empty output → reply normally and end (enter STATE DONE).
+- Non-empty output (one or more `TASK-XXX` ids) → these are the **pending
+  ticket ids**. Enter STATE PD-ASK; carry the pending list in your context
+  for the next turn.
 
 ### STATE PD-ASK — offer to deploy to the real database
 
