@@ -10,6 +10,7 @@ export class TranscriptWatcher extends EventEmitter {
   #linesRead = 0;
   #fileWatcher = null;
   #dirWatcher = null;
+  #debounce = null;
   closed = false;
 
   // projectDir: directory containing <sessionId>.jsonl files.
@@ -38,6 +39,7 @@ export class TranscriptWatcher extends EventEmitter {
 
   close() {
     this.closed = true;
+    clearTimeout(this.#debounce);
     this.#fileWatcher?.close();
     this.#dirWatcher?.close();
   }
@@ -71,10 +73,9 @@ export class TranscriptWatcher extends EventEmitter {
 
   #watchFile() {
     // Debounce rapid change events — JSONL writes can trigger multiple events.
-    let debounce = null;
     this.#fileWatcher = watch(this.#jsonlPath, { persistent: false }, () => {
-      clearTimeout(debounce);
-      debounce = setTimeout(() => this.#poll().catch(() => {}), 50);
+      clearTimeout(this.#debounce);
+      this.#debounce = setTimeout(() => this.#poll().catch(() => {}), 50);
     });
     // Initial poll in case lines were written before the watcher was attached.
     this.#poll().catch(() => {});
@@ -90,7 +91,7 @@ export class TranscriptWatcher extends EventEmitter {
     const lines = content.split('\n');
     for (let i = this.#linesRead; i < lines.length; i++) {
       const raw = lines[i].trim();
-      if (!raw) { continue; }
+      if (!raw) { if (i < lines.length - 1) this.#linesRead = i + 1; continue; }
       let entry;
       try { entry = JSON.parse(raw); } catch { break; } // partial line — retry next poll
       this.#linesRead = i + 1;
