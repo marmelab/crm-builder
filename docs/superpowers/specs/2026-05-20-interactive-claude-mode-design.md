@@ -21,11 +21,11 @@ This works but uses `--print`, which the user wants removed. Without `--print`, 
 
 ## Approach
 
-**Spawn without `--print`**, using `child_process.spawn` (no native module).  
+**Spawn without `--print`**, using `node-pty` to create a proper PTY (ensures Claude starts cleanly — terminal queries are answered by the PTY automatically).  
 **Text extraction**: watch the JSONL transcript Claude writes to disk — same format as stream-json assistant events, so `turn.js` stays unchanged.  
-**Turn-end detection**: strip ANSI from stdout, detect the Claude prompt character. Fallback: 1500ms silence timeout.
+**Turn-end detection**: strip ANSI from `onData` chunks, detect the Claude prompt character. Fallback: 1500ms silence timeout.
 
-If Claude blocks on startup due to unanswered terminal queries, add `unbuffer` (from `apt install expect`) as a wrapper.
+Build tools (`python3`, `make`, `g++`) are confirmed available in the container — `node-pty` compiles without issues.
 
 ---
 
@@ -37,8 +37,8 @@ Before:
                stdout JSON events → turn.js event loop
 
 After:
-  PtySession → child_process.spawn('claude', ['--dangerously-skip-permissions', ...])
-               ├─ stdout → strip ANSI → prompt detection → emit synthetic {type:'result'}
+  PtySession → node-pty.spawn('claude', ['--dangerously-skip-permissions', ...])
+               ├─ onData → strip ANSI → prompt detection → emit synthetic {type:'result'}
                └─ JSONL watcher → new assistant entries → emit {type:'assistant', message:{...}}
                Both feed the same event emitter turn.js already listens to
 ```
@@ -52,10 +52,14 @@ After:
 ### Spawn
 
 ```javascript
-spawn('claude', ['--dangerously-skip-permissions', ...modelArg, ...resumeArg], {
-  env: buildSpawnEnv({ ...process.env, HOME: CLAUDE_HOME, CLAUDE_PROJECT_DIR: CWD, ... }),
+import pty from 'node-pty';
+
+pty.spawn('claude', ['--dangerously-skip-permissions', ...modelArg, ...resumeArg], {
+  name: 'xterm-256color',
+  cols: 220,
+  rows: 50,
   cwd: CWD,
-  stdio: ['pipe', 'pipe', 'pipe'],
+  env: buildSpawnEnv({ ...process.env, HOME: CLAUDE_HOME, CLAUDE_PROJECT_DIR: CWD, ... }),
 })
 ```
 
@@ -67,8 +71,8 @@ Remove: `--print`, `--output-format stream-json`, `--input-format stream-json`, 
 // Old: JSON line to stdin
 this.#proc.stdin.write(JSON.stringify({type:'user', message:{role:'user', content: msg}}) + '\n')
 
-// New: plain text + newline (interactive mode input)
-this.#proc.stdin.write(msg + '\n')
+// New: plain text via PTY write
+this.#pty.write(msg + '\r')  // \r = Enter in PTY
 ```
 
 ### JSONL watcher (text extraction)
@@ -145,8 +149,8 @@ The UI stats ticker shows zeros for cost/tokens. That's accepted.
 
 ## Dependencies
 
-- `strip-ansi` (pure JS, no native build) — for prompt detection only.
-- No `node-pty`. If Claude blocks on startup in practice: `apt install expect` + wrap spawn with `unbuffer`.
+- `node-pty` — native module, compiles with `python3`/`make`/`g++` (confirmed available in container).
+- `strip-ansi` (pure JS) — for prompt detection only.
 
 ---
 
@@ -155,6 +159,6 @@ The UI stats ticker shows zeros for cost/tokens. That's accepted.
 | File | Change |
 |------|--------|
 | `chat-service/lib/server/pty-session.js` | Full rewrite: child_process → interactive spawn + JSONL watcher + prompt detection |
-| `chat-service/package.json` | Add `strip-ansi` dependency |
+| `chat-service/package.json` | Add `node-pty` and `strip-ansi` dependencies |
 | `chat-service/lib/server/turn.js` | Remove `--strict-mcp-config` args (they were in PtySession constructor, not turn.js — likely no change needed) |
 | `chat-service/lib/server/claude-spawn.js` | `spawnClaude` kept for `regenerateTitleWithHaiku` only; `spawnClaude` itself may become unused |
