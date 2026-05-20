@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help build up up-full down wipe restart logs shell claude test test-unit test-smoke bench bench-update clean-sessions reset \
+.PHONY: help build up up-full down wipe restart restart-full logs shell claude test test-unit test-smoke bench bench-update clean-sessions reset \
         start demo full stop kill image log tail bash exec tests smoke clean archive reload
 
 # Detect running container — used by claude/shell targets
@@ -25,6 +25,8 @@ wipe: ## Stop container AND remove all volumes (wipes crm checkout, deps, sessio
 	./scripts/down.sh -v
 
 restart: down up ## Restart the demo stack
+
+restart-full: down up-full ## Restart the full stack
 
 logs: ## Tail logs of the running stack
 	docker compose logs -f

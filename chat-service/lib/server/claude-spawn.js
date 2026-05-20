@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { CWD, CLAUDE_HOME } from './config.js';
+import { CWD, CLAUDE_HOME, MODE_DEMO } from './config.js';
 import { getSystemPrompt, getOrchestratorModel } from './system-prompt.js';
 import { broadcast } from './ws-bus.js';
 import { readMessages } from './session-store.js';
@@ -37,7 +37,7 @@ export function rewriteUserMessage(userMessage) {
 }
 
 export function spawnClaude(userMessage, claudeSessionId, sessionDir) {
-  const mode = process.env.MODE || 'demo';
+  const mode = process.env.MODE || MODE_DEMO;
   const env = `<mode>${mode}</mode>\n<session_dir>${sessionDir}</session_dir>`;
   const systemPrompt = getSystemPrompt();
   const orchestratorModel = getOrchestratorModel();

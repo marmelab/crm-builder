@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { extname, join } from 'node:path';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
-import { CWD, LOG_DIR, ALLOWED_STATES, MIME_TYPES, UUID_RE } from './config.js';
+import { CWD, LOG_DIR, ALLOWED_STATES, MIME_TYPES, UUID_RE, MODE_DEMO, MODE_FULL, VALID_MODES } from './config.js';
 import { listSessions, getSession, patchSession, deleteSession } from './session-store.js';
 import { runtimes } from './runtime.js';
 import { broadcast, sendToWs } from './ws-bus.js';
@@ -334,7 +334,7 @@ async function checkSupabaseReady() {
 }
 
 async function handleGetMode(req, res) {
-  const mode = process.env.MODE || 'demo';
+  const mode = process.env.MODE || MODE_DEMO;
   const supabaseReady = await checkSupabaseReady();
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ mode, supabaseReady }));
@@ -348,13 +348,13 @@ async function handleGetMode(req, res) {
 //     (auto-reset to demo).
 // Returns true on success, false if the input mode is invalid.
 export function switchMode(mode) {
-  if (mode !== 'demo' && mode !== 'full') return false;
+  if (!VALID_MODES.has(mode)) return false;
   process.env.MODE = mode;
-  const variant = mode === 'full' ? 'App.supabase.tsx' : 'App.fakerest.tsx';
+  const variant = mode === MODE_FULL ? 'App.supabase.tsx' : 'App.fakerest.tsx';
   try { copyFileSync(`/app-variants/${variant}`, '/app/src/App.tsx'); }
   catch (e) { console.warn('[mode-switch] App.tsx copy failed:', e.message); }
-  if (mode === 'full') {
-    const child = spawn('/usr/local/bin/switch-mode', ['full'], {
+  if (mode === MODE_FULL) {
+    const child = spawn('/usr/local/bin/switch-mode', [MODE_FULL], {
       detached: true, stdio: 'ignore',
       env: { ...process.env, APP_DIR: '/app' },
     });
@@ -401,13 +401,13 @@ async function handleModeNotify(req, res) {
     res.writeHead(400); res.end('Bad request'); return;
   }
   const { mode } = body;
-  if (mode !== 'demo' && mode !== 'full') {
+  if (!VALID_MODES.has(mode)) {
     res.writeHead(400, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'mode must be demo or full' }));
+    res.end(JSON.stringify({ error: `mode must be ${MODE_DEMO} or ${MODE_FULL}` }));
     return;
   }
   process.env.MODE = mode;
-  const supabaseReady = mode === 'full' ? await checkSupabaseReady() : false;
+  const supabaseReady = mode === MODE_FULL ? await checkSupabaseReady() : false;
   broadcastModeChange(mode, supabaseReady);
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ ok: true }));

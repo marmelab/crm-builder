@@ -80,12 +80,10 @@ make claude         # OAuth flow on first run — copy URL to browser, paste tok
 ### Persist code changes across restarts
 ```bash
 # Stop and restart — keeps your code changes
-make down
-make up        # or make up-full
+make restart # or make restart-full
 
 # Full reset — deletes volumes (loses code changes)
-make wipe
-make up
+make wipe up
 ```
 
 ---

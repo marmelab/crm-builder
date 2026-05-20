@@ -3,7 +3,7 @@ import { join } from 'path';
 import { fileURLToPath } from 'url';
 import { WebSocketServer } from 'ws';
 
-import { PORT } from './lib/server/config.js';
+import { PORT, MODE_DEMO, MODE_FULL } from './lib/server/config.js';
 import { loadSystemPrompt, applySystemPrompt } from './lib/server/system-prompt.js';
 import { openSession } from './lib/server/session-store.js';
 import { createRequestHandler, switchMode } from './lib/server/http-routes.js';
@@ -40,8 +40,8 @@ wss.on('connection', async (ws, req) => {
   // Existing/rejoined sessions keep whatever mode the runtime is in.
   // Reuses the same helper the /api/mode POST handler runs, so the two
   // code paths can never drift apart.
-  if (session.isNew && process.env.MODE === 'full') {
-    switchMode('demo');
+  if (session.isNew && process.env.MODE === MODE_FULL) {
+    switchMode(MODE_DEMO);
   }
 
   let runtime = runtimes.get(session.id);
