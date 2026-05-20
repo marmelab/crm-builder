@@ -58,10 +58,7 @@ export async function processMessage(runtime, prompt) {
         const text = extractText(event);
         if (text) {
           receivedText = true;
-          // Suppress consecutive duplicates. The COMPLEX flow makes the
-          // orchestrator yield with the same "Working on it..." line on every
-          // STATE C wake-up (which can be 20+ in a 4-ticket run) — those are
-          // pure noise and pollute both the UI and the persisted log. We
+          // Suppress consecutive duplicates. We
           // still set lastAssistantText so other code that reads it (final
           // fallback message logic below) sees the last real text.
           const isDuplicate = text.trim() === lastAssistantText.trim();
