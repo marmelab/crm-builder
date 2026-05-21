@@ -5,7 +5,7 @@ import { WebSocketServer } from 'ws';
 
 import { PORT, MODE_DEMO, MODE_FULL } from './lib/server/config.js';
 import { loadSystemPrompt, applySystemPrompt } from './lib/server/system-prompt.js';
-import { openSession } from './lib/server/session-store.js';
+import { openSession, deleteSession } from './lib/server/session-store.js';
 import { createRequestHandler, switchMode } from './lib/server/http-routes.js';
 import { runtimes, wsToRuntime, runtimeForWs, createRuntime, safeSend } from './lib/server/runtime.js';
 import { sendToWs } from './lib/server/ws-bus.js';
@@ -155,7 +155,7 @@ wss.on('connection', async (ws, req) => {
     }
   });
 
-  ws.on('close', () => {
+  ws.on('close', async () => {
     const r = runtimeForWs(ws);
     wsToRuntime.delete(ws);
     if (!r) return;
@@ -164,8 +164,13 @@ wss.on('connection', async (ws, req) => {
     // running, processMessage's finally block will release the runtime once
     // it finishes (if no clients are left by then).
     if (r.clients.size === 0 && !r.busy) {
-      r.session?.close();
-      runtimes.delete(r.session.id);
+      const id = r.session.id;
+      const empty = (r.session.meta.messageCount || 0) === 0;
+      // Await the log stream flush before rm so we don't race writes against
+      // deletion (cf. the same pattern in http-routes' DELETE handler).
+      await r.session?.close();
+      runtimes.delete(id);
+      if (empty) await deleteSession(id);
     }
   });
 });
