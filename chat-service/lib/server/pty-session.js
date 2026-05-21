@@ -205,14 +205,19 @@ export class PtySession extends EventEmitter {
     // Collect token usage from JSONL (main session + subagents). This gives
     // accurate per-model token counts and cost even without stream-json events.
     const modelUsage = await this.#watcher?.consumeTurnUsage().catch(() => null) ?? {};
-    const total_cost_usd = Object.entries(modelUsage).reduce((sum, [model, mu]) => {
-      return sum + costFromBreakdown(model, {
+    let total_cost_usd = 0;
+    for (const [model, mu] of Object.entries(modelUsage)) {
+      const perModelCost = costFromBreakdown(model, {
         input:       mu.inputTokens              || 0,
         cacheCreate: mu.cacheCreationInputTokens || 0,
         output:      mu.outputTokens             || 0,
         cacheRead:   mu.cacheReadInputTokens     || 0,
       });
-    }, 0);
+      // Populate costUSD so sendStats / computeSummary use the right cost without
+      // falling back to (null || 0) which zeros out per-model cost in the tooltip.
+      mu.costUSD = perModelCost;
+      total_cost_usd += perModelCost;
+    }
 
     this.emit('event', { type: 'result', is_error: false, total_cost_usd, modelUsage });
   }
