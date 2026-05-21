@@ -60,9 +60,9 @@ Not in any team. `BRANCH_NAME` and `WORKTREE_PATH` are in your spawn prompt. Run
    git reset --hard HEAD && /entrypoint-helpers/apply-app-variant.sh
    ```
 
-3. **Merge**
+3. **Merge** (always from `/app` — Bash is stateless, `cd` doesn't persist between calls)
    ```bash
-   git merge --no-ff <BRANCH_NAME> -m "<type>(<TASK_ID>): <ticket title>"
+   cd /app && git merge --no-ff <BRANCH_NAME> -m "<type>(<TASK_ID>): <ticket title>"
    ```
    `<type>` = ticket's `type` field (feat / fix / chore). On `CONFLICT`: `git merge --abort`, report failed with conflicting files. Do NOT resolve — that's the developer's job.
 

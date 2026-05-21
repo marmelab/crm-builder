@@ -166,13 +166,22 @@ export class TranscriptWatcher extends EventEmitter {
 
         // Emit synthetic task_started for each Agent() tool call so activeAgents
         // tracking works without stream-json system events.
+        // tool_use_id mirrors task_id (both equal b.id) so phases.js can look up
+        // agentType via agentTypeByToolId.get(ev.tool_use_id) = subagent_type.
         for (const b of entry.message?.content ?? []) {
           if (b.type === 'tool_use' && b.name === 'Agent' && b.id) {
             this.#pendingAgentIds.add(b.id);
             // team_name present → in_process_teammate (COMPLEX team member),
             // absent → local_agent (planner, simple-developer, merger, etc.).
             const taskType = b.input?.team_name ? 'in_process_teammate' : 'local_agent';
-            this.emit('event', { type: 'system', subtype: 'task_started', task_type: taskType, task_id: b.id });
+            this.emit('event', {
+              type: 'system',
+              subtype: 'task_started',
+              task_type: taskType,
+              task_id: b.id,
+              tool_use_id: b.id,       // phases.js: agentTypeByToolId lookup
+              description: b.input?.description ?? '', // phases.js: phase.description
+            });
           }
         }
       } else if (entry.type === 'user') {
