@@ -71,17 +71,30 @@ export class TranscriptWatcher extends EventEmitter {
 
     // Latch onto a new JSONL only if it belongs to an interactive session.
     // Sessions started with --print (e.g. title generation via regenerateTitleWithHaiku)
-    // begin with queue-operation entries. Interactive sessions begin with a
-    // permission-mode entry — possibly preceded by an agent-setting entry when
-    // --agent is used. Scan the first 3 non-empty lines for permission-mode so
-    // both cases are detected, regardless of how many header entries Claude prepends.
+    // begin with queue-operation entries. Interactive sessions begin with either:
+    //   - agent-setting  (when --agent is used, written first)
+    //   - permission-mode (written immediately after, or as the very first entry
+    //                     for sessions without --agent)
+    //
+    // Checking for agent-setting alone is safe: --print sessions never use --agent,
+    // so they never produce an agent-setting entry in the main project dir. Subagent
+    // JSONLs (which do start with agent-setting) live in a different subdirectory.
+    //
+    // This also fixes a race condition: on cold-start / slow flush, the directory
+    // watcher can fire after agent-setting is written but before permission-mode
+    // arrives. Checking only permission-mode would return false, the file would be
+    // abandoned (the dir watcher doesn't re-fire on content appends), and the session
+    // would never be discovered.
     const isInteractiveSession = async (filename) => {
       try {
         const content = await readFile(join(this.#projectDir, filename), 'utf8');
         const lines = content.split('\n').filter(l => l.trim());
         if (!lines.length) return false; // empty file, not ready yet
         for (const line of lines.slice(0, 3)) {
-          try { if (JSON.parse(line).type === 'permission-mode') return true; } catch { break; }
+          try {
+            const t = JSON.parse(line).type;
+            if (t === 'permission-mode' || t === 'agent-setting') return true;
+          } catch { break; }
         }
         return false;
       } catch { return false; }
