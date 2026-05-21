@@ -30,6 +30,12 @@ const statsCloseBtn = document.getElementById('chat-stats-close');
 let working  = false;
 let progressTotal = 0;
 let progressDone  = 0;
+// Remaining time is computed server-side from fixed per-role durations and
+// shipped in the `progress` payload. We anchor the snapshot to its reception
+// time so the displayed value can tick down smoothly between events.
+let remainingTimeMsAtReceipt = 0;
+let remainingTimeReceivedAt = 0;
+let remainingTimeTickHandle = null;
 let debugMode = false;
 let statsMode = false;
 
@@ -139,37 +145,120 @@ function resetChatUi() {
   stats.textContent = '';
   progressTotal = 0;
   progressDone = 0;
+  remainingTimeMsAtReceipt = 0;
+  remainingTimeReceivedAt = 0;
+  stopRemainingTimeTicker();
   debugEventBuffer.length = 0;
 }
 
-function progressText() {
-  if (!progressTotal || progressTotal <= 0) return '';
+function formatRemaining(ms) {
+  if (!Number.isFinite(ms) || ms <= 0) return null;
+  const sec = Math.round(ms / 1000);
+  if (sec < 60) return 'Estimated: less than a minute remaining';
+  const min = Math.round(sec / 60);
+  if (min < 60) return `Estimated: ~${min} min remaining`;
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return m ? `Estimated: ~${h}h ${m}min remaining` : `Estimated: ~${h}h remaining`;
+}
+
+function startRemainingTimeTicker() {
+  if (remainingTimeTickHandle) return;
+  // 5s cadence — fast enough that the estimate "breathes" with elapsed time,
+  // slow enough to avoid layout churn while the user reads other messages.
+  remainingTimeTickHandle = setInterval(tickRemainingTime, 5000);
+}
+
+function stopRemainingTimeTicker() {
+  if (!remainingTimeTickHandle) return;
+  clearInterval(remainingTimeTickHandle);
+  remainingTimeTickHandle = null;
+}
+
+// Remaining-time text computed from the server snapshot, decremented by
+// wall-clock so the countdown stays smooth between progress events. Clamps
+// to 0 — if work outlives the estimate, show a soft "wrapping up" instead
+// of negative time.
+function remainingTimeText(remaining) {
+  if (remaining <= 0) return '';
+  if (remainingTimeMsAtReceipt > 0 && remainingTimeReceivedAt > 0) {
+    const live = remainingTimeMsAtReceipt - (Date.now() - remainingTimeReceivedAt);
+    return live > 0 ? formatRemaining(live) || '' : 'Wrapping up…';
+  }
+  return 'Estimating remaining time…';
+}
+
+// Lean tick — only the remaining-time <span> can change between progress
+// events, so avoid querying/rewriting the bar, fill and label every 5s.
+// The `:not(.msg-assistant)` qualifier targets the spinner bubble, not the
+// demoted prior-turn narrations that also carry `.msg-working`.
+function tickRemainingTime() {
+  const bubble = messages.querySelector('.msg-working:not(.msg-assistant)');
+  if (!bubble) { stopRemainingTimeTicker(); return; }
+  const remainingTimeEl = bubble._remainingTimeEl;
+  if (!remainingTimeEl) return;
   const safeDone = Math.max(0, Math.min(progressDone, progressTotal));
-  return `tasks completed ${safeDone}/${progressTotal}`;
+  remainingTimeEl.textContent = remainingTimeText(progressTotal - safeDone);
 }
 
 function updateWorkingProgress() {
-  const bubble = messages.querySelector('.msg-working');
+  const bubble = messages.querySelector('.msg-working:not(.msg-assistant)');
   if (!bubble) return;
-  const text = progressText();
-  let line = bubble.querySelector('.msg-working-progress');
-  if (!text) {
-    if (line) line.remove();
+  let wrap = bubble.querySelector('.msg-working-progress');
+  let hint = bubble.querySelector('.msg-working-hint');
+  // While only the orchestrator is running (total <= 1, no subagent
+  // dispatched yet), show a soft hint instead of the bar — Claude is
+  // sizing up the work.
+  if (progressTotal <= 1) {
+    if (wrap) { wrap.remove(); bubble._remainingTimeEl = null; bubble._maxPct = 0; }
+    if (!hint) {
+      hint = document.createElement('span');
+      hint.className = 'msg-working-hint';
+      hint.textContent = 'Estimating the duration of the work…';
+      bubble.appendChild(hint);
+    }
     return;
   }
-  if (!line) {
-    line = document.createElement('span');
-    line.className = 'msg-working-progress';
-    bubble.appendChild(line);
+  if (hint) hint.remove();
+  const safeDone = Math.max(0, Math.min(progressDone, progressTotal));
+  const remaining = progressTotal - safeDone;
+  const pct = Math.round((safeDone / progressTotal) * 100);
+  if (!wrap) {
+    wrap = document.createElement('div');
+    wrap.className = 'msg-working-progress';
+    const bar = document.createElement('div');
+    bar.className = 'msg-working-progress-bar';
+    const fill = document.createElement('div');
+    fill.className = 'msg-working-progress-fill';
+    bar.appendChild(fill);
+    const label = document.createElement('span');
+    label.className = 'msg-working-progress-label';
+    const remainingTime = document.createElement('span');
+    remainingTime.className = 'msg-working-progress-remaining-time';
+    wrap.append(bar, label, remainingTime);
+    bubble.appendChild(wrap);
+    bubble._fillEl = fill;
+    bubble._labelEl = label;
+    bubble._remainingTimeEl = remainingTime;
+    bubble._maxPct = 0;
   }
-  line.textContent = text;
+  // Monotonic clamp on the visual fill: when COMPLEX dispatches a wave bigger
+  // than the predicted minimum, the denominator jumps (e.g. 6 → 12) and the
+  // raw pct would shrink. The label keeps the truthful "done/total" so the
+  // user still sees the real numbers; only the bar is forced to never recede.
+  const displayPct = Math.max(pct, bubble._maxPct);
+  bubble._maxPct = displayPct;
+  bubble._fillEl.style.width = displayPct + '%';
+  bubble._labelEl.textContent =
+    `${safeDone}/${progressTotal} step${progressTotal > 1 ? 's' : ''} done · ${remaining} to go`;
+  bubble._remainingTimeEl.textContent = remainingTimeText(remaining);
 }
 
 function renderWorkingUi() {
   stopBtn.hidden = !working;
   stopBtn.disabled = false;
   send.hidden = working;
-  const existing = messages.querySelector('.msg-working');
+  const existing = messages.querySelector('.msg-working:not(.msg-assistant)');
   if (working && !existing) {
     const el = document.createElement('div');
     el.className = 'msg msg-working';
@@ -238,8 +327,12 @@ function handleWsMessage(event) {
         else if (it.type === 'debug_raw') renderDebugRaw(it, s);
       }
     });
+    markStaleWorkingMessages();
     if (msg.working) {
       working = true;
+      // On resume, the remaining time stays as "Estimating…" until the next
+      // `progress` event lands with a fresh server-side estimate.
+      startRemainingTimeTicker();
       renderWorkingUi();
     }
     historyApi.refreshHistory();
@@ -271,11 +364,16 @@ function handleWsMessage(event) {
     const wasWorking = working;
     working = msg.working;
     if (!wasWorking && working) {
+      startRemainingTimeTicker();
       const oldestQueued = messages.querySelector('.msg-queued');
       if (oldestQueued) {
         oldestQueued.classList.remove('msg-queued');
         oldestQueued.querySelector('.queued-badge')?.remove();
       }
+    } else if (wasWorking && !working) {
+      stopRemainingTimeTicker();
+      remainingTimeMsAtReceipt = 0;
+      remainingTimeReceivedAt = 0;
     }
     renderWorkingUi();
     if (statsMode && wasWorking !== working) statsRefresh.schedule();
@@ -290,6 +388,10 @@ function handleWsMessage(event) {
   if (msg.type === 'progress') {
     progressTotal = msg.total || 0;
     progressDone  = msg.done  || 0;
+    if (typeof msg.remainingTimeMs === 'number') {
+      remainingTimeMsAtReceipt = msg.remainingTimeMs;
+      remainingTimeReceivedAt = Date.now();
+    }
     updateWorkingProgress();
     return;
   }
@@ -435,11 +537,52 @@ function formatMessageTime(ts) {
   return `${d.toLocaleDateString([], { day: '2-digit', month: '2-digit' })} ${time}`;
 }
 
+// Walk back through messages within the current turn (i.e. until the last
+// user message) and add `msg-working` to the most recent unmarked assistant
+// narration. Rollback bubbles aren't narrations and are skipped.
+function demotePreviousTurnAssistant() {
+  const all = messages.querySelectorAll('.msg');
+  for (let i = all.length - 1; i >= 0; i--) {
+    const m = all[i];
+    if (m.classList.contains('msg-user')) return;
+    if (m.classList.contains('msg-rollback')) continue;
+    if (m.classList.contains('msg-assistant') && !m.classList.contains('msg-working')) {
+      m.classList.add('msg-working');
+      return;
+    }
+  }
+}
+
+// On resume, the message log doesn't store the `msg-working` state we built
+// up live. Reconstruct it: in each maximal run of consecutive assistant
+// narrations (rollbacks ignored), mark all but the last as `msg-working`.
+function markStaleWorkingMessages() {
+  const all = messages.querySelectorAll('.msg');
+  let lastNarrationIdx = -1;
+  for (let i = 0; i < all.length; i++) {
+    const m = all[i];
+    if (m.classList.contains('msg-rollback')) continue;
+    if (m.classList.contains('msg-assistant')) {
+      if (lastNarrationIdx !== -1) all[lastNarrationIdx].classList.add('msg-working');
+      lastNarrationIdx = i;
+    } else if (m.classList.contains('msg-user')) {
+      lastNarrationIdx = -1;
+    }
+  }
+}
+
 function appendMessage(role, content, seqOrOpts = ++seqCounter) {
   const opts = typeof seqOrOpts === 'object' && seqOrOpts !== null ? seqOrOpts : {};
   const seq = typeof seqOrOpts === 'number' ? seqOrOpts : (opts.seq ?? ++seqCounter);
   const queued = !!opts.queued;
   const subtype = opts.subtype;
+  // While the session is `in_progress`, a new assistant narration demotes the
+  // previous one of the same turn to `msg-working`, so only the latest stays
+  // unmarked. The CSS layer is free to hide `.msg-working` if intermediate
+  // narrations should be collapsed. Rollback messages are out-of-band.
+  if (role === 'assistant' && !subtype && working) {
+    demotePreviousTurnAssistant();
+  }
   const el = document.createElement('div');
   el.className = `msg msg-${role}${queued ? ' msg-queued' : ''}${subtype ? ' msg-' + subtype : ''}`;
   if (subtype === 'rollback') {
@@ -733,6 +876,7 @@ historyCollapseBtn.addEventListener('click', () => {
 debugBtn.addEventListener('click', () => {
   debugMode = !debugMode;
   debugBtn.classList.toggle('debug-active', debugMode);
+  widget.classList.toggle('debug-active', debugMode);
   debugBtn.title = debugMode ? 'Debug ON' : 'Debug OFF';
   if (debugMode) {
     for (const entry of debugEventBuffer) {

@@ -95,8 +95,8 @@ wss.on('connection', async (ws, req) => {
     isNew: session.isNew,
   });
   // Send the current progress snapshot so a (re)joining tab paints the
-  // counter immediately instead of waiting for the next merge / write event.
-  sendProgress(runtime).catch(() => {});
+  // counter immediately instead of waiting for the next agent event.
+  sendProgress(runtime);
   // Repaint the cumulative tokens/cost ticker on (re)connect — runtime.stats
   // is seeded from the log digest, but resetChatUi just cleared the DOM.
   // Skip when there's nothing to show (fresh session) to avoid a "0 tokens
