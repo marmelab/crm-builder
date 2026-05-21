@@ -18,7 +18,10 @@ export function detectPrompt(text) {
   return /(?:^|\n)[❯>]\s*$/.test(text.trimEnd());
 }
 
-const TURN_TIMEOUT_MS = 15_000;   // fallback: silence after last PTY chunk → turn done (Stop hook is primary)
+const TURN_TIMEOUT_MS = 120_000;  // fallback: silence after last PTY chunk → turn done (Stop hook is primary).
+                                  // 120 s: COMPLEX turns can be silent for >15 s while the orchestrator waits
+                                  // for subagent responses (planner, developer team). The Stop hook sentinel
+                                  // is the primary "turn done" signal; this timer is only the safety net.
 const STARTUP_TIMEOUT_MS = 12_000; // safety: Claude TUI initializes in ~1.5s; 12s is reliably safe
 // Claude project dir slug: '/app' → '-app'
 const PROJECT_SLUG = CWD.replace(/\//g, '-');
@@ -72,6 +75,10 @@ export class PtySession extends EventEmitter {
         CLAUDE_PROJECT_DIR: CWD,
         CHAT_SESSION_DIR: sessionDir,
         MODE: mode,
+        // Prevent the auto-update check from blocking the TUI startup.
+        // Without this, the TUI shows "Auto-updating…" then "✗ Auto-update failed"
+        // for ~2s on each spawn, eating into the 12s STARTUP_TIMEOUT_MS budget.
+        DISABLE_AUTOUPDATER: '1',
       }, claudeSessionId),
     });
 
@@ -108,7 +115,10 @@ export class PtySession extends EventEmitter {
       this.#pendingSend = message;
       clearTimeout(this.#silenceTimer);
       this.#silenceTimer = setTimeout(() => {
-        // Force-flush: if Claude never shows a prompt, send anyway and hope.
+        // Force-flush: if Claude never shows a prompt, send anyway.
+        // The ❯ prompt uses ANSI cursor-movement codes that are invisible after
+        // strip-ansi, so detectPrompt never fires in practice. The 12 s timer
+        // is the reliable path for all first-turn messages.
         if (this.#pendingSend !== null) {
           const msg = this.#pendingSend;
           this.#pendingSend = null;
@@ -127,7 +137,23 @@ export class PtySession extends EventEmitter {
     // emit result after STARTUP_TIMEOUT_MS. #onData resets this to TURN_TIMEOUT_MS on first chunk.
     clearTimeout(this.#silenceTimer);
     this.#silenceTimer = setTimeout(() => this.#emitResult(), STARTUP_TIMEOUT_MS);
-    this.#pty.write(message + '\r');
+    // Sanitize message to avoid multi-byte UTF-8 sequences whose continuation
+    // bytes (0x80–0xBF) land in the C1 control-code range and get mishandled
+    // by Claude's Ink TUI input handler, silently garbling the message.
+    const safe = message
+      .replace(/[–—]/g, '-')   // en-dash, em-dash → hyphen
+      .replace(/['']/g, "'")   // left/right single quote → apostrophe
+      .replace(/[""]/g, '"')   // left/right double quote → straight quote
+      .replace(/…/g, '...')         // ellipsis → triple dot
+      .replace(/ /g, ' ');          // non-breaking space → regular space
+    // Write the message text first, then send Enter (CR) after a short delay.
+    // Sending safe + '\r' as one write causes Ink's input handler to miss the CR
+    // for messages longer than ~50 chars: the TUI renders the input field but
+    // never submits. A 50 ms gap lets the TUI event loop process all message
+    // characters before the CR arrives, so Enter always triggers submission
+    // regardless of message length.
+    this.#pty.write(safe);
+    setTimeout(() => this.#pty.write('\r'), 50);
   }
 
   kill() {
@@ -174,6 +200,9 @@ export class PtySession extends EventEmitter {
     // Always buffer for friendlyError classification (e.g. auth/network errors).
     this.#outputBuffer = (this.#outputBuffer + text).slice(-OUTPUT_BUFFER_LIMIT);
     // Detect first-ever prompt while idle → Claude TUI is ready for input.
+    // In practice this never fires: the ❯ prompt is drawn via ANSI cursor-movement
+    // codes that are invisible after strip-ansi. The startup force-flush timer
+    // (STARTUP_TIMEOUT_MS) is the reliable path for all first-turn messages.
     if (!this.#ready && detectPrompt(text)) {
       this.#ready = true;
       if (this.#pendingSend !== null) {
@@ -184,7 +213,7 @@ export class PtySession extends EventEmitter {
       return;
     }
     if (this.#resultEmitted) return; // idle — don't drive turn-end detection
-    // Reset silence window (overrides the 30 s startup safety timer).
+    // Reset silence window (overrides the startup safety timer).
     // Turn completion is driven by the Stop hook sentinel, not prompt detection —
     // detecting the ❯ prompt here would race with the JSONL watcher (50 ms debounce).
     clearTimeout(this.#silenceTimer);

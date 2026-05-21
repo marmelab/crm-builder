@@ -7,7 +7,7 @@ Dockerised sandbox: non-technical users describe CRM changes in chat → agent t
 ```
 supervisord (pid 1)
   ├─ crm-frontend   :5173  (Vite, /app/src)
-  └─ chat-service   :8080  (WebSocket + spawn claude -p)
+  └─ chat-service   :8080  (WebSocket + PTY claude TUI)
 ```
 
 For a direct REPL into claude CLI, use `make claude` from the host —
@@ -26,7 +26,7 @@ Split: `lib/server/` (spawn, routes, runtime, sessions, turns, ws) + `lib/stats/
 Key invariants:
 - One runtime per session; all connected WS clients get broadcast.
 - Session log: append-only `log.jsonl` (source of truth) + `meta.json` (cache).
-- Spawn: `claude --output-format stream-json --verbose --dangerously-skip-permissions --model <model> [--resume <id>] -p <prompt>`. Model + system prompt parsed from `chat-orchestrator.md` frontmatter at boot.
+- Spawn: `node-pty` spawns `claude --dangerously-skip-permissions --agent chat-orchestrator --model <model> [--resume <id>]` as an interactive TUI. One PTY per session; messages written to PTY stdin as plain text + CR (with a 50 ms gap: message chars first, then `\r`). Transcript events come from `TranscriptWatcher` watching Claude's JSONL project dir. Turn completion signalled by a Stop-hook sentinel file `/tmp/pty-turn-done-<sessionId>`. Model parsed from `chat-orchestrator.md` frontmatter at boot.
 - `tokensUsed` = input + cache_creation + output (cache-read excluded — cheap rehydration).
 - `total_cost_usd` is cumulative within a spawn: buffer in `costUsdCurrentSpawn`, commit to `costUsd` on turn end only.
 - `activeAgents` counts only `task_type === 'local_agent'` via `Set<task_id>`.
