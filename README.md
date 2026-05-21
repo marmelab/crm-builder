@@ -10,7 +10,7 @@ It uses [Atomic CRM](https://github.com/marmelab/atomic-crm) as a starting templ
 
 ### Prerequisites
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed
-- Anthropic API key: [console.anthropic.com](https://console.anthropic.com) or a Claude Code subscription
+- A valid Claude Code subscription or an Anthropic API key: [console.anthropic.com](https://console.anthropic.com)
 
 ### 1. Build (once, ~5 min)
 ```bash
@@ -69,7 +69,9 @@ This allows to run Claude with `--dangerously-skip-permissions`, and avoids aski
 
 The builder runs on a custom harness: a team of agents specialized in CRM development (orchestrator, architect, developer, reviewer, documentarian, etc.), along with dedicated skills, rules, and hooks. You can explore the harness setup in [`.claudeConfig/.claude`](./.claudeConfig/.claude).
 
-The harness will use a single agent for simple modifications, and spawn a team for more complex ones. 
+The harness will use a single agent for simple modifications, and spawn a team for more complex ones.
+
+**Note**: The harness uses `claude -p`. This means the tokens are charged as API calls.
 
 ## Recommended workflow
 
@@ -148,3 +150,13 @@ from `make claude`.
 | Real authentication | ❌ | ✅ |
 | File attachments | ❌ | ✅ |
 | Security policies (RLS) | ❌ | ✅ |
+
+## Roadmap
+
+- Easier install
+- Automated deployment to supabase.com and Cloudflare pages
+- Automated UI tests
+
+## License
+
+MIT
