@@ -164,21 +164,52 @@ export class PtySession extends EventEmitter {
   // The Stop hook fires AFTER Claude has flushed the JSONL transcript, so by
   // the time we react to the sentinel the TranscriptWatcher has already (or will
   // shortly, within its 50 ms debounce) delivered all assistant events.
+  //
+  // Two cases:
+  //   Active turn  (#resultEmitted = false): processMessage is running.
+  //     → #handleStopSentinel: delete sentinel, wait 150 ms, emit `result`.
+  //   Background turn (#resultEmitted = true): orchestrator is handling agent
+  //     messages (idle_notifications, merge confirmations) after the active turn
+  //     ended. processMessage is NOT running.
+  //     → #handleBackgroundSentinel: delete sentinel, flush JSONL, emit
+  //       `background_result` so turn.js can forward output to clients.
   #watchForStop() {
     if (!this.#sessionId || this.#stopDirWatcher) return;
     const sentinel = `pty-turn-done-${this.#sessionId}`;
     const sentinelPath = `/tmp/${sentinel}`;
 
     this.#stopDirWatcher = watch('/tmp', { persistent: false }, (_, filename) => {
-      if (filename === sentinel && !this.#resultEmitted) {
+      if (filename !== sentinel) return;
+      if (!this.#resultEmitted) {
         this.#handleStopSentinel(sentinelPath);
+      } else {
+        this.#handleBackgroundSentinel(sentinelPath);
       }
     });
 
     // Post-attach check: catch sentinel that appeared before watch() attached.
     access(sentinelPath)
-      .then(() => { if (!this.#resultEmitted) this.#handleStopSentinel(sentinelPath); })
+      .then(() => {
+        if (!this.#resultEmitted) this.#handleStopSentinel(sentinelPath);
+        else this.#handleBackgroundSentinel(sentinelPath);
+      })
       .catch(() => {});
+  }
+
+  // Handle a Stop-hook sentinel that arrived while the session was idle
+  // (no active processMessage loop). Flush the JSONL watcher so any assistant
+  // events from this background turn are forwarded to listeners, then emit
+  // `background_result` so turn.js can broadcast the output and refresh progress.
+  // Does NOT call consumeTurnUsage() — token accounting stays cumulative and
+  // is collected in full by the next active-turn #emitResult() call.
+  #handleBackgroundSentinel(sentinelPath) {
+    unlink(sentinelPath).catch(() => {});
+    setTimeout(async () => {
+      await this.#watcher?.flush().catch(() => {});
+      await new Promise(r => setTimeout(r, 100));
+      await this.#watcher?.flush().catch(() => {});
+      this.emit('event', { type: 'background_result' });
+    }, 150);
   }
 
   #handleStopSentinel(sentinelPath) {

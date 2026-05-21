@@ -71,6 +71,41 @@ export async function processMessage(runtime, prompt) {
       runtime.ptySession.once('exit', () => { runtime.ptySession = null; });
     }
 
+    // Attach a long-lived background listener once per PtySession lifetime.
+    // In COMPLEX flow the orchestrator processes team-member messages (idle
+    // notifications, merge confirmations) in turns that happen entirely inside
+    // Claude Code — no processMessage call, no ptyEventsUntilResult loop. The
+    // Stop hook still fires and PtySession emits `background_result`. This
+    // listener forwards any assistant text produced during those background
+    // turns and refreshes the progress counter once the turn is done.
+    if (!runtime.ptySession._bgAttached) {
+      runtime.ptySession._bgAttached = true;
+      const ptyRef = runtime.ptySession;
+      let bgLastText = '';
+      const bgHandler = (event) => {
+        // When processMessage is active, ptyEventsUntilResult already handles
+        // all events. Skip here to avoid double-forwarding.
+        if (runtime.busy) return;
+        const text = extractText(event);
+        if (text) {
+          const isDuplicate = text.trim() === bgLastText.trim();
+          bgLastText = text;
+          if (!isDuplicate) {
+            broadcast(runtime, { type: 'message', role: 'assistant', content: text, ts: new Date().toISOString() });
+            runtime.session?.recordMessage('assistant', text).catch(() => {});
+          }
+        }
+        if (event.type === 'background_result') {
+          sendProgress(runtime).catch(() => {});
+        }
+      };
+      ptyRef.on('event', bgHandler);
+      ptyRef.once('exit', () => {
+        ptyRef.off('event', bgHandler);
+        ptyRef._bgAttached = false;
+      });
+    }
+
     runtime.ptySession.send(buildPrompt(prompt));
     runtime.currentProc = { kill: () => runtime.ptySession?.kill() };
 
