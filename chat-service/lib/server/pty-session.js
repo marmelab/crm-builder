@@ -53,6 +53,10 @@ export class PtySession extends EventEmitter {
 
     const args = ['--dangerously-skip-permissions'];
     if (claudeSessionId) args.push('--resume', claudeSessionId);
+    // Load the orchestrator agent file so the state machine, CLASSIFICATION,
+    // and LANGUAGE RULES are active. Without --agent, the TUI starts with the
+    // generic Claude Code system prompt and routes requests itself (wrong).
+    args.push('--agent', 'chat-orchestrator');
     if (model) args.push('--model', model);
     args.push('--append-system-prompt', appendedPrompt);
 
