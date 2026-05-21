@@ -28,6 +28,7 @@ export function createRuntime(session) {
     queue: [],
     stopping: false,
     currentProc: null,
+    ptySession: null,
     clients: new Set(),
     stats: {
       // tokensUsed = legacy headline (input + cache_creation + output). Kept as

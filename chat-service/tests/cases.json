@@ -262,5 +262,35 @@
       "maxDurationMs": 5400000,
       "maxCostUsd": 18.00
     }
+  },
+  {
+    "id": "from-scratch-equipment-rental",
+    "category": "from-scratch",
+    "mode": "full_setup",
+    "prompt": "I run LocaForce, a small equipment rental company. Our brand uses bold orange (#F97316) and dark charcoal (#1C1C1E) with a Montserrat font — sturdy and industrial. My fleet includes tools and machinery I rent to individuals and construction companies (scaffolding, compressors, concrete mixers, aerial lifts, etc.). Each piece of equipment has its own record: category, model, serial number, current status (available, rented, under maintenance, decommissioned), total usage hours, and purchase date. Rentals are the core of my business: a rental links a client to one or more pieces of equipment, with a start date, expected return date, actual return date, daily/weekly rate, deposit amount, and return condition. When equipment comes back damaged or reaches a maintenance threshold (by usage hours or scheduled interval), I create a maintenance job: description of work needed, parts replaced, cost, and a status (pending → in progress → done). On the dashboard I need equipment availability by category, active rentals overdue for return, and equipment currently blocked for maintenance. A client's profile should show their full rental history and any damage incidents they caused — I also want to flag clients who have caused damage before.",
+    "expect": {
+      "mustInvoke": [
+        "project-manager",
+        "planner",
+        "developer"
+      ],
+      "maxDurationMs": 9000000,
+      "maxCostUsd": 35.00
+    }
+  },
+  {
+    "id": "from-scratch-veterinary-clinic",
+    "category": "from-scratch",
+    "mode": "full_setup",
+    "prompt": "I'm a vet at Clinique Vétérinaire du Moulin, a small two-vet practice. Our visual identity uses sage green (#4CAF7D) and off-white (#F9F9F7) with a rounded Inter font — approachable and reassuring. My clients are pet owners, but the medical record belongs to the animal, not the owner. Each owner can have multiple animals (species, breed, name, date of birth, weight, microchip number). I track consultations per animal: date, reason for visit, diagnosis, treatment prescribed, and next appointment. I also need vaccination tracking — each vaccine has a validity period and I want automatic reminders for upcoming or overdue vaccinations. On the dashboard I want to see animals due for a vaccine in the next 30 days, and animals with a scheduled appointment this week. I use the existing notes feature for general client comments, but everything clinical should be organised around the animal. No billing needed, just the medical and appointment side.",
+    "expect": {
+      "mustInvoke": [
+        "project-manager",
+        "planner",
+        "developer"
+      ],
+      "maxDurationMs": 9000000,
+      "maxCostUsd": 35.00
+    }
   }
 ]

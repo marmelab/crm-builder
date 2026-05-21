@@ -1,17 +1,41 @@
-import { createInterface } from 'node:readline';
+import { on } from 'node:events';
 import { cp, copyFile, mkdir, chmod, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { LOG_DIR, CLAUDE_HOME, CWD } from './config.js';
 import { broadcast, sendStats } from './ws-bus.js';
 import { runtimes, transitionState } from './runtime.js';
-import { sendProgress, predictedFlowExpected } from './ticket-progress.js';
-import { spawnClaude, extractText, extractToolUses, friendlyError } from './claude-spawn.js';
+import { snapshotTickets, sendProgress } from './ticket-progress.js';
+import { rewriteUserMessage, extractText, extractToolUses, friendlyError } from './claude-spawn.js';
+import { PtySession } from './pty-session.js';
 import { endsWithQuestion } from './session-store.js';
 import {
   emptyBreakdown, addBreakdown, breakdownFromModelUsage, costFromBreakdown,
 } from '../stats/io.js';
 
-const AGENT_DISPATCH_TOOLS = new Set(['Agent', 'Task']);
+// Aborts when either the result event arrives or the session exits unexpectedly.
+async function* ptyEventsUntilResult(session) {
+  const ac = new AbortController();
+  const onExit = () => ac.abort();
+  session.once('exit', onExit);
+  try {
+    for await (const [event] of on(session, 'event', { signal: ac.signal })) {
+      yield event;
+      if (event.type === 'result') { ac.abort(); return; }
+    }
+  } catch (e) {
+    if (e?.name !== 'AbortError') throw e;
+  } finally {
+    session.off('exit', onExit);
+  }
+}
+
+// In PTY interactive mode, mode and session_dir are injected into the system
+// prompt via --append-system-prompt (set at PtySession spawn time). Sending
+// XML tags in the user message confuses Claude's TUI — it tries to process
+// them rather than generate a response. So we send only the plain message.
+function buildPrompt(userMessage) {
+  return rewriteUserMessage(userMessage).trim();
+}
 
 export async function processMessage(runtime, prompt) {
   if (!runtime) return;
@@ -40,21 +64,17 @@ export async function processMessage(runtime, prompt) {
   let lastAssistantText = '';
   let exitCode = null;
   try {
-    const proc = spawnClaude(prompt, runtime.claudeSessionId, `${LOG_DIR}/${runtime.session.id}`);
-    runtime.currentProc = proc; // expose for the stop handler
-    let stderrBuf = '';
-    // Prevent unhandled 'error' from crashing the process (e.g. claude binary missing).
-    const spawnError = new Promise((resolve) => proc.once('error', resolve));
-    proc.stderr.on('data', (d) => {
-      stderrBuf += d.toString();
-      console.error('[claude]', d.toString().trim());
-    });
+    const sessionDir = `${LOG_DIR}/${runtime.session.id}`;
 
-    const rl = createInterface({ input: proc.stdout, crlfDelay: Infinity });
-    for await (const line of rl) {
-      if (!line.trim()) continue;
-      try {
-        const event = JSON.parse(line);
+    if (!runtime.ptySession || runtime.ptySession.closed) {
+      runtime.ptySession = new PtySession(runtime.claudeSessionId, sessionDir);
+      runtime.ptySession.once('exit', () => { runtime.ptySession = null; });
+    }
+
+    runtime.ptySession.send(buildPrompt(prompt));
+    runtime.currentProc = { kill: () => runtime.ptySession?.kill() };
+
+    for await (const event of ptyEventsUntilResult(runtime.ptySession)) {
         if (event.session_id) {
           runtime.claudeSessionId = event.session_id;
           runtime.session?.setClaudeSessionId(event.session_id).catch(() => {});
@@ -159,21 +179,15 @@ export async function processMessage(runtime, prompt) {
           runtime.stats.activeAgentIds.clear();
           sendStats(runtime);
         }
-      } catch {}
     }
-    exitCode = await Promise.race([
-      new Promise((resolve) => proc.on('close', resolve)),
-      spawnError.then((err) => {
-        stderrBuf += `\n${err?.message || err}`;
-        return -1;
-      }),
-    ]);
+
+    exitCode = receivedText ? 0 : 1;
     if (runtime.stopping) {
       const stopText = '⏹ Session stopped.';
       broadcast(runtime, { type: 'message', role: 'assistant', content: stopText, ts: new Date().toISOString() });
       await runtime.session?.recordMessage('assistant', stopText).catch(() => {});
     } else if (exitCode !== 0 || !receivedText || resultError || rateLimit) {
-      const errText = friendlyError({ exitCode, stderr: stderrBuf, rateLimit, resultError });
+      const errText = friendlyError({ exitCode, stderr: runtime.ptySession?.stderr ?? '', rateLimit, resultError });
       broadcast(runtime, { type: 'message', role: 'assistant', content: errText, ts: new Date().toISOString() });
       // Await: the finally block below writes meta.json right after; a
       // fire-and-forget here would race with that write and corrupt the file.
