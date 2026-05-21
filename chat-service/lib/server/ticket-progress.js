@@ -59,6 +59,10 @@ const AGENT_DURATIONS_MS = {
 
 const DEFAULT_DURATION_MS = 30_000;
 
+// Roles dispatched once per ticket but running concurrently within a wave.
+// merger is excluded — it's shared and serial.
+const PARALLEL_ROLES = new Set(['developer', 'quality-reviewer', 'test-validator']);
+
 function durationFor(role) {
   return AGENT_DURATIONS_MS[role] ?? DEFAULT_DURATION_MS;
 }
@@ -77,10 +81,16 @@ export function estimateRemainingMs(runtime) {
   const inFlightCount = Math.max(0, dispatched - completed);
   if (inFlightCount > 0) {
     // Completion order isn't tracked, so we treat the *last* N dispatched
-    // entries as the still-running set. Exact for sequential flows
-    // (SIMPLE/MEMORY) and a reasonable approximation for parallel waves.
+    // entries as the still-running set. Parallel roles (one per ticket in a
+    // wave) count once — they run concurrently, so the wall-clock is set by
+    // the role, not the ticket count. Wave-size inflation is applied below.
     const inFlight = dispatchedTypes.slice(-inFlightCount);
-    for (const role of inFlight) ms += durationFor(role);
+    const seen = new Set();
+    for (const role of inFlight) {
+      if (PARALLEL_ROLES.has(role) && seen.has(role)) continue;
+      seen.add(role);
+      ms += durationFor(role);
+    }
   }
 
   const predictedNotDispatched = Math.max(0, expected - dispatched);
@@ -93,6 +103,14 @@ export function estimateRemainingMs(runtime) {
       ms += predictedNotDispatched * DEFAULT_DURATION_MS;
     }
   }
+
+  // Wave inflation: parallel tickets share API/CPU/merger contention, so the
+  // wall-clock grows roughly +30% per extra ticket beyond the first. Only
+  // count in-flight developers — completed waves shouldn't penalise later ones.
+  const waveSize = inFlightCount > 0
+    ? dispatchedTypes.slice(-inFlightCount).filter((r) => r === 'developer').length || 1
+    : 1;
+  ms *= 1 + 0.3 * (waveSize - 1);
 
   return ms;
 }
