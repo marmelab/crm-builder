@@ -38,7 +38,12 @@ make wipe        # Full reset — deletes volumes (loses code changes)
 
 ## Usage
 
-Once started, open [`http://localhost:8080`](http://localhost:8080) to get the builder UI. From there, you can prompt the assistant, test the modification, and download the modified code. 
+Once started, open [`http://localhost:8080`](http://localhost:8080) to get the builder UI. The content frame displays the CRM, ready to test. The sidebar shows your build session history. To start customizing, click "New Session" to open a chat interface and prompt the assistant. It will ask follow-up questions if needed, then modify the CRM autonomously and test its changes. You can use the content frame at any time to try the modifications yourself.
+
+<img width="1838" height="935" alt="ArtTeachingCRM" src="https://github.com/user-attachments/assets/5d647f71-4bc1-4246-bc14-9cc45f471bb7" />
+
+
+The builder UI also lets you run multiple sessions in parallel, browse session history, switch between frontend-only and full-stack mode, and download the modified code.
 
 Other useful urls: 
 *  `http://localhost:5173`: The CRM
@@ -49,12 +54,6 @@ For a direct, interactive Claude session in the builder, run from your host:
 ```bash
 make claude         # opens `claude --dangerously-skip-permissions` in the container
                     # (also triggers OAuth on first run if ANTHROPIC_API_KEY is unset)
-```
-
-Inside that session you can also switch modes without restarting the container:
-```bash
-switch-mode demo    # → Frontend only
-switch-mode full    # → Full-stack
 ```
 
 ## Container Isolation
@@ -69,6 +68,8 @@ This allows to run Claude with `--dangerously-skip-permissions`, and avoids aski
 ## Custom Harness
 
 The builder runs on a custom harness: a team of agents specialized in CRM development (orchestrator, architect, developer, reviewer, documentarian, etc.), along with dedicated skills, rules, and hooks. You can explore the harness setup in [`.claudeConfig/.claude`](./.claudeConfig/.claude).
+
+The harness will use a single agent for simple modifications, and spawn a team for more complex ones. 
 
 ## Recommended workflow
 
