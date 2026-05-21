@@ -83,7 +83,7 @@
                     {
                         "type": "command",
                         "command": "/home/developer/.claude/hooks/validate-before-review.sh",
-                        "timeout": 180,
+                        "timeout": 360,
                         "statusMessage": "Validating before review/merge..."
                     }
                 ]
