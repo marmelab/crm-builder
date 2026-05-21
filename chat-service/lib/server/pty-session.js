@@ -7,6 +7,7 @@ import { CWD, CLAUDE_HOME } from './config.js';
 import { getOrchestratorModel } from './system-prompt.js';
 import { buildSpawnEnv } from '../spawn-env.js';
 import { TranscriptWatcher } from './transcript-watcher.js';
+import { costFromBreakdown } from '../stats/io.js';
 import { join } from 'node:path';
 
 // Exported for unit testing.
@@ -200,6 +201,19 @@ export class PtySession extends EventEmitter {
     // JSONL discovery still in flight when the sentinel arrived).
     await new Promise(r => setTimeout(r, 100));
     await this.#watcher?.flush().catch(() => {});
-    this.emit('event', { type: 'result', is_error: false, total_cost_usd: 0, modelUsage: {} });
+
+    // Collect token usage from JSONL (main session + subagents). This gives
+    // accurate per-model token counts and cost even without stream-json events.
+    const modelUsage = await this.#watcher?.consumeTurnUsage().catch(() => null) ?? {};
+    const total_cost_usd = Object.entries(modelUsage).reduce((sum, [model, mu]) => {
+      return sum + costFromBreakdown(model, {
+        input:       mu.inputTokens              || 0,
+        cacheCreate: mu.cacheCreationInputTokens || 0,
+        output:      mu.outputTokens             || 0,
+        cacheRead:   mu.cacheReadInputTokens     || 0,
+      });
+    }, 0);
+
+    this.emit('event', { type: 'result', is_error: false, total_cost_usd, modelUsage });
   }
 }

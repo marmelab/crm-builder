@@ -13,6 +13,17 @@ export class TranscriptWatcher extends EventEmitter {
   #debounce = null;
   closed = false;
 
+  // Per-turn token accumulation. Populated incrementally by #poll() as new
+  // assistant lines arrive. Consumed and reset by consumeTurnUsage() at turn end.
+  // Map<model, {input, cacheCreate, output, cacheRead}>
+  #turnUsage = new Map();
+  // Subagent JSONL files already counted in a previous consumeTurnUsage() call.
+  // Prevents double-counting when the same subagent dir is scanned on a later turn.
+  #knownSubagents = new Set();
+  // Tool-use IDs of pending Agent() calls — used to emit synthetic task_started /
+  // task_notification events so activeAgents tracking works without system events.
+  #pendingAgentIds = new Set();
+
   // projectDir: directory containing <sessionId>.jsonl files.
   // sessionId: null for new sessions (watch dir), string for resumed sessions.
   constructor(sessionId, projectDir) {
@@ -136,9 +147,98 @@ export class TranscriptWatcher extends EventEmitter {
       let entry;
       try { entry = JSON.parse(raw); } catch { break; } // partial line — retry next poll
       this.#linesRead = i + 1;
+
       if (entry.type === 'assistant') {
         this.emit('event', entry);
+
+        // Accumulate token usage for this turn (consumed by consumeTurnUsage()).
+        const model = entry.message?.model;
+        const u = entry.message?.usage;
+        if (model && u) {
+          const prev = this.#turnUsage.get(model) || { input: 0, cacheCreate: 0, output: 0, cacheRead: 0 };
+          this.#turnUsage.set(model, {
+            input:       prev.input       + (u.input_tokens                || 0),
+            cacheCreate: prev.cacheCreate + (u.cache_creation_input_tokens || 0),
+            output:      prev.output      + (u.output_tokens               || 0),
+            cacheRead:   prev.cacheRead   + (u.cache_read_input_tokens     || 0),
+          });
+        }
+
+        // Emit synthetic task_started for each Agent() tool call so activeAgents
+        // tracking works without stream-json system events.
+        for (const b of entry.message?.content ?? []) {
+          if (b.type === 'tool_use' && b.name === 'Agent' && b.id) {
+            this.#pendingAgentIds.add(b.id);
+            // team_name present → in_process_teammate (COMPLEX team member),
+            // absent → local_agent (planner, simple-developer, merger, etc.).
+            const taskType = b.input?.team_name ? 'in_process_teammate' : 'local_agent';
+            this.emit('event', { type: 'system', subtype: 'task_started', task_type: taskType, task_id: b.id });
+          }
+        }
+      } else if (entry.type === 'user') {
+        // Emit synthetic task_notification/completed when a tool_result closes a
+        // pending Agent() call. The user entry itself is not forwarded.
+        for (const b of entry.message?.content ?? []) {
+          if (b.type === 'tool_result' && this.#pendingAgentIds.has(b.tool_use_id)) {
+            this.#pendingAgentIds.delete(b.tool_use_id);
+            this.emit('event', { type: 'system', subtype: 'task_notification', status: 'completed', task_id: b.tool_use_id });
+          }
+        }
       }
     }
+  }
+
+  // Collect token usage for the just-completed turn: all new assistant usage
+  // accumulated by #poll() since the last call, plus any new subagent JSONL files
+  // that appeared during this turn. Returns a modelUsage object in the camelCase
+  // format expected by turn.js. Resets per-turn state so the next turn starts clean.
+  async consumeTurnUsage() {
+    const usage = new Map(this.#turnUsage);
+    this.#turnUsage.clear();
+
+    // Subagent JSONLs live at <projectDir>/<sessionId>/subagents/*.jsonl.
+    // Only read files we haven't seen before to avoid double-counting across turns.
+    if (this.#sessionId) {
+      try {
+        const subDir = join(this.#projectDir, this.#sessionId, 'subagents');
+        const files = await readdir(subDir);
+        await Promise.all(
+          files
+            .filter(f => f.endsWith('.jsonl') && !this.#knownSubagents.has(f))
+            .map(async f => {
+              this.#knownSubagents.add(f);
+              const content = await readFile(join(subDir, f), 'utf8').catch(() => null);
+              if (!content) return;
+              for (const line of content.split('\n')) {
+                if (!line.trim()) continue;
+                let e; try { e = JSON.parse(line); } catch { continue; }
+                if (e.type !== 'assistant') continue;
+                const model = e.message?.model;
+                const u = e.message?.usage;
+                if (!model || !u) continue;
+                const prev = usage.get(model) || { input: 0, cacheCreate: 0, output: 0, cacheRead: 0 };
+                usage.set(model, {
+                  input:       prev.input       + (u.input_tokens                || 0),
+                  cacheCreate: prev.cacheCreate + (u.cache_creation_input_tokens || 0),
+                  output:      prev.output      + (u.output_tokens               || 0),
+                  cacheRead:   prev.cacheRead   + (u.cache_read_input_tokens     || 0),
+                });
+              }
+            })
+        );
+      } catch { /* no subagents dir — normal for first turn */ }
+    }
+
+    // Convert to turn.js modelUsage format (camelCase).
+    const modelUsage = {};
+    for (const [model, u] of usage) {
+      modelUsage[model] = {
+        inputTokens:              u.input,
+        cacheCreationInputTokens: u.cacheCreate,
+        cacheReadInputTokens:     u.cacheRead,
+        outputTokens:             u.output,
+      };
+    }
+    return modelUsage;
   }
 }
