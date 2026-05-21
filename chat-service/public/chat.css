@@ -349,6 +349,15 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
   background: #2c2c2e;
   border-bottom-left-radius: 4px;
 }
+/* Intermediate in-progress narrations — hidden by default, revealed under
+   debug mode so the full reasoning trail is inspectable. The `.msg-working`
+   class is shared with the waiting-spinner bubble (which is not an assistant
+   message), so we use the `.msg-assistant.msg-working` compound to scope. */
+.msg-assistant.msg-working { display: none; }
+#chat-widget.debug-active .msg-assistant.msg-working {
+  display: block;
+  min-width: 0;
+}
 .msg-rollback {
   align-self: flex-start;
   max-width: 85%;

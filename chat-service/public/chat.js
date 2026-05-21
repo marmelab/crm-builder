@@ -325,6 +325,7 @@ function handleWsMessage(event) {
         else if (it.type === 'debug_raw') renderDebugRaw(it, s);
       }
     });
+    markStaleWorkingMessages();
     if (msg.working) {
       working = true;
       // On resume, the remaining time stays as "Estimating…" until the next
@@ -534,11 +535,52 @@ function formatMessageTime(ts) {
   return `${d.toLocaleDateString([], { day: '2-digit', month: '2-digit' })} ${time}`;
 }
 
+// Walk back through messages within the current turn (i.e. until the last
+// user message) and add `msg-working` to the most recent unmarked assistant
+// narration. Rollback bubbles aren't narrations and are skipped.
+function demotePreviousTurnAssistant() {
+  const all = messages.querySelectorAll('.msg');
+  for (let i = all.length - 1; i >= 0; i--) {
+    const m = all[i];
+    if (m.classList.contains('msg-user')) return;
+    if (m.classList.contains('msg-rollback')) continue;
+    if (m.classList.contains('msg-assistant') && !m.classList.contains('msg-working')) {
+      m.classList.add('msg-working');
+      return;
+    }
+  }
+}
+
+// On resume, the message log doesn't store the `msg-working` state we built
+// up live. Reconstruct it: in each maximal run of consecutive assistant
+// narrations (rollbacks ignored), mark all but the last as `msg-working`.
+function markStaleWorkingMessages() {
+  const all = messages.querySelectorAll('.msg');
+  let lastNarrationIdx = -1;
+  for (let i = 0; i < all.length; i++) {
+    const m = all[i];
+    if (m.classList.contains('msg-rollback')) continue;
+    if (m.classList.contains('msg-assistant')) {
+      if (lastNarrationIdx !== -1) all[lastNarrationIdx].classList.add('msg-working');
+      lastNarrationIdx = i;
+    } else if (m.classList.contains('msg-user')) {
+      lastNarrationIdx = -1;
+    }
+  }
+}
+
 function appendMessage(role, content, seqOrOpts = ++seqCounter) {
   const opts = typeof seqOrOpts === 'object' && seqOrOpts !== null ? seqOrOpts : {};
   const seq = typeof seqOrOpts === 'number' ? seqOrOpts : (opts.seq ?? ++seqCounter);
   const queued = !!opts.queued;
   const subtype = opts.subtype;
+  // While the session is `in_progress`, a new assistant narration demotes the
+  // previous one of the same turn to `msg-working`, so only the latest stays
+  // unmarked. The CSS layer is free to hide `.msg-working` if intermediate
+  // narrations should be collapsed. Rollback messages are out-of-band.
+  if (role === 'assistant' && !subtype && working) {
+    demotePreviousTurnAssistant();
+  }
   const el = document.createElement('div');
   el.className = `msg msg-${role}${queued ? ' msg-queued' : ''}${subtype ? ' msg-' + subtype : ''}`;
   if (subtype === 'rollback') {
@@ -832,6 +874,7 @@ historyCollapseBtn.addEventListener('click', () => {
 debugBtn.addEventListener('click', () => {
   debugMode = !debugMode;
   debugBtn.classList.toggle('debug-active', debugMode);
+  widget.classList.toggle('debug-active', debugMode);
   debugBtn.title = debugMode ? 'Debug ON' : 'Debug OFF';
   if (debugMode) {
     for (const entry of debugEventBuffer) {
