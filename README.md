@@ -113,37 +113,51 @@ switch-mode full    # → Supabase
 ### Phase 1 — Fast dev in demo mode
 
 ```
-You (in the user interface):
+You (in the chat at localhost:8080):
   "Add a 'priority' field (low/medium/high) on contacts
    with a coloured badge in the list"
 
 Claude:
-  → Edits src/contacts/ContactList.tsx
-  → Edits src/contacts/ContactEdit.tsx
-  → Adds the type in src/types.ts
-  → Vite automatically reloads the browser
+  → Spawns a dev team in an isolated git worktree
+  → Edits ContactList.tsx, ContactEdit.tsx, types.ts
+  → Reviews, validates, merges to main
+  → Vite hot-reloads the browser
 ```
 
-Validate visually on `localhost:5173` or `localhost:8080`.
+Validate visually on `localhost:5173`.
 
-### Phase 2 — Migration to Supabase
+### Phase 2 — Promote to your real database
 
-```bash
-switch-mode full
+When a feature changes the data shape, Claude writes the SQL into
+`supabase/migrations-pending/` (invisible to Supabase CLI) and, once the
+dev wave is merged, asks for permission in plain language:
+
 ```
+Claude:
+  "Some of these changes affect how your data is stored.
+   Want me to apply them to your real database now?"
 
-```
-You:
-  "Now create the Supabase migration for the priority field
-   and apply it"
+You: "yes"
 
 Claude:
-  → Creates supabase/migrations/xxx_add_priority_to_contacts.sql
-  → Content: ALTER TABLE contacts ADD COLUMN priority text
-             CHECK (priority IN ('low', 'medium', 'high'));
-  → Runs: npx supabase db push
-  → Verifies the CRM works with real data
+  → Promotes the file from supabase/migrations-pending/
+    to supabase/migrations/ (one commit on main)
+  → Starts Supabase if needed and applies the migration
+
+(if you are still in demo mode)
+Claude:
+  "Your real database is up to date. Want to switch the app
+   over to your real data now?"
+
+You: "yes"
+
+Claude:
+  → Switches the data provider to Supabase — Vite hot-reloads
 ```
+
+You can also toggle modes yourself at any time: one click on the
+mode badge in the chat header, or `switch-mode demo` / `switch-mode full`
+from `make claude`.
 
 ---
 
