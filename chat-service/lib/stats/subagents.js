@@ -12,40 +12,41 @@ import { toolDetail, sendMessageVerdictFromInput } from './tools.js';
 // the planner's reply and the first dev's GO.
 const SKIP_CHILD = new Set();
 
-// Enrich COMPLEX team members (task_type='in_process_teammate') with their
-// tool calls — those live in `~/.claude/projects/-app/<claudeSessionId>/subagents/agent-<task_id>.jsonl`,
-// never streamed into the orchestrator's main log. Without this, every
-// COMPLEX agent phase shows up empty in the stats UI.
+// Enrich agent phases with their tool calls from subagent JSONL files.
+// Handles both COMPLEX in_process_teammate and SIMPLE local_agent phases.
+//
+// In the stream-json architecture, local_agent (planner, simple-developer)
+// messages appeared in the main stream with parent_tool_use_id and were
+// handled by accumulatePerPhaseTokens + populateChildrenAndCounts. In the
+// PTY/JSONL architecture, ALL subagent messages live in separate JSONL files
+// regardless of task_type. Without this enrichment, local_agent phases show
+// up completely empty in the stats panel.
 export async function enrichSubagentChildren(phases, subagentsDir, toolCounts, allToolCalls) {
   const baseDir = subagentsDir;
 
-  // Only target COMPLEX team members. Local agents (planner, simple-developer)
-  // already have their tool_uses in the main stream via parent_tool_use_id —
-  // loading their subagent files would double-count.
-  const targets = phases.filter((p) =>
-    p.kind === 'agent' && p.taskType === 'in_process_teammate' && p.agentName
-  );
+  // Target all agent phases. local_agent phases whose tokens were already
+  // populated from the main stream (stream-json architecture, output > 0)
+  // are skipped to avoid double-counting tokens and children.
+  const targets = phases.filter((p) => p.kind === 'agent');
   if (targets.length === 0) return;
 
   let dirEntries;
   try {
     dirEntries = await readdir(baseDir);
   } catch {
-    return; // dir absent (no team ran yet, or different layout)
+    return; // dir absent (no agent ran yet, or different layout)
   }
 
   // Each agent activation (initial dispatch + every SendMessage wake-up) writes
-  // a NEW agent-<taskId>.jsonl, but each one is a CUMULATIVE transcript of the
-  // entire team session up to that point — sharing the same first-message uuid.
+  // a NEW agent-<hash>.jsonl, but each one is a CUMULATIVE transcript of the
+  // entire session up to that point — sharing the same first-message uuid.
   // Loading every file would replay every tool_use N times. Strategy:
   //
   // 1. Read each .meta.json + the first JSONL line to get firstUuid + size.
-  // 2. Group files by (agentName, firstUuid) — that identifies one team session
-  //    activation. Keep only the LARGEST file per group (the latest snapshot
-  //    contains every prior event).
-  // 3. Sort the surviving files by mtime ASC, then align them with the phases
-  //    sorted by startTs ASC (same agentName can appear in multiple waves —
-  //    e.g. shared "merger" across two TeamCreate cycles).
+  // 2. Group files by (key, firstUuid). Keep only the LARGEST file per group.
+  // 3. Primary key: meta.toolUseId — direct 1:1 match to phase._toolUseId.
+  //    Fallback key: meta.agentType (dispatch name) — for old files without
+  //    toolUseId and in_process_teammate phases matched by suffixed name.
   const fileMeta = [];
   for (const entry of dirEntries) {
     if (!entry.endsWith('.meta.json')) continue;
@@ -60,27 +61,77 @@ export async function enrichSubagentChildren(phases, subagentsDir, toolCounts, a
     const firstUuid = await readFirstUuid(jsonlPath);
     if (!firstUuid) continue;
     fileMeta.push({
-      path: jsonlPath, agentName: meta.agentType,
+      path: jsonlPath,
+      agentName: meta.agentType,
+      toolUseId: meta.toolUseId ?? null,
       firstUuid, size: st.size, mtimeMs: st.mtimeMs,
     });
   }
 
-  // Group by (agentName, firstUuid), pick largest per group.
-  const winnersByName = new Map(); // agentName → [{path, mtimeMs}, …]
-  const groups = new Map(); // key=name|firstUuid → best
-  for (const f of fileMeta) {
-    const k = f.agentName + '|' + f.firstUuid;
-    const cur = groups.get(k);
-    if (!cur || cur.size < f.size) groups.set(k, f);
+  // --- Primary path: direct toolUseId matching ---
+  // meta.toolUseId maps exactly to phase._toolUseId (the Agent() tool_use_id).
+  // Works for both local_agent (SIMPLE) and in_process_teammate (COMPLEX).
+  const phaseByToolUseId = new Map();
+  for (const p of targets) {
+    if (p._toolUseId) phaseByToolUseId.set(p._toolUseId, p);
+    // Also index each activation's toolUseId for SendMessage-resumed COMPLEX phases.
+    for (const act of p.activations ?? []) {
+      if (act.toolUseId && !phaseByToolUseId.has(act.toolUseId)) {
+        phaseByToolUseId.set(act.toolUseId, p);
+      }
+    }
   }
-  for (const f of groups.values()) {
+
+  // Group by (toolUseId|firstUuid), pick largest per group.
+  const groupsById = new Map();
+  const ungrouped = []; // files without toolUseId fall through to agentName path
+  for (const f of fileMeta) {
+    if (f.toolUseId) {
+      const k = f.toolUseId + '|' + f.firstUuid;
+      const cur = groupsById.get(k);
+      if (!cur || cur.size < f.size) groupsById.set(k, f);
+    } else {
+      ungrouped.push(f);
+    }
+  }
+
+  const enrichedPhaseIds = new Set();
+  for (const f of groupsById.values()) {
+    const phase = phaseByToolUseId.get(f.toolUseId);
+    if (!phase) continue;
+    // Skip local_agent phases whose tokens were already populated from the main
+    // stream (stream-json architecture: output > 0 means parent_tool_use_id
+    // data was found). Enriching again would double-count tokens and children.
+    if (phase.taskType === 'local_agent' && (phase.tokensBreakdown?.output ?? 0) > 0) continue;
+    await appendSubagentToolUses(f.path, phase, toolCounts, allToolCalls);
+    enrichedPhaseIds.add(phase.phaseId);
+  }
+
+  // --- Fallback path: agentName matching ---
+  // For old subagent files without toolUseId and for in_process_teammate phases
+  // not yet enriched (e.g. COMPLEX sessions predating the toolUseId meta field).
+  // Sort surviving files by mtime ASC, align with phases sorted by startTs ASC
+  // (same agentName can appear across multiple waves, e.g. shared "merger").
+  const fallbackTargets = targets.filter((p) =>
+    p.taskType === 'in_process_teammate' && p.agentName && !enrichedPhaseIds.has(p.phaseId)
+  );
+  if (fallbackTargets.length === 0) return;
+
+  const winnersByName = new Map();
+  const groupsByName = new Map(); // key=agentName|firstUuid → best
+  for (const f of [...ungrouped, ...groupsById.values()]) {
+    const k = f.agentName + '|' + f.firstUuid;
+    const cur = groupsByName.get(k);
+    if (!cur || cur.size < f.size) groupsByName.set(k, f);
+  }
+  for (const f of groupsByName.values()) {
     const list = winnersByName.get(f.agentName) || [];
     list.push(f);
     winnersByName.set(f.agentName, list);
   }
 
   const phasesByName = new Map();
-  for (const p of targets) {
+  for (const p of fallbackTargets) {
     const list = phasesByName.get(p.agentName) || [];
     list.push(p);
     phasesByName.set(p.agentName, list);
@@ -125,10 +176,10 @@ async function appendSubagentToolUses(file, phase, toolCounts, allToolCalls) {
   }
 
   // Defensive reset before refilling from the subagent JSONL (the authoritative
-  // source for in_process_teammate phases). task_notification.usage is
-  // currently null for in_process_teammate so phase.tokensTotal / opsCount
-  // arrive at 0 from extractPhases — but if the SDK ever populates those
-  // fields, summing here would double-count. Same for the breakdown.
+  // source for agent phases). task_notification.usage is currently null for
+  // subagents so phase.tokensTotal / opsCount arrive at 0 from extractPhases —
+  // but if the SDK ever populates those fields, summing here would double-count.
+  // Same for the breakdown.
   phase.tokensTotal = 0;
   phase.opsCount = 0;
   phase.tokensBreakdown = emptyBreakdown();
