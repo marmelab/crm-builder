@@ -1,8 +1,8 @@
-# Atomic CRM — Isolated dev environment with Claude Code
+# Atomic CRM Builder
 
-Single Docker image, two development modes depending on your needs.
+Customizing a CRM can be tedious. We built Atomic CRM Builder to provide a containerized environment that helps you create your custom CRM based on [Atomic CRM](https://github.com/marmelab/atomic-crm).
 
-## The two modes
+The builder provides two modes:
 
 ```
 MODE=demo (default)                 MODE=full
@@ -11,34 +11,16 @@ FakeRest in the browser             Local Supabase (Postgres)
 Starts in ~5 seconds                Starts in ~2-3 min (first time)
 No extra prerequisites              Requires host Docker socket
 Data resets on reload               Data is persisted
-Great for UI development            Required for auth, storage, RLS
 ```
 
-## Recommended workflow
+Note: The user can toggle mode with a single click from the User Interface.
 
-```
-1. Start in demo mode
-      ↓
-2. Claude develops features via prompts
-   (components, fields, views...)
-      ↓
-3. Visual validation in the browser
-      ↓
-4. switch-mode full  (in the Claude terminal)
-      ↓
-5. Claude generates and applies the Supabase migration
-   (npx supabase db push)
-      ↓
-6. Verify on real data
-```
-
----
 
 ## Quick start
 
 ### Prerequisites
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed
-- Anthropic API key: [console.anthropic.com](https://console.anthropic.com)
+- Anthropic API key: [console.anthropic.com](https://console.anthropic.com) or a Claude Code subscription
 
 ### 1. Build (once, ~5 min)
 ```bash
@@ -65,13 +47,10 @@ docker run -it --rm \
 
 ### With docker compose (easier)
 ```bash
-cp .env.example .env    # then fill in ANTHROPIC_API_KEY (optional if you'll
-                        # authenticate via `make claude` instead)
-
 make up        # demo mode
 make up-full   # full mode
 
-# First-time login (only if you don't have ANTHROPIC_API_KEY set):
+# First-time login:
 # Run this from another shell — the stack pauses on first boot waiting for
 # credentials, and resumes automatically once login completes.
 make claude         # OAuth flow on first run — copy URL to browser, paste token back
@@ -84,6 +63,23 @@ make restart # or make restart-full
 
 # Full reset — deletes volumes (loses code changes)
 make wipe up
+```
+
+---
+
+## Recommended workflow
+
+```
+1. Start in demo mode
+      ↓
+2. Claude develops features via prompts
+   (components, fields, views...)
+      ↓
+3. Visual validation in the browser
+      ↓
+4. Claude generates and applies the Database migrations
+      ↓
+5. Verify on real data
 ```
 
 ---
@@ -117,37 +113,51 @@ switch-mode full    # → Supabase
 ### Phase 1 — Fast dev in demo mode
 
 ```
-You (in the Claude terminal):
+You (in the chat at localhost:8080):
   "Add a 'priority' field (low/medium/high) on contacts
    with a coloured badge in the list"
 
 Claude:
-  → Edits src/contacts/ContactList.tsx
-  → Edits src/contacts/ContactEdit.tsx
-  → Adds the type in src/types.ts
-  → Vite automatically reloads the browser
+  → Spawns a dev team in an isolated git worktree
+  → Edits ContactList.tsx, ContactEdit.tsx, types.ts
+  → Reviews, validates, merges to main
+  → Vite hot-reloads the browser
 ```
 
 Validate visually on `localhost:5173`.
 
-### Phase 2 — Migration to Supabase
+### Phase 2 — Promote to your real database
 
-```bash
-switch-mode full
-```
+When a feature changes the data shape, Claude writes the SQL into
+`supabase/migrations-pending/` (invisible to Supabase CLI) and, once the
+dev wave is merged, asks for permission in plain language:
 
 ```
-You:
-  "Now create the Supabase migration for the priority field
-   and apply it"
+Claude:
+  "Some of these changes affect how your data is stored.
+   Want me to apply them to your real database now?"
+
+You: "yes"
 
 Claude:
-  → Creates supabase/migrations/xxx_add_priority_to_contacts.sql
-  → Content: ALTER TABLE contacts ADD COLUMN priority text
-             CHECK (priority IN ('low', 'medium', 'high'));
-  → Runs: npx supabase db push
-  → Verifies the CRM works with real data
+  → Promotes the file from supabase/migrations-pending/
+    to supabase/migrations/ (one commit on main)
+  → Starts Supabase if needed and applies the migration
+
+(if you are still in demo mode)
+Claude:
+  "Your real database is up to date. Want to switch the app
+   over to your real data now?"
+
+You: "yes"
+
+Claude:
+  → Switches the data provider to Supabase — Vite hot-reloads
 ```
+
+You can also toggle modes yourself at any time: one click on the
+mode badge in the chat header, or `switch-mode demo` / `switch-mode full`
+from `make claude`.
 
 ---
 
@@ -158,8 +168,8 @@ Claude:
 | UI components, forms | ✅ | ✅ |
 | New fields, views | ✅ | ✅ |
 | Filters, sorting, pagination | ✅ | ✅ |
+| Response speed | ✅ (instant, in-memory) | ⚠️ (network round-trip, migrations) |
 | Data persistence | ❌ (reload = reset) | ✅ |
 | Real authentication | ❌ | ✅ |
 | File attachments | ❌ | ✅ |
 | Security policies (RLS) | ❌ | ✅ |
-| E2E tests | ⚠️ (partial) | ✅ |
