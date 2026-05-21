@@ -36,12 +36,20 @@ case "$COMMAND" in
     ;;
 esac
 
-# Whitelist of allowed prefixes (regex, anchored at start of command).
+# Allowed-prefix regex (anchored). Mode 1: read-only inspection.
+# Mode 2: read the session diff vs origin/main, commit MEMORY.md with
+# the pinned Documentator identity (never via `cd && …` — chaining is blocked).
 WHITELIST=(
   '^git log( |$)'
   '^git show( |$)'
+  '^git diff( |$)'
+  '^git -C /app fetch origin main --quiet *$'
+  '^git -C /app diff( |$)'
+  '^git -C /app log( |$)'
   '^ls( |$)'
   '^wc -l( |$)'
+  '^git -C /app add MEMORY\.md *$'
+  "^git -C /app -c user\\.name=['\"]?Documentator['\"]? -c user\\.email=['\"]?documentator@atomic-crm\\.local['\"]? commit -m "
 )
 
 for pattern in "${WHITELIST[@]}"; do
@@ -50,5 +58,5 @@ for pattern in "${WHITELIST[@]}"; do
   fi
 done
 
-echo "Bash command blocked for documentator. Allowed commands: git log, git show, ls, wc -l. Use Read/Glob/Grep for everything else." >&2
+echo "Bash command blocked for documentator. Allowed: git log, git show, git diff, ls, wc -l; Mode 2 only: 'git -C /app fetch origin main --quiet', 'git -C /app diff …', 'git -C /app log …', 'git -C /app add MEMORY.md', 'git -C /app -c user.name=Documentator -c user.email=documentator@atomic-crm.local commit -m …'. Use Read/Glob/Grep otherwise." >&2
 exit 2

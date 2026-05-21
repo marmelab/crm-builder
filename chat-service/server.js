@@ -4,7 +4,10 @@ import { fileURLToPath } from 'url';
 import { WebSocketServer } from 'ws';
 
 import { PORT, MODE_DEMO, MODE_FULL } from './lib/server/config.js';
-import { loadSystemPrompt, applySystemPrompt } from './lib/server/system-prompt.js';
+import {
+  loadSystemPrompt, applySystemPrompt,
+  loadDocumentatorPrompt, applyDocumentatorPrompt,
+} from './lib/server/system-prompt.js';
 import { openSession, deleteSession } from './lib/server/session-store.js';
 import { createRequestHandler, switchMode } from './lib/server/http-routes.js';
 import { runtimes, wsToRuntime, runtimeForWs, createRuntime, safeSend } from './lib/server/runtime.js';
@@ -183,6 +186,10 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     applySystemPrompt(parsed);
     const t = parsed.tools?.length ? parsed.tools.join(',') : 'default';
     console.log(parsed.content ? `Orchestrator loaded (model: ${parsed.model || 'default'}, tools: ${t}).` : 'No orchestrator prompt, using default.');
+  });
+  loadDocumentatorPrompt().then((parsed) => {
+    applyDocumentatorPrompt(parsed);
+    console.log(parsed.content ? `Documentator loaded (model: ${parsed.model || 'default'}).` : 'No documentator prompt, post-turn synthesis disabled.');
   });
   httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`Chat service listening on port ${PORT}`);

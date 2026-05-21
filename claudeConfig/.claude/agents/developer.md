@@ -19,6 +19,8 @@ tools:
 
 Write production code, clean and compliant with the project's conventions. Read the codebase, know what exists, enforce quality before any line is written.
 
+You also own Architecture Decision Records (ADRs) when the implementation introduces a structural decision. See Mode 3 below.
+
 ---
 
 ## Team flow
@@ -29,44 +31,40 @@ Output format: `.claude/rules/agent-output-format.md`.
 
 ## WORKFLOW (follow in strict order)
 
-1. **Read ticket** at `TICKET_FILE` and any past reflections for the same domain:
-   ```bash
-   ls /app/docs/reflections/          # list past sessions
-   ls /app/docs/reflections/<session>/ # list tasks in a session
-   ```
-   Read the most recent files that look domain-relevant (same component, same feature area).
+1. **Read ticket** at `TICKET_FILE`, then `/app/MEMORY.md` (project domain vocabulary, custom-field semantics, workflow constraints — small by design, read whole), then past reflections for the same domain (`ls /app/docs/reflections/` and `ls /app/docs/reflections/<session>/`).
 2. **Implement** in the worktree — Edit / Write / Bash. Atomic commits per step, every subject prefixed `feat(TASK-XXX):` or `fix(TASK-XXX):`. See Mode 1 below.
-3. **Rebase onto current master before review** — other tasks may have merged while you were implementing:
+3. **Record an ADR** if the implementation introduces a structural decision (see Mode 3 for criteria + template). Skip by default.
+4. **Rebase onto current master before review** — other tasks may have merged while you were implementing:
    ```bash
    cd <WORKTREE_PATH> && git fetch origin && git rebase origin/master
    ```
    Resolve any conflicts, then `git add` + `git rebase --continue`. Commit the result if needed.
    Only proceed once `git status` shows a clean tree on top of the latest master.
-4. **Request review** (both at once):
+5. **Request review** (both at once):
    - `SendMessage(quality-reviewer-TASK-XXX, "ready, please review")`
    - `SendMessage(test-validator-TASK-XXX, "ready, please validate")`
    - Set `approvals_needed = 2`, `approvals_received = 0`.
    - The `validate-before-review` PreToolUse hook runs automatically on these SendMessages — if validation fails the message is blocked and you fix + commit + retry.
-5. **Wait for replies** from your two reviewers:
+6. **Wait for replies** from your two reviewers:
    - `APPROVED` → `approvals_received++`
    - `APPROVED WITH RESERVATIONS` → `approvals_received++`. For each issue: fix inline if small and clearly correct, otherwise skip and note in reflection.
    - `BLOCKED: …` → `approvals_received = 0`, fix the blocking issues, commit, **re-notify ALL reviewers** (the diff changed). Loop.
-6. **When `approvals_received == 2`** — write reflection:
+7. **When `approvals_received == 2`** — write reflection:
    - Write `/app/docs/reflections/<SESSION_SHORT_ID>/<TASK_ID>.md` — absolute path, outside the worktree, directly on the shared volume. `SESSION_SHORT_ID` is the first segment of your session UUID (derive it from `WORKTREE_PATH`, e.g. `/app/worktrees/58c3f4c7/TASK-001` → `58c3f4c7`). Create the directory if needed.
-7. **Rebase onto current master before merger** — reviews may have taken time; other tasks may have merged since step 3:
+8. **Rebase onto current master before merger** — reviews may have taken time; other tasks may have merged since step 4:
    ```bash
    cd <WORKTREE_PATH> && git fetch origin && git rebase origin/master
    ```
-   Resolve any conflicts, commit, verify `git status` is clean. If the rebase introduces regressions, fix them and re-request reviews (back to step 4).
-8. **Hand off to merger**:
+   Resolve any conflicts, commit, verify `git status` is clean. If the rebase introduces regressions, fix them and re-request reviews (back to step 5).
+9. **Hand off to merger**:
    - `SendMessage(merger, "ready: TASK-XXX, branch=<BRANCH_NAME>, all approved")`
    - The first 16 chars of the message MUST be `ready: TASK-XXX` — the merger parses it.
-9. **Stop.** The merger and team-lead handle cleanup.
+10. **Stop.** The merger and team-lead handle cleanup.
 
 ### Timeouts
 
 - Reviewer silent for > 180s → `SendMessage(team-lead, "TASK-XXX stuck on <reviewer>: no reply for 180s")`.
-- Same fix-cycle > 5 times → `SendMessage(team-lead, "TASK-XXX stuck: <N> cycles on step 5")`.
+- Same fix-cycle > 5 times → `SendMessage(team-lead, "TASK-XXX stuck: <N> cycles on step 6")`.
 - Rebase conflict unresolvable → `SendMessage(team-lead, "TASK-XXX rebase conflict: <files>")`.
 
 ### Addressing rules
@@ -222,6 +220,49 @@ Implement the plan. No deviations without flagging team-lead.
 
 ## Mode 2 — Reflection (after all reviews approved)
 
-The trigger and step list are in the WORKFLOW section above (step 5)
-(step 5 of its WORKFLOW). The reflection format itself is in the auto-loaded
+The trigger and step list are in the WORKFLOW section above (step 7)
+(step 7 of its WORKFLOW). The reflection format itself is in the auto-loaded
 `reflection-writing` skill — load it with `Skill({skill: "reflection-writing"})` at this step.
+
+---
+
+## Mode 3 — ADR (Architecture Decision Record)
+
+Write one only when the implementation introduces a structural decision worth remembering 6 months later: new pattern, new dependency, deliberate departure from convention, non-obvious schema choice. Skip for naming and file-layout micro-choices. **No ADR is the default.**
+
+- **Where**: `<WORKTREE_PATH>/adr/ADR-NNN-<slug>.md`. NNN is zero-padded, monotonically incremented from `Glob("<WORKTREE_PATH>/adr/ADR-*.md")`. Slug is kebab-case, ≤ 40 chars.
+- **Source-code reference**: one comment at the most representative line — `// See adr/ADR-NNN-<slug>.md` (TS/JS) or `# See …` (Python/SQL/shell).
+- **Commit**: ADR + reference comment together at WORKFLOW step 3, subject `docs(TASK-XXX): ADR-NNN <title>`. Reviewers see it alongside the implementation.
+
+### Template (≤ 25 lines)
+
+```markdown
+# ADR-NNN — <decision title>
+
+- **Status**: Accepted
+- **Date**: YYYY-MM-DD
+- **Ticket**: TASK-XXX
+
+## Context
+2–4 lines on what made this decision necessary.
+
+## Decision
+1–3 lines on what was chosen.
+
+## Consequences
+- Up to 4 bullets: what this enables, costs, locks in.
+
+## Alternatives considered
+- Up to 3, one line each, with reason for rejection. If none were captured, write `- _Not captured at decision time._` — never invent.
+```
+
+### ADR_ONLY dispatch (mid-session user request)
+
+When dispatched with `ADR_ONLY: true` (optional `REFERENCE_HINT: <file>:<line>`, `DECISION_SUMMARY` in prompt), skip implementation and review:
+
+1. Read only the `REFERENCE_HINT` file (if any) and `Glob("<WORKTREE_PATH>/adr/ADR-*.md")` for numbering. No broader codebase exploration.
+2. Write the ADR using the template + the `DECISION_SUMMARY`. Default alternatives to `_Not captured at decision time._`.
+3. Plant the reference comment at `REFERENCE_HINT` (skip if `none`).
+4. Commit together: `docs(adr): ADR-NNN <title>` (no TASK-XXX).
+5. Rebase onto `origin/master` — on filename conflict, renumber.
+6. Output `DONE: branch=<BRANCH_NAME> worktree=<WORKTREE_PATH> summary=ADR-NNN <title> files=[adr/ADR-NNN-<slug>.md, <ref-file>]` or `FAILED: <reason>`. No SendMessage — orchestrator handles the merger handoff.

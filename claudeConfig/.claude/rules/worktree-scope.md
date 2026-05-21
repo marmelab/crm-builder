@@ -2,7 +2,9 @@
 
 Applies to: developer, quality-reviewer, test-validator. Any agent working on a specific ticket dispatched into the shared `tickets` team with a suffixed name (e.g. `developer-TASK-006`).
 
-Not applicable to: planner (searches /app/src/ for file discovery), merger (operates in /app to merge), chat-orchestrator (doesn't touch files), project-manager (operates on /app/docs/project-context.json directly on main — config only, no code).
+Not applicable to: planner (searches /app/src/ for file discovery), merger (operates in /app to merge), chat-orchestrator (doesn't touch files), project-manager (operates on /app/docs/project-context.json directly on main — config only, no code), documentator (writes /app/MEMORY.md directly on main in Mode 2; never touches application code).
+
+Developer ADRs follow the standard worktree rule: write `<WORKTREE_PATH>/adr/ADR-NNN-<slug>.md` inside your worktree, commit alongside the implementation, the merger ships it to `/app/adr/` like any other change.
 
 ## Why
 

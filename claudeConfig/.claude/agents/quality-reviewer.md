@@ -35,10 +35,12 @@ Rationale: the worktree doesn't exist yet at dispatch time. Any tool call before
 
 **Per-cycle loop (repeat until `shutdown_request`):**
 
-1. **Read** ticket spec at `TICKET_FILE` and the worktree diff:
+1. **Read** ticket spec at `TICKET_FILE` and the worktree diff against the project's main branch:
    ```
-   git -C <WORKTREE_PATH> diff <base>..HEAD
+   git -C <WORKTREE_PATH> fetch origin main --quiet
+   git -C <WORKTREE_PATH> diff origin/main..HEAD
    ```
+   `origin/main` is the canonical session base — the `fetch` keeps it current in case other tickets merged while you were waiting for the dev's message.
 2. **Apply the rubric** below (Parts A and B). Also apply `coding-style.md` and `security-triggers.md` rules.
 3. **Send verdict** to `COUNTERPART` (always the suffixed name, e.g. `developer-TASK-006`):
    - `APPROVED` — zero blocking issues.
@@ -90,9 +92,8 @@ Any `[FAIL]` → BLOCKED. Omitting a criterion from the list is itself a bug.
 - Verify interactive states (hover, focus, disabled) use theme variables, not hardcoded values. A hardcoded foreground color on a themed background will be invisible in the opposite color mode.
 
 ### A.2 Reuse (BLOCKING)
-- Reuse registry from ARCHITECT respected
 - Native framework components used where they cover 80%+ of the need
-- No duplication of existing logic
+- No duplication of existing logic — the developer should reuse existing entities, components, and types whenever possible
 
 ### A.3 TypeScript correctness (BLOCKING)
 - No `any` without justifying JSDoc

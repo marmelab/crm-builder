@@ -11,6 +11,9 @@ import { startSubagentTailer, stopSubagentTailer } from './subagent-tail.js';
 import {
   emptyBreakdown, addBreakdown, breakdownFromModelUsage, costFromBreakdown,
 } from '../stats/io.js';
+import {
+  spawnDocumentator, sessionHasMergedTickets, DOCUMENTATOR_DEBOUNCE_MS,
+} from './documentator-spawn.js';
 
 const AGENT_DISPATCH_TOOLS = new Set(['Agent', 'Task']);
 
@@ -26,6 +29,13 @@ function emitDispatchPromptEvent(runtime, tool) {
 
 export async function processMessage(runtime, prompt) {
   if (!runtime) return;
+
+  // The user is back — cancel any pending documentator run scheduled at the
+  // tail of the previous turn. We'll re-arm it when this turn completes.
+  if (runtime.documentatorTimer) {
+    clearTimeout(runtime.documentatorTimer);
+    runtime.documentatorTimer = null;
+  }
 
   // Reset per-turn agent step counters so the progress bar reflects only
   // work initiated by *this* prompt. Send the initial 0/1 (orchestrator
@@ -264,6 +274,26 @@ export async function processMessage(runtime, prompt) {
       const asksQuestion = !wasStopped && !turnErrored && endsWithQuestion(lastAssistantText);
       const nextState = wasStopped ? 'cancelled' : asksQuestion ? 'waiting' : 'completed';
       await transitionState(runtime, nextState);
+      // Schedule the documentator (Mode 2) once the turn lands on 'completed'
+      // and at least one ticket has been merged in this session. Debounced so
+      // a follow-up user message within DOCUMENTATOR_DEBOUNCE_MS cancels it
+      // (processMessage clears the timer at the top of the next turn).
+      if (nextState === 'completed' && !turnErrored) {
+        const sessionId = runtime.session?.id;
+        const sessionDir = sessionId ? `${LOG_DIR}/${sessionId}` : null;
+        if (sessionDir && await sessionHasMergedTickets(sessionDir)) {
+          runtime.documentatorTimer = setTimeout(() => {
+            runtime.documentatorTimer = null;
+            // A new turn may have started in the meantime — skip if so; that
+            // turn will re-schedule us once it finishes.
+            const current = runtimes.get(sessionId);
+            if (current?.busy) return;
+            spawnDocumentator(sessionId).catch((err) => {
+              console.error('[documentator]', err?.message || err);
+            });
+          }, DOCUMENTATOR_DEBOUNCE_MS);
+        }
+      }
       // If no client is currently viewing this session, release the runtime
       // now that the turn is done. A later reconnect will re-open it.
       if (runtime.clients.size === 0) {

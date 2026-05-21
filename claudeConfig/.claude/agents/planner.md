@@ -25,7 +25,9 @@ You DO a light codebase discovery to identify probable files DEVELOPER will touc
 
 ## Step 1 — Understand the need
 
-Clarify:
+First, `Read("/app/MEMORY.md")` — accumulated domain vocabulary, custom-field semantics, workflow constraints. Reuse these names in tickets rather than invent new ones. Small by design — read it whole.
+
+Then clarify:
 - User-facing outcome
 - Explicit acceptance criteria
 - Implicit expectations (performance, security, UX)
