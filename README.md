@@ -17,28 +17,10 @@ It uses [Atomic CRM](https://github.com/marmelab/atomic-crm) as a starting templ
 docker build -t atomic-crm-dev .
 ```
 
-### 2a. Demo mode (recommended to start)
-```bash
-docker run -it --rm \
-  -e ANTHROPIC_API_KEY=sk-ant-YOUR_KEY \
-  -p 5173:5173 -p 8080:8080 \
-  atomic-crm-dev
-```
+### 2. Launch the builder
 
-### 2b. Full mode (Supabase)
 ```bash
-docker run -it --rm \
-  -e ANTHROPIC_API_KEY=sk-ant-YOUR_KEY \
-  -e MODE=full \
-  --network host \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  atomic-crm-dev
-```
-
-### With docker compose (easier)
-```bash
-make up        # demo mode
-make up-full   # full mode
+make up
 
 # First-time login:
 # Run this from another shell — the stack pauses on first boot waiting for
@@ -46,26 +28,24 @@ make up-full   # full mode
 make claude         # OAuth flow on first run — copy URL to browser, paste token back
 ```
 
-### Persist code changes across restarts
-```bash
-# Stop and restart — keeps your code changes
-make restart # or make restart-full
+### 3. Stop and Restart
 
-# Full reset — deletes volumes (loses code changes)
-make wipe up
+```bash
+make restart     # Keep your code changes
+# or
+make wipe up     # Full reset — deletes volumes (loses code changes)
 ```
 
 ## Usage
 
-Once started, open these URLs:
+Once started, open [`http://localhost:8080`](http://localhost:8080) to get the builder UI. From there, you can prompt the assistant, test the modification, and download the modified code. 
 
-| URL | Content |
-|---|---|
-| `http://localhost:5173` | The CRM |
-| `http://localhost:8080` | Chat assistant (the main UI for asking Claude to ship changes) |
-| `http://localhost:54323` | Supabase Dashboard (full mode only) |
+Other useful urls: 
+*  `http://localhost:5173`: The CRM
+* `http://localhost:54323`: The Supabase Dashboard (full mode only)
 
-For a direct, interactive Claude session, run from your host:
+For a direct, interactive Claude session in the builder, run from your host:
+
 ```bash
 make claude         # opens `claude --dangerously-skip-permissions` in the container
                     # (also triggers OAuth on first run if ANTHROPIC_API_KEY is unset)
@@ -73,8 +53,8 @@ make claude         # opens `claude --dangerously-skip-permissions` in the conta
 
 Inside that session you can also switch modes without restarting the container:
 ```bash
-switch-mode demo    # → FakeRest
-switch-mode full    # → Supabase
+switch-mode demo    # → Frontend only
+switch-mode full    # → Full-stack
 ```
 
 ## Container Isolation
