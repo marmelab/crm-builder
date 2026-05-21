@@ -31,9 +31,9 @@ make claude         # OAuth flow on first run — copy URL to browser, paste tok
 ### 3. Stop and Restart
 
 ```bash
-make restart     # Keep your code changes
+make down        # Keep your code changes between sessions
 # or
-make wipe up     # Full reset — deletes volumes (loses code changes)
+make wipe        # Full reset — deletes volumes (loses code changes)
 ```
 
 ## Usage
