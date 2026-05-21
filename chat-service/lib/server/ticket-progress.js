@@ -44,16 +44,15 @@ export function predictedFlowExpected(subagentType) {
 // tuned wall-clock estimates for one dispatch of that role, including model
 // latency.
 const AGENT_DURATIONS_MS = {
-  orchestrator:      30_000,
-  'simple-developer': 30_000,
-  merger:            15_000,
-  'quality-reviewer': 15_000,
-  'test-validator':  20_000,
-  planner:           30_000,
+  orchestrator:      90_000, // 1m30s
+  'simple-developer': 120_000, // 2m
+  merger:            30_000,
+  'quality-reviewer': 30_000,
+  'test-validator':  45_000,
+  planner:           60_000,
   architect:         60_000,
-  developer:        120_000,
-  
-  documentator:      30_000,
+  developer:        500_000, // 8m20s
+  documentator:      60_000,
   devops:            60_000,
 };
 
