@@ -30,6 +30,7 @@ const statsCloseBtn = document.getElementById('chat-stats-close');
 let working  = false;
 let progressTotal = 0;
 let progressDone  = 0;
+let progressSteps = [];
 // Remaining time is computed server-side from fixed per-role durations and
 // shipped in the `progress` payload. We anchor the snapshot to its reception
 // time so the displayed value can tick down smoothly between events.
@@ -145,6 +146,7 @@ function resetChatUi() {
   stats.textContent = '';
   progressTotal = 0;
   progressDone = 0;
+  progressSteps = [];
   remainingTimeMsAtReceipt = 0;
   remainingTimeReceivedAt = 0;
   stopRemainingTimeTicker();
@@ -210,7 +212,7 @@ function updateWorkingProgress() {
   // dispatched yet), show a soft hint instead of the bar — Claude is
   // sizing up the work.
   if (progressTotal <= 1) {
-    if (wrap) { wrap.remove(); bubble._remainingTimeEl = null; bubble._maxPct = 0; }
+    if (wrap) { wrap.remove(); bubble._remainingTimeEl = null; bubble._barEl = null; }
     if (!hint) {
       hint = document.createElement('span');
       hint.className = 'msg-working-hint';
@@ -222,36 +224,54 @@ function updateWorkingProgress() {
   if (hint) hint.remove();
   const safeDone = Math.max(0, Math.min(progressDone, progressTotal));
   const remaining = progressTotal - safeDone;
-  const pct = Math.round((safeDone / progressTotal) * 100);
   if (!wrap) {
     wrap = document.createElement('div');
     wrap.className = 'msg-working-progress';
     const bar = document.createElement('div');
     bar.className = 'msg-working-progress-bar';
-    const fill = document.createElement('div');
-    fill.className = 'msg-working-progress-fill';
-    bar.appendChild(fill);
     const label = document.createElement('span');
     label.className = 'msg-working-progress-label';
     const remainingTime = document.createElement('span');
     remainingTime.className = 'msg-working-progress-remaining-time';
     wrap.append(bar, label, remainingTime);
     bubble.appendChild(wrap);
-    bubble._fillEl = fill;
+    bubble._barEl = bar;
     bubble._labelEl = label;
     bubble._remainingTimeEl = remainingTime;
-    bubble._maxPct = 0;
   }
-  // Monotonic clamp on the visual fill: when COMPLEX dispatches a wave bigger
-  // than the predicted minimum, the denominator jumps (e.g. 6 → 12) and the
-  // raw pct would shrink. The label keeps the truthful "done/total" so the
-  // user still sees the real numbers; only the bar is forced to never recede.
-  const displayPct = Math.max(pct, bubble._maxPct);
-  bubble._maxPct = displayPct;
-  bubble._fillEl.style.width = displayPct + '%';
+  renderProgressSegments(bubble._barEl);
   bubble._labelEl.textContent =
     `${safeDone}/${progressTotal} step${progressTotal > 1 ? 's' : ''} done · ${remaining} to go`;
   bubble._remainingTimeEl.textContent = remainingTimeText(remaining);
+}
+
+// Bar segments are flex-sized by `durationMs` so a long-running role (e.g.
+// developer at 500s) visually dwarfs a quick one (merger at 30s). When the
+// server omits steps (legacy / edge), fall back to N equal segments so the
+// label/remaining-time still match the bar.
+function renderProgressSegments(bar) {
+  const steps = progressSteps.length
+    ? progressSteps
+    : fallbackEqualSteps(progressTotal, progressDone);
+  // Cheap key — only rebuild when shape or statuses actually change.
+  const key = steps.map((s) => `${s.durationMs}:${s.status}`).join('|');
+  if (bar._stepsKey === key) return;
+  bar._stepsKey = key;
+  bar.replaceChildren(...steps.map((step) => {
+    const seg = document.createElement('div');
+    seg.className = `msg-working-progress-step is-${step.status}`;
+    seg.style.flexGrow = String(Math.max(1, step.durationMs));
+    seg.title = `${step.role} · ${Math.round(step.durationMs / 1000)}s`;
+    return seg;
+  }));
+}
+
+function fallbackEqualSteps(total, done) {
+  const out = [];
+  for (let i = 0; i < total; i++) {
+    out.push({ role: '', durationMs: 1, status: i < done ? 'done' : 'pending' });
+  }
+  return out;
 }
 
 function renderWorkingUi() {
@@ -388,6 +408,7 @@ function handleWsMessage(event) {
   if (msg.type === 'progress') {
     progressTotal = msg.total || 0;
     progressDone  = msg.done  || 0;
+    progressSteps = Array.isArray(msg.steps) ? msg.steps : [];
     if (typeof msg.remainingTimeMs === 'number') {
       remainingTimeMsAtReceipt = msg.remainingTimeMs;
       remainingTimeReceivedAt = Date.now();

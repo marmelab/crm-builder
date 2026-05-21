@@ -436,15 +436,39 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
   display: flex; flex-direction: column; gap: 4px;
 }
 .msg-working-progress-bar {
-  height: 4px; width: 100%;
-  background: rgba(142,142,147,.25);
-  border-radius: 2px; overflow: hidden;
+  height: 6px; width: 100%;
+  /* Stripes are painted on the bar (not per-step) so consecutive done
+     segments share a single continuous pattern — otherwise each step's
+     gradient restarts at 0 and adjacent done segments show an ugly seam. */
+  background:
+    linear-gradient(rgba(167,243,208,.55), transparent),
+    repeating-linear-gradient(135deg,
+      #059669 0 4px, #10b981 4px 8px);
+  background-size: 100% 100%, 11.31px 100%;
+  border-radius: 3px; overflow: hidden;
+  display: flex;
 }
-.msg-working-progress-fill {
-  height: 100%; width: 0%;
-  background: #34d399;
-  border-radius: 2px;
-  transition: width .3s ease;
+/* Glow + scrolling stripes live on the bar itself so the halo can escape
+   (the inner `overflow: hidden` would clip a box-shadow set on a step). */
+.msg-working-progress-bar:has(.is-in_progress) {
+  animation: barGlow 1.8s ease-in-out infinite, barStripes 1s linear infinite;
+}
+.msg-working-progress-step {
+  height: 100%; min-width: 0;
+  background: #3a3a3c;
+  transition: background-color .3s ease, flex-grow .3s ease;
+}
+.msg-working-progress-step.is-done,
+.msg-working-progress-step.is-in_progress {
+  background: transparent;
+}
+@keyframes barStripes {
+  from { background-position: 0 0, 0 0; }
+  to   { background-position: 0 0, 11.31px 0; }
+}
+@keyframes barGlow {
+  0%, 100% { box-shadow: 0 0 4px rgba(52,211,153,.55), 0 0 8px rgba(52,211,153,.25); }
+  50%      { box-shadow: 0 0 8px rgba(52,211,153,.9),  0 0 16px rgba(52,211,153,.5), 0 0 24px rgba(52,211,153,.25); }
 }
 .msg-working-progress-label {
   font-size: 11px; color: #8e8e93; letter-spacing: .02em;

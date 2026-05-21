@@ -15,12 +15,56 @@ export function sendProgress(runtime) {
   const total = 1 + subagents;
   const done = (dispatched > 0 ? 1 : 0) + stats.agentsCompleted;
   const remainingTimeMs = estimateRemainingMs(runtime);
+  const steps = buildSteps(runtime);
+  const stepsKey = steps.map((s) => `${s.role}:${s.durationMs}:${s.status}`).join('|');
   // Skip the broadcast when nothing observable changed — back-to-back
   // dispatches in a single event would otherwise emit duplicate frames.
   const last = stats.lastProgressSent;
-  if (last && last.total === total && last.done === done && last.remainingTimeMs === remainingTimeMs) return;
-  stats.lastProgressSent = { total, done, remainingTimeMs };
-  broadcast(runtime, { type: 'progress', total, done, remainingTimeMs });
+  if (last && last.total === total && last.done === done && last.remainingTimeMs === remainingTimeMs && last.stepsKey === stepsKey) return;
+  stats.lastProgressSent = { total, done, remainingTimeMs, stepsKey };
+  broadcast(runtime, { type: 'progress', total, done, remainingTimeMs, steps });
+}
+
+// Per-step snapshot driving proportional widths on the client. The orchestrator
+// is always step 0 (matches the +1 in sendProgress's total). Dispatched roles
+// follow in order; the last (dispatched - completed) are marked in_progress
+// since completion order isn't tracked — the same heuristic estimateRemainingMs
+// uses. Predicted-not-yet-dispatched roles from FLOW_PLANS fill the tail as
+// pending so the bar shows the full estimated shape upfront.
+function buildSteps(runtime) {
+  const { dispatchedSubagentTypes: dispatchedTypes, agentsCompleted: completed, flowExpected: expected } = runtime.stats;
+  const dispatched = dispatchedTypes.length;
+  const steps = [];
+
+  steps.push({
+    role: 'orchestrator',
+    durationMs: durationFor('orchestrator'),
+    status: dispatched > 0 ? 'done' : 'in_progress',
+  });
+
+  const inFlightCount = Math.max(0, dispatched - completed);
+  const completedCount = dispatched - inFlightCount;
+  for (let i = 0; i < dispatched; i++) {
+    const role = dispatchedTypes[i];
+    steps.push({
+      role,
+      durationMs: durationFor(role),
+      status: i < completedCount ? 'done' : 'in_progress',
+    });
+  }
+
+  const predictedNotDispatched = Math.max(0, expected - dispatched);
+  if (predictedNotDispatched > 0) {
+    const plan = FLOW_PLANS[dispatchedTypes[0]];
+    const upcoming = plan
+      ? plan.slice(dispatched, dispatched + predictedNotDispatched)
+      : new Array(predictedNotDispatched).fill('unknown');
+    for (const role of upcoming) {
+      steps.push({ role, durationMs: durationFor(role), status: 'pending' });
+    }
+  }
+
+  return steps;
 }
 
 // Ordered role plan for SIMPLE/MEMORY flows. Length doubles as the expected-
