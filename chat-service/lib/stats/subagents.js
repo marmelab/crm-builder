@@ -95,10 +95,22 @@ export async function enrichSubagentChildren(phases, subagentsDir, toolCounts, a
     }
   }
 
-  const enrichedPhaseIds = new Set();
+  // Deduplicate per phase: a COMPLEX agent resumed via SendMessage produces
+  // multiple files (one per activation) that all share the same firstUuid
+  // (cumulative transcripts). Each file has a different toolUseId so they land
+  // in separate groupsById entries, but all map to the same phase. Picking the
+  // LARGEST file per phase ensures we use the latest cumulative snapshot, which
+  // contains every prior activation's events, without enriching twice.
+  const bestByPhaseId = new Map(); // phaseId → { f, phase }
   for (const f of groupsById.values()) {
     const phase = phaseByToolUseId.get(f.toolUseId);
     if (!phase) continue;
+    const cur = bestByPhaseId.get(phase.phaseId);
+    if (!cur || cur.f.size < f.size) bestByPhaseId.set(phase.phaseId, { f, phase });
+  }
+
+  const enrichedPhaseIds = new Set();
+  for (const { f, phase } of bestByPhaseId.values()) {
     // Skip local_agent phases whose tokens were already populated from the main
     // stream (stream-json architecture: output > 0 means parent_tool_use_id
     // data was found). Enriching again would double-count tokens and children.
