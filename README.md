@@ -1,6 +1,6 @@
 # Atomic CRM Builder
 
-Customizing a CRM can be tedious. We built Atomic CRM Builder to provide a containerized environment thatr helps you create your custom CRM based on [Atomic CRM](https://github.com/marmelab/atomic-crm).
+Customizing a CRM can be tedious. We built Atomic CRM Builder to provide a containerized environment that helps you create your custom CRM based on [Atomic CRM](https://github.com/marmelab/atomic-crm).
 
 The builder provides two modes:
 
