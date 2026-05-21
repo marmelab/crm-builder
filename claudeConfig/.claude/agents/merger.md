@@ -75,7 +75,7 @@ Not in any team. `BRANCH_NAME` and `WORKTREE_PATH` are in your spawn prompt. Run
    If status was `"in_progress"`, substitute. Verify with `Read`.
 
 6. **Report**
-   - COMPLEX: `SendMessage(team-lead, "merged TASK-XXX, commit=<short sha>")`
+   - COMPLEX: `SendMessage(to: "team-lead", message: "merged TASK-XXX, commit=<short sha>")`
    - SIMPLE: return text `DONE: commit=<short sha>. files=[...]`
 
 7. **On any failure of steps 1–4**:
@@ -96,21 +96,10 @@ Not in any team. `BRANCH_NAME` and `WORKTREE_PATH` are in your spawn prompt. Run
 | Trigger | SendMessage from `developer-TASK-XXX` | Spawn prompt contains `BRANCH_NAME` + `WORKTREE_PATH` |
 | Loop | Yes — until `shutdown_request` | No — single merge, return |
 | Step 5 (ticket status) | Yes (`TASK_ID` starts with `TASK-`) | Skip (no ticket JSON) |
-| Report | `SendMessage(team-lead, "merged TASK-XXX, commit=<sha>")` | Return `DONE: commit=<sha>. files=[...]` |
-| On failure | `SendMessage(team-lead, "TASK-XXX merge failed: ...")` then idle | Return `FAILED: <reason>` |
+| Report | `SendMessage(to: "team-lead", message: "merged TASK-XXX, commit=<sha>")` — plain text, no YAML | Return `DONE: commit=<sha>. files=[...]` |
+| On failure | `SendMessage(to: "team-lead", message: "TASK-XXX merge failed: ...")` — plain text | Return `FAILED: <reason>` |
 
 ---
-
-## Output (COMPLEX, per merge)
-
-```
-- ticket_id: TASK-XXX
-- merge_commit: <short SHA>
-- files_merged: [list from `git diff --name-only HEAD^..HEAD`]
-- worktree_removed: yes
-- branch_deleted: yes
-- status: merged
-```
 
 ## Output (SIMPLE)
 

@@ -1,10 +1,10 @@
-import { readFile, mkdtemp, rm, mkdir, writeFile, cp } from 'node:fs/promises';
-import { createReadStream, readFileSync } from 'node:fs';
+import { readFile, appendFile, stat, mkdtemp, rm, mkdir, writeFile, cp } from 'node:fs/promises';
+import { createReadStream, readFileSync, copyFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { extname, join } from 'node:path';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
-import { CWD, LOG_DIR, ALLOWED_STATES, MIME_TYPES, UUID_RE } from './config.js';
+import { CWD, LOG_DIR, ALLOWED_STATES, MIME_TYPES, UUID_RE, MODE_DEMO, MODE_FULL, VALID_MODES } from './config.js';
 import { listSessions, getSession, patchSession, deleteSession } from './session-store.js';
 import { runtimes } from './runtime.js';
 import { handleSessionCommitsRequest, handleSessionRollbackRequest } from './rollback.js';
@@ -115,8 +115,104 @@ async function handleDownloadZipRequest(req, res) {
 }
 
 
+async function checkSupabaseReady() {
+  try {
+    const ctrl = new AbortController();
+    const tid = setTimeout(() => ctrl.abort(), 800);
+    await fetch('http://localhost:54321', { signal: ctrl.signal });
+    clearTimeout(tid);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function handleGetMode(req, res) {
+  const mode = process.env.MODE || MODE_DEMO;
+  const supabaseReady = await checkSupabaseReady();
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ mode, supabaseReady }));
+}
+
+// Shared mode-switch helper: updates process.env.MODE, swaps App.tsx for the
+// matching variant (sync, so the iframe reload sees the right file), and
+// starts Supabase in the background when switching to full. Callers:
+//   - POST /api/mode (the chat-UI mode toggle button)
+//   - server.js, when a brand-new chat session opens while MODE=full
+//     (auto-reset to demo).
+// Returns true on success, false if the input mode is invalid.
+export function switchMode(mode) {
+  if (!VALID_MODES.has(mode)) return false;
+  process.env.MODE = mode;
+  const variant = mode === MODE_FULL ? 'App.supabase.tsx' : 'App.fakerest.tsx';
+  try { copyFileSync(`/app-variants/${variant}`, '/app/src/App.tsx'); }
+  catch (e) { console.warn('[mode-switch] App.tsx copy failed:', e.message); }
+  if (mode === MODE_FULL) {
+    const child = spawn('/usr/local/bin/switch-mode', [MODE_FULL], {
+      detached: true, stdio: 'ignore',
+      env: { ...process.env, APP_DIR: '/app' },
+    });
+    child.unref();
+  }
+  return true;
+}
+
+// Broadcast a mode change to every connected WebSocket client (all sessions).
+// Does NOT log to session — this is a global UI signal, not a session message.
+function broadcastModeChange(mode, supabaseReady = false) {
+  for (const runtime of runtimes.values()) {
+    for (const client of runtime.clients) {
+      sendToWs(client, { type: 'mode_changed', mode, supabaseReady });
+    }
+  }
+}
+
+async function handleSetMode(req, res) {
+  let body;
+  try { body = await readJsonBody(req); } catch {
+    res.writeHead(400); res.end('Bad request'); return;
+  }
+  const { mode } = body;
+  if (!switchMode(mode)) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'mode must be demo or full' }));
+    return;
+  }
+  // Notify other tabs that the mode changed. supabaseReady=false because
+  // switch-mode.sh may still be starting Supabase in the background; those
+  // clients will poll until it becomes ready.
+  broadcastModeChange(mode, false);
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ ok: true, mode }));
+}
+
+// Called by switch-mode.sh at the end of its run (after Supabase is confirmed
+// ready). Updates process.env.MODE and broadcasts with accurate supabaseReady
+// so clients reload the iframe exactly once, when everything is actually up.
+async function handleModeNotify(req, res) {
+  let body;
+  try { body = await readJsonBody(req); } catch {
+    res.writeHead(400); res.end('Bad request'); return;
+  }
+  const { mode } = body;
+  if (!VALID_MODES.has(mode)) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: `mode must be ${MODE_DEMO} or ${MODE_FULL}` }));
+    return;
+  }
+  process.env.MODE = mode;
+  const supabaseReady = mode === MODE_FULL ? await checkSupabaseReady() : false;
+  broadcastModeChange(mode, supabaseReady);
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ ok: true }));
+}
+
 export function createRequestHandler({ publicDir }) {
   return async (req, res) => {
+    if (req.url === '/api/mode' && req.method === 'GET') return handleGetMode(req, res);
+    if (req.url === '/api/mode' && req.method === 'POST') return handleSetMode(req, res);
+    if (req.url === '/api/mode/notify' && req.method === 'POST') return handleModeNotify(req, res);
+
     if (req.url === '/api/download/zip' && req.method === 'GET') {
       return handleDownloadZipRequest(req, res);
     }

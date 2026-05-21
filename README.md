@@ -1,8 +1,8 @@
-# Atomic CRM — Isolated dev environment with Claude Code
+# Atomic CRM Builder
 
-Single Docker image, two development modes depending on your needs.
+Customizing a CRM can be tedious. We built Atomic CRM Builder to provide a containerized environment that helps you create your custom CRM based on [Atomic CRM](https://github.com/marmelab/atomic-crm).
 
-## The two modes
+The builder provides two modes:
 
 ```
 MODE=demo (default)                 MODE=full
@@ -11,34 +11,16 @@ FakeRest in the browser             Local Supabase (Postgres)
 Starts in ~5 seconds                Starts in ~2-3 min (first time)
 No extra prerequisites              Requires host Docker socket
 Data resets on reload               Data is persisted
-Great for UI development            Required for auth, storage, RLS
 ```
 
-## Recommended workflow
+Note: The user can toggle mode with a single click from the User Interface.
 
-```
-1. Start in demo mode
-      ↓
-2. Claude develops features via prompts
-   (components, fields, views...)
-      ↓
-3. Visual validation in the browser
-      ↓
-4. switch-mode full  (in the Claude terminal)
-      ↓
-5. Claude generates and applies the Supabase migration
-   (npx supabase db push)
-      ↓
-6. Verify on real data
-```
-
----
 
 ## Quick start
 
 ### Prerequisites
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed
-- Anthropic API key: [console.anthropic.com](https://console.anthropic.com)
+- Anthropic API key: [console.anthropic.com](https://console.anthropic.com) or a Claude Code subscription
 
 ### 1. Build (once, ~5 min)
 ```bash
@@ -49,7 +31,7 @@ docker build -t atomic-crm-dev .
 ```bash
 docker run -it --rm \
   -e ANTHROPIC_API_KEY=sk-ant-YOUR_KEY \
-  -p 5173:5173 -p 7681:7681 \
+  -p 5173:5173 -p 8080:8080 \
   atomic-crm-dev
 ```
 
@@ -65,41 +47,61 @@ docker run -it --rm \
 
 ### With docker compose (easier)
 ```bash
-cp .env.example .env    # then fill in ANTHROPIC_API_KEY
+make up        # demo mode
+make up-full   # full mode
 
-docker compose --profile demo up    # demo mode
-docker compose --profile full up    # full mode
+# First-time login:
+# Run this from another shell — the stack pauses on first boot waiting for
+# credentials, and resumes automatically once login completes.
+make claude         # OAuth flow on first run — copy URL to browser, paste token back
 ```
 
 ### Persist code changes across restarts
 ```bash
 # Stop and restart — keeps your code changes
-docker compose --profile full down
-docker compose --profile full up
+make restart # or make restart-full
 
 # Full reset — deletes volumes (loses code changes)
-docker compose --profile full down -v
-docker compose --profile full up
+make wipe up
+```
+
+---
+
+## Recommended workflow
+
+```
+1. Start in demo mode
+      ↓
+2. Claude develops features via prompts
+   (components, fields, views...)
+      ↓
+3. Visual validation in the browser
+      ↓
+4. Claude generates and applies the Database migrations
+      ↓
+5. Verify on real data
 ```
 
 ---
 
 ## Usage
 
-Once started, open two tabs:
+Once started, open these URLs:
 
 | URL | Content |
 |---|---|
-| `http://localhost:7681` | Claude Code terminal |
 | `http://localhost:5173` | The CRM |
+| `http://localhost:8080` | Chat assistant (the main UI for asking Claude to ship changes) |
 | `http://localhost:54323` | Supabase Dashboard (full mode only) |
 
-In the terminal:
+For a direct, interactive Claude session, run from your host:
 ```bash
-# Start Claude
-claude --dangerously-skip-permissions
+make claude         # opens `claude --dangerously-skip-permissions` in the container
+                    # (also triggers OAuth on first run if ANTHROPIC_API_KEY is unset)
+```
 
-# Switch between modes without restarting the container
+Inside that session you can also switch modes without restarting the container:
+```bash
 switch-mode demo    # → FakeRest
 switch-mode full    # → Supabase
 ```
@@ -111,37 +113,51 @@ switch-mode full    # → Supabase
 ### Phase 1 — Fast dev in demo mode
 
 ```
-You (in the Claude terminal):
+You (in the chat at localhost:8080):
   "Add a 'priority' field (low/medium/high) on contacts
    with a coloured badge in the list"
 
 Claude:
-  → Edits src/contacts/ContactList.tsx
-  → Edits src/contacts/ContactEdit.tsx
-  → Adds the type in src/types.ts
-  → Vite automatically reloads the browser
+  → Spawns a dev team in an isolated git worktree
+  → Edits ContactList.tsx, ContactEdit.tsx, types.ts
+  → Reviews, validates, merges to main
+  → Vite hot-reloads the browser
 ```
 
 Validate visually on `localhost:5173`.
 
-### Phase 2 — Migration to Supabase
+### Phase 2 — Promote to your real database
 
-```bash
-switch-mode full
-```
+When a feature changes the data shape, Claude writes the SQL into
+`supabase/migrations-pending/` (invisible to Supabase CLI) and, once the
+dev wave is merged, asks for permission in plain language:
 
 ```
-You:
-  "Now create the Supabase migration for the priority field
-   and apply it"
+Claude:
+  "Some of these changes affect how your data is stored.
+   Want me to apply them to your real database now?"
+
+You: "yes"
 
 Claude:
-  → Creates supabase/migrations/xxx_add_priority_to_contacts.sql
-  → Content: ALTER TABLE contacts ADD COLUMN priority text
-             CHECK (priority IN ('low', 'medium', 'high'));
-  → Runs: npx supabase db push
-  → Verifies the CRM works with real data
+  → Promotes the file from supabase/migrations-pending/
+    to supabase/migrations/ (one commit on main)
+  → Starts Supabase if needed and applies the migration
+
+(if you are still in demo mode)
+Claude:
+  "Your real database is up to date. Want to switch the app
+   over to your real data now?"
+
+You: "yes"
+
+Claude:
+  → Switches the data provider to Supabase — Vite hot-reloads
 ```
+
+You can also toggle modes yourself at any time: one click on the
+mode badge in the chat header, or `switch-mode demo` / `switch-mode full`
+from `make claude`.
 
 ---
 
@@ -152,8 +168,8 @@ Claude:
 | UI components, forms | ✅ | ✅ |
 | New fields, views | ✅ | ✅ |
 | Filters, sorting, pagination | ✅ | ✅ |
+| Response speed | ✅ (instant, in-memory) | ⚠️ (network round-trip, migrations) |
 | Data persistence | ❌ (reload = reset) | ✅ |
 | Real authentication | ❌ | ✅ |
 | File attachments | ❌ | ✅ |
 | Security policies (RLS) | ❌ | ✅ |
-| E2E tests | ⚠️ (partial) | ✅ |

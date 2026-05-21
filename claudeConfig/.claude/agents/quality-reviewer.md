@@ -124,6 +124,15 @@ Any `[FAIL]` → BLOCKED. Omitting a criterion from the list is itself a bug.
 - External HTTP calls have timeout
 - No internal error details to clients
 
+### A.6b Supabase view migrations (BLOCKING)
+
+When the diff includes a migration that adds or removes a column:
+
+- Check `supabase/schemas/03_views.sql` for any view selecting from that table. Missing update → BLOCKING (PostgREST queries the view, not the table — column invisible to the app).
+- New columns must be at the **absolute end** of the SELECT list — after all existing columns, including computed AS aliases. PostgreSQL rejects any ordinal shift (error 42P16).
+- `03_views.sql` must stay in sync with the migration (same column order, same aliases).
+- `DROP VIEW … CREATE VIEW` instead of `CREATE OR REPLACE VIEW` → verify dependent objects (RLS policies, PostgREST config) are also recreated.
+
 ### A.7 Tests (BLOCKING)
 - Complex business logic → unit test required
 - New UI / filter / form / interaction → e2e test in `e2e/` required
