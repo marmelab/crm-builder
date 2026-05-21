@@ -4,6 +4,8 @@ Building a custom CRM from scratch demands both domain knowledge and technical e
 
 It uses [Atomic CRM](https://github.com/marmelab/atomic-crm) as a starting template and orchestrates a team of AI agents specialized in CRM development, powered by Claude Code. Everything runs in a containerized environment to keep execution secure and isolated. The resulting CRM is built on Supabase, React, and Shadcn.
 
+<img width="1557" height="932" alt="HiringCRM" src="https://github.com/user-attachments/assets/76b57f2c-026f-43de-b312-2a434707a0ad" />
+
 ## Quick start
 
 ### Prerequisites
