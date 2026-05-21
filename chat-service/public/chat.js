@@ -190,8 +190,10 @@ function remainingTimeText(remaining) {
 
 // Lean tick — only the remaining-time <span> can change between progress
 // events, so avoid querying/rewriting the bar, fill and label every 5s.
+// The `:not(.msg-assistant)` qualifier targets the spinner bubble, not the
+// demoted prior-turn narrations that also carry `.msg-working`.
 function tickRemainingTime() {
-  const bubble = messages.querySelector('.msg-working');
+  const bubble = messages.querySelector('.msg-working:not(.msg-assistant)');
   if (!bubble) { stopRemainingTimeTicker(); return; }
   const remainingTimeEl = bubble._remainingTimeEl;
   if (!remainingTimeEl) return;
@@ -200,7 +202,7 @@ function tickRemainingTime() {
 }
 
 function updateWorkingProgress() {
-  const bubble = messages.querySelector('.msg-working');
+  const bubble = messages.querySelector('.msg-working:not(.msg-assistant)');
   if (!bubble) return;
   let wrap = bubble.querySelector('.msg-working-progress');
   let hint = bubble.querySelector('.msg-working-hint');
@@ -256,7 +258,7 @@ function renderWorkingUi() {
   stopBtn.hidden = !working;
   stopBtn.disabled = false;
   send.hidden = working;
-  const existing = messages.querySelector('.msg-working');
+  const existing = messages.querySelector('.msg-working:not(.msg-assistant)');
   if (working && !existing) {
     const el = document.createElement('div');
     el.className = 'msg msg-working';
