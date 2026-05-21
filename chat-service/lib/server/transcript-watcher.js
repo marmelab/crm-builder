@@ -60,15 +60,19 @@ export class TranscriptWatcher extends EventEmitter {
 
     // Latch onto a new JSONL only if it belongs to an interactive session.
     // Sessions started with --print (e.g. title generation via regenerateTitleWithHaiku)
-    // begin with queue-operation entries. Interactive sessions (--dangerously-skip-permissions)
-    // begin with a permission-mode entry. Checking this prevents the watcher from
-    // accidentally tracking the title-generation spawn instead of the orchestrator session.
+    // begin with queue-operation entries. Interactive sessions begin with a
+    // permission-mode entry — possibly preceded by an agent-setting entry when
+    // --agent is used. Scan the first 3 non-empty lines for permission-mode so
+    // both cases are detected, regardless of how many header entries Claude prepends.
     const isInteractiveSession = async (filename) => {
       try {
         const content = await readFile(join(this.#projectDir, filename), 'utf8');
-        const firstLine = content.split('\n').find(l => l.trim());
-        if (!firstLine) return false; // empty file, not ready yet
-        return JSON.parse(firstLine).type === 'permission-mode';
+        const lines = content.split('\n').filter(l => l.trim());
+        if (!lines.length) return false; // empty file, not ready yet
+        for (const line of lines.slice(0, 3)) {
+          try { if (JSON.parse(line).type === 'permission-mode') return true; } catch { break; }
+        }
+        return false;
       } catch { return false; }
     };
 
@@ -109,6 +113,13 @@ export class TranscriptWatcher extends EventEmitter {
     });
     // Initial poll in case lines were written before the watcher was attached.
     this.#poll().catch(() => {});
+  }
+
+  // Force-read any new lines immediately (bypasses the debounce timer).
+  // Call this before emitting a result event to guarantee assistant events
+  // are delivered first, without relying on inotify timing.
+  async flush() {
+    await this.#poll();
   }
 
   async #poll() {
