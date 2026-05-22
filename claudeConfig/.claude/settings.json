@@ -129,6 +129,11 @@
                         "command": "/home/developer/.claude/hooks/cleanup-worktree.sh",
                         "timeout": 30,
                         "statusMessage": "Cleaning up worktree..."
+                    },
+                    {
+                        "type": "command",
+                        "command": "/home/developer/.claude/hooks/record-merger-commit.sh",
+                        "timeout": 10
                     }
                 ]
             },
