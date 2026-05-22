@@ -1,0 +1,26 @@
+claudeConfig/.claude/agents/simple-developer.md
+  s_14c0cd6e14ae19::t_544d261d1b4707 3
+  s_14c0cd6e14ae19::t_3ec4d0e488fcc3 24
+  s_14c0cd6e14ae19::t_eb1579d68b4847 136,143-144,146-148,151,155,157,159,162,164-171,173,175,177,179-185,190,192-193
+claudeConfig/.claude/agents/chat-orchestrator.md
+  s_14c0cd6e14ae19::t_96f031bf6429c3 47
+  s_14c0cd6e14ae19::t_a2d90e01e40af4 257-262,265-266,274-283,285-288
+  s_14c0cd6e14ae19::t_ef1a5e7fa45a6e 332-340,344
+  s_14c0cd6e14ae19::t_489a9953c0f01c 96-98
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.11",
+  "base_commit_sha": "d14bf7e1f526ec504e72501efc46922ff03ee8b3",
+  "prompts": {},
+  "sessions": {
+    "s_14c0cd6e14ae19": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "696d86e9-1892-48ea-8e69-45d8b5037be8",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Jerome <jerome@marmelab.com>"
+    }
+  }
+}
