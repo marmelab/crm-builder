@@ -470,16 +470,19 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
 }
 .msg-working-progress-step {
   height: 100%; min-width: 0;
-  background: #3a3a3c;
-  transition: background-color .3s ease, flex-grow .3s ease;
+  position: relative;
+  overflow: hidden;
+  transition: flex-grow .3s ease;
 }
-/* Only `done` segments reveal the blue stripes underneath. `in_progress`
-   keeps the default gray so a fully in-progress bar (the orchestrator alone,
-   before the first dispatch) reads as 0% instead of 100%. The bar's stripe
-   animation still triggers on `:has(.is-in_progress)` — motion on the done
-   portion is the cue that work is ongoing. */
-.msg-working-progress-step.is-done {
-  background: transparent;
+.msg-working-progress-step-mask {
+  position: absolute;
+  inset: 0;
+  background: #3a3a3c;
+  transform-origin: right;
+  transform: scaleX(1);
+}
+.msg-working-progress-step.is-done .msg-working-progress-step-mask {
+  transform: scaleX(0);
 }
 @keyframes barStripes {
   from { background-position: 0 0; }
