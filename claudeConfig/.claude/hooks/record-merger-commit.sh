@@ -18,7 +18,7 @@ STDIN=$(cat)
 TRANSCRIPT_PATH=$(node -e 'try{const i=JSON.parse(process.argv[1]||"{}");process.stdout.write(i.transcript_path||"")}catch{process.stdout.write("")}' "$STDIN" 2>/dev/null || echo "")
 
 if [ -z "$TRANSCRIPT_PATH" ] || [ ! -f "$TRANSCRIPT_PATH" ]; then
-  echo "[$(date -Iseconds)] record-merger-commit SKIP no_transcript" >> "$LOG" 2>/dev/null || true
+  echo "[$(date -Iseconds)] record-merger-commit SKIP no_transcript path=${TRANSCRIPT_PATH:-<empty>}" >> "$LOG" 2>/dev/null || true
   exit 0
 fi
 
@@ -27,7 +27,10 @@ fi
 # SendMessage payload — both end up as text in the JSONL.
 SHA=$(grep -oE 'commit=[a-f0-9]{7,40}' "$TRANSCRIPT_PATH" | tail -1 | sed 's/^commit=//')
 if [ -z "$SHA" ]; then
-  echo "[$(date -Iseconds)] record-merger-commit SKIP no_commit_in_transcript" >> "$LOG" 2>/dev/null || true
+  TRANSCRIPT_LINES=$(wc -l < "$TRANSCRIPT_PATH" 2>/dev/null || echo "?")
+  TRANSCRIPT_BYTES=$(wc -c < "$TRANSCRIPT_PATH" 2>/dev/null || echo "?")
+  TAIL=$(tail -c 500 "$TRANSCRIPT_PATH" 2>/dev/null | tr '\n' '|' | head -c 500)
+  echo "[$(date -Iseconds)] record-merger-commit SKIP no_commit_in_transcript path=$TRANSCRIPT_PATH lines=$TRANSCRIPT_LINES bytes=$TRANSCRIPT_BYTES tail=$TAIL" >> "$LOG" 2>/dev/null || true
   exit 0
 fi
 
