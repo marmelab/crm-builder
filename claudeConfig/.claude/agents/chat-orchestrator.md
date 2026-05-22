@@ -44,7 +44,7 @@ Check in this order — first match wins:
 
 | Category | When | Path |
 |---|---|---|
-| **ROLLBACK** | The user turn contains `<intent>rollback-conflict</intent>` — injected by the chat-service when its automatic `git revert` hit a merge conflict and needs a team to finish. Never typed by a human; never appears mid-conversation otherwise. | STATE R-DISPATCH → STATE R-WAIT → STATE R-TEARDOWN → STATE R-DONE |
+| **ROLLBACK-CONFLICT** | The user turn starts with `<intent>rollback-conflict</intent>` — injected by the chat-service when its automatic `git revert` on `/app`'s base branch hit a merge conflict it couldn't resolve. Never typed by a human. Carries `COMMITS_TO_REVERT` (the failed commit + everything still to revert). | STATE S-DEV (rollback variant) → STATE S-MERGE → STATE S-DONE (rollback variant) |
 | **SETUP** | The first user turn contains `<intent>setup</intent>` (the chat UI's "Define your business" button), OR a clear natural-language signal in any language meaning "set up my CRM" / "start from scratch" / "define my business". | STATE SETUP-INTERVIEW → STATE SETUP-PLAN → then STATE B → C → D → (POST-DEV) |
 | **MODE-SWITCH** | User asks to switch data mode: "use real data", "connect my database", "switch to demo", "use sample data", etc. — no code change, system operation only. | STATE MS-RUN → STATE MS-DONE |
 | **MEMORY** | user asks to remember a way of doing something or document a recurring friction (*"remember this"*, *"document this behavior"*, *"turn this into a rule"*) — no code change | STATE M-DOC → STATE M-DONE (documentator only, no team) |
@@ -93,13 +93,13 @@ MODE-SWITCH: STATE MS-RUN (turn N)   →  STATE MS-DONE (turn N+1)
 MEMORY:      STATE M-DOC (turn N)    →  STATE M-DONE (turn N+1)
 SIMPLE:      STATE S-DEV (turn N)    →  STATE S-MERGE (turn N+1)
                                       →  STATE S-DONE (turn N+2)   [no POST-DEV]
+                                      (ROLLBACK-CONFLICT uses the same S-* path
+                                      with a rollback-specific prompt — see
+                                      STATE S-DEV below.)
 COMPLEX:     STATE A (turn N)        →  STATE B (turn N+1)
                                       →  STATE C (turns N+2..N+M)
                                       →  STATE D (turn N+M+1)
                                       →  (POST-DEV check — see below)
-ROLLBACK:    STATE R-DISPATCH (turn N) →  STATE R-WAIT (turns N+1..N+K)
-                                        →  STATE R-TEARDOWN (turn N+K+1)
-                                        →  STATE R-DONE
 
 POST-DEV (when one or more merged tickets in this session flagged
           requires_supabase_migration: true and have not been deployed yet):
@@ -254,9 +254,16 @@ Reply to user in plain language, in their language:
 
 ### STATE S-DEV — SIMPLE dispatch simple-developer (ONE assistant message)
 
-For SIMPLE only. No team, no planner, no skill on the orchestrator's side.
+For SIMPLE and ROLLBACK-CONFLICT. No team, no planner, no skill on the orchestrator's side.
+
+The user turn determines which prompt template to use:
+
+- **Regular SIMPLE** (cosmetic change): use the CHANGE_REQUEST template below.
+- **ROLLBACK-CONFLICT** (user turn starts with `<intent>rollback-conflict</intent>`): use the ROLLBACK_CONFLICT template below. Copy `FAILED_COMMIT` and the `COMMITS_TO_REVERT` block verbatim from the user turn.
 
 1. Dispatch ONE `simple-developer` agent (no `team_name`):
+
+   **SIMPLE template**:
    ```
    Agent({
      subagent_type: "simple-developer",
@@ -264,8 +271,21 @@ For SIMPLE only. No team, no planner, no skill on the orchestrator's side.
      prompt: "ROLE: simple-developer\nCHANGE_REQUEST: <user's request, verbatim>\nWORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/simple\nBRANCH_NAME: simple/<SESSION_SHORT_ID>"
    })
    ```
+
+   **ROLLBACK_CONFLICT template**:
+   ```
+   Agent({
+     subagent_type: "simple-developer",
+     description: "Resolve rollback conflict",
+     prompt: "ROLE: simple-developer\nMODE: ROLLBACK_CONFLICT\nWORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/simple\nBRANCH_NAME: simple/<SESSION_SHORT_ID>\nFAILED_COMMIT: <copied from user turn>\nCOMMITS_TO_REVERT:\n<the block copied verbatim from the user turn>"
+   })
+   ```
+
    The worktree and branch are fixed per session — the `setup-worktree` hook creates them automatically before the agent starts.
-3. One text line: *"Working on it..."*
+
+2. One text line in the user's language:
+   - SIMPLE: *"Working on it..."*
+   - ROLLBACK_CONFLICT: *"Finishing the rollback..."*
 
 **End this turn.** The simple-developer runs setup + edit + commit, then stops. SubagentStop hooks (typecheck, prettier, unit tests, e2e — wired with matcher `simple-developer`) run automatically; failures come back as stderr that the agent fixes on its own internal turns. When the agent's stop is finally accepted, control returns to you.
 
@@ -309,12 +329,19 @@ Output: "DONE: commit=<short sha>. files=[<paths>]" OR "FAILED: <reason>"
 
 The merger's final response (or dev's failure) is in your context.
 
-Reply to user in plain language:
-- `DONE` → e.g. *"Label updated. Take a look in the demo."*
-- `FAILED` (from dev or merger) → *"Something didn't work. Want me to try a different approach?"*
+Reply to user in plain language. Vary the wording based on whether the
+original user turn was a regular SIMPLE request or `<intent>rollback-conflict</intent>`:
+
+- Regular SIMPLE
+  - `DONE` → e.g. *"Label updated. Take a look in the demo."*
+  - `FAILED` (from dev or merger) → *"Something didn't work. Want me to try a different approach?"*
+- ROLLBACK_CONFLICT
+  - `DONE` → *"All changes from this session have been undone."*
+  - `FAILED` → *"We couldn't fully undo your changes. Some of them may still be in place — please ask your administrator for help."*
 
 SIMPLE is single-file, no-logic, no-tests by definition — it cannot touch
 the database schema. The POST-DEV deploy check is skipped for this flow.
+ROLLBACK_CONFLICT also skips POST-DEV.
 
 **End.**
 
