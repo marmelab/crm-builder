@@ -19,12 +19,15 @@ export async function processMessage(runtime, prompt) {
   // Reset per-turn agent step counters so the progress bar reflects only
   // work initiated by *this* prompt. Send the initial 0/1 (orchestrator
   // alone, not yet done) immediately so the bar mounts with the bubble.
-  runtime.stats.agentsCompleted = 0;
-  runtime.stats.flowExpected = 0;
-  runtime.stats.dispatchedSubagentTypes = [];
-  runtime.stats.dispatchedSubagentStartedAt = [];
-  runtime.stats.turnStartedAt = Date.now();
-  runtime.stats.lastProgressSent = null;
+  runtime.stats = {
+    ...runtime.stats,
+    agentsCompleted: 0,
+    flowExpected: 0,
+    dispatchedSubagentTypes: [],
+    dispatchedSubagentStartedAt: [],
+    turnStartedAt: Date.now(),
+    lastProgressSent: null,
+  };
   sendProgress(runtime);
 
   // Claude (re)starts → session is active again.

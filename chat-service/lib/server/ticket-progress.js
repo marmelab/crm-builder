@@ -44,44 +44,39 @@ export function sendProgress(runtime, targetWs = null) {
 function buildSteps(runtime) {
   const { dispatchedSubagentTypes: dispatchedTypes, dispatchedSubagentStartedAt: startedAts, agentsCompleted: completed, flowExpected: expected, turnStartedAt } = runtime.stats;
   const dispatched = dispatchedTypes.length;
-  const steps = [];
+  const completedCount = Math.min(dispatched, completed);
+  const predictedNotDispatched = Math.max(0, expected - dispatched);
+  const plan = FLOW_PLANS[dispatchedTypes[0]];
+  const upcomingRoles = plan
+    ? plan.slice(dispatched, dispatched + predictedNotDispatched)
+    : new Array(predictedNotDispatched).fill('unknown');
 
   // `startedAt` (epoch ms) is set on in_progress steps so the client can
   // animate the fill from the right offset — and resume from the correct
   // position after a reconnect. Omitted for `done` (already at 100% of its
   // box) and `pending` (still at 0%).
-  steps.push({
-    role: 'orchestrator',
-    durationMs: durationFor('orchestrator'),
-    status: dispatched > 0 ? 'done' : 'in_progress',
-    startedAt: dispatched > 0 ? undefined : turnStartedAt,
-  });
-
-  const inFlightCount = Math.max(0, dispatched - completed);
-  const completedCount = dispatched - inFlightCount;
-  for (let i = 0; i < dispatched; i++) {
-    const role = dispatchedTypes[i];
-    const inProgress = i >= completedCount;
-    steps.push({
+  return [
+    {
+      role: 'orchestrator',
+      durationMs: durationFor('orchestrator'),
+      status: dispatched > 0 ? 'done' : 'in_progress',
+      startedAt: dispatched > 0 ? undefined : turnStartedAt,
+    },
+    ...dispatchedTypes.map((role, i) => {
+      const inProgress = i >= completedCount;
+      return {
+        role,
+        durationMs: durationFor(role),
+        status: inProgress ? 'in_progress' : 'done',
+        startedAt: inProgress ? startedAts[i] : undefined,
+      };
+    }),
+    ...upcomingRoles.map((role) => ({
       role,
       durationMs: durationFor(role),
-      status: inProgress ? 'in_progress' : 'done',
-      startedAt: inProgress ? startedAts[i] : undefined,
-    });
-  }
-
-  const predictedNotDispatched = Math.max(0, expected - dispatched);
-  if (predictedNotDispatched > 0) {
-    const plan = FLOW_PLANS[dispatchedTypes[0]];
-    const upcoming = plan
-      ? plan.slice(dispatched, dispatched + predictedNotDispatched)
-      : new Array(predictedNotDispatched).fill('unknown');
-    for (const role of upcoming) {
-      steps.push({ role, durationMs: durationFor(role), status: 'pending' });
-    }
-  }
-
-  return steps;
+      status: 'pending',
+    })),
+  ];
 }
 
 // Ordered role plan for SIMPLE/MEMORY flows. Length doubles as the expected-
