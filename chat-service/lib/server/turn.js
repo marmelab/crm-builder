@@ -68,7 +68,16 @@ export async function processMessage(runtime, prompt) {
 
     if (!runtime.ptySession || runtime.ptySession.closed) {
       runtime.ptySession = new PtySession(runtime.claudeSessionId, sessionDir);
-      runtime.ptySession.once('exit', () => { runtime.ptySession = null; });
+      runtime.ptySession.once('exit', () => {
+        runtime.ptySession = null;
+        // PTY is gone — release the runtime if no client is connected.
+        // (The WS-close handler skips release while the PTY is alive; this
+        // path covers the mirror case where the PTY exits while idle.)
+        if (runtime.clients.size === 0 && !runtime.busy) {
+          runtime.session?.close();
+          runtimes.delete(runtime.session.id);
+        }
+      });
     }
 
     // Attach a long-lived background listener once per PtySession lifetime.
@@ -290,9 +299,13 @@ export async function processMessage(runtime, prompt) {
       const asksQuestion = !wasStopped && !turnErrored && endsWithQuestion(lastAssistantText);
       const nextState = wasStopped ? 'cancelled' : asksQuestion ? 'waiting' : 'completed';
       await transitionState(runtime, nextState);
-      // If no client is currently viewing this session, release the runtime
-      // now that the turn is done. A later reconnect will re-open it.
-      if (runtime.clients.size === 0) {
+      // Release the runtime only when both conditions hold: no connected
+      // clients AND the PTY is gone (or was never started). While the PTY
+      // lives, background orchestrator turns (wave transitions, merge
+      // confirmations) may still write to the session log — closing the
+      // session here would silence them. The PTY exit handler covers the
+      // mirror case (PTY exits while no clients are connected).
+      if (runtime.clients.size === 0 && (!runtime.ptySession || runtime.ptySession.closed)) {
         runtime.session?.close();
         runtimes.delete(runtime.session.id);
       }

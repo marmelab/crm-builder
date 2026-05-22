@@ -163,17 +163,15 @@ wss.on('connection', async (ws, req) => {
     wsToRuntime.delete(ws);
     if (!r) return;
     r.clients.delete(ws);
-    // Only tear down when the session is fully idle. If a turn is still
-    // running, processMessage's finally block will release the runtime once
-    // it finishes (if no clients are left by then).
-    if (r.clients.size === 0 && !r.busy) {
-      const id = r.session.id;
-      const empty = (r.session.meta.messageCount || 0) === 0;
-      // Await the log stream flush before rm so we don't race writes against
-      // deletion (cf. the same pattern in http-routes' DELETE handler).
-      await r.session?.close();
-      runtimes.delete(id);
-      if (empty) await deleteSession(id);
+    // Only tear down when the session is fully idle AND the PTY is gone.
+    // If a turn is still running, processMessage's finally block releases
+    // the runtime once it finishes. If the PTY is alive but no turn is
+    // active, background orchestrator turns (e.g. wave-to-wave transitions,
+    // merge confirmations) may still fire — keeping the runtime alive lets
+    // them write to the session log so the user sees them on reconnect.
+    if (r.clients.size === 0 && !r.busy && (!r.ptySession || r.ptySession.closed)) {
+      r.session?.close();
+      runtimes.delete(r.session.id);
     }
   });
 });
