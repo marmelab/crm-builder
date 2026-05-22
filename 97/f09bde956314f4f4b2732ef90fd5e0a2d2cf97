@@ -1,0 +1,25 @@
+chat-service/lib/server/http-routes.js
+  s_14c0cd6e14ae19::t_a12b0d2d46b27c 10
+  s_14c0cd6e14ae19::t_80947eb7ff073b 225-228
+chat-service/lib/server/session-store.js
+  s_14c0cd6e14ae19::t_01a27fa9da090d 289-306
+claudeConfig/.claude/agents/merger.md
+  s_14c0cd6e14ae19::t_a1d6b3b5220161 70-79
+  s_14c0cd6e14ae19::t_48fa09a3f542db 90
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.11",
+  "base_commit_sha": "97f09bde956314f4f4b2732ef90fd5e0a2d2cf97",
+  "prompts": {},
+  "sessions": {
+    "s_14c0cd6e14ae19": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "696d86e9-1892-48ea-8e69-45d8b5037be8",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Jerome <jerome@marmelab.com>"
+    }
+  }
+}
