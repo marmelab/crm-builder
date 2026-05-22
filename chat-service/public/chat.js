@@ -30,6 +30,7 @@ const statsCloseBtn = document.getElementById('chat-stats-close');
 let working  = false;
 let progressTotal = 0;
 let progressDone  = 0;
+let progressSteps = [];
 // Remaining time is computed server-side from fixed per-role durations and
 // shipped in the `progress` payload. We anchor the snapshot to its reception
 // time so the displayed value can tick down smoothly between events.
@@ -145,6 +146,7 @@ function resetChatUi() {
   stats.textContent = '';
   progressTotal = 0;
   progressDone = 0;
+  progressSteps = [];
   remainingTimeMsAtReceipt = 0;
   remainingTimeReceivedAt = 0;
   stopRemainingTimeTicker();
@@ -176,11 +178,10 @@ function stopRemainingTimeTicker() {
 }
 
 // Remaining-time text computed from the server snapshot, decremented by
-// wall-clock so the countdown stays smooth between progress events. Clamps
-// to 0 — if work outlives the estimate, show a soft "wrapping up" instead
-// of negative time.
-function remainingTimeText(remaining) {
-  if (remaining <= 0) return '';
+// wall-clock so the countdown stays smooth between progress events. If the
+// snapshot hasn't arrived yet (right after sending a message), we still want
+// to render *something* under the bar, so default to "Estimating…".
+function remainingTimeText() {
   if (remainingTimeMsAtReceipt > 0 && remainingTimeReceivedAt > 0) {
     const live = remainingTimeMsAtReceipt - (Date.now() - remainingTimeReceivedAt);
     return live > 0 ? formatRemaining(live) || '' : 'Wrapping up…';
@@ -197,61 +198,108 @@ function tickRemainingTime() {
   if (!bubble) { stopRemainingTimeTicker(); return; }
   const remainingTimeEl = bubble._remainingTimeEl;
   if (!remainingTimeEl) return;
-  const safeDone = Math.max(0, Math.min(progressDone, progressTotal));
-  remainingTimeEl.textContent = remainingTimeText(progressTotal - safeDone);
+  remainingTimeEl.textContent = remainingTimeText();
+}
+
+// Identifies the latest assistant narration of the current turn (walking back
+// to the previous user message). Marks it with `.msg-mirrored` so CSS can hide
+// the standalone bubble — its content is mirrored inside the working bubble.
+function refreshMirroredNarration() {
+  const all = messages.querySelectorAll('.msg');
+  let latest = null;
+  for (let i = all.length - 1; i >= 0; i--) {
+    const m = all[i];
+    if (m.classList.contains('msg-user')) break;
+    if (m.classList.contains('msg-rollback')) continue;
+    if (m.classList.contains('msg-working') && !m.classList.contains('msg-assistant')) continue;
+    if (m.classList.contains('msg-assistant')) { latest = m; break; }
+  }
+  messages.querySelectorAll('.msg-mirrored').forEach((n) => {
+    if (n !== latest) n.classList.remove('msg-mirrored');
+  });
+  if (latest) latest.classList.add('msg-mirrored');
+  return latest;
+}
+
+// Builds the inner HTML for the mirrored slot from the source narration,
+// stripping the `.msg-time` span (it would otherwise leak into the bubble).
+function narrationHtmlForMirror(source) {
+  const temp = document.createElement('div');
+  temp.innerHTML = source.innerHTML;
+  temp.querySelectorAll('.msg-time').forEach((n) => n.remove());
+  return temp.innerHTML;
 }
 
 function updateWorkingProgress() {
   const bubble = messages.querySelector('.msg-working:not(.msg-assistant)');
   if (!bubble) return;
   let wrap = bubble.querySelector('.msg-working-progress');
-  let hint = bubble.querySelector('.msg-working-hint');
-  // While only the orchestrator is running (total <= 1, no subagent
-  // dispatched yet), show a soft hint instead of the bar — Claude is
-  // sizing up the work.
-  if (progressTotal <= 1) {
-    if (wrap) { wrap.remove(); bubble._remainingTimeEl = null; bubble._maxPct = 0; }
-    if (!hint) {
-      hint = document.createElement('span');
-      hint.className = 'msg-working-hint';
-      hint.textContent = 'Estimating the duration of the work…';
-      bubble.appendChild(hint);
-    }
-    return;
-  }
-  if (hint) hint.remove();
-  const safeDone = Math.max(0, Math.min(progressDone, progressTotal));
-  const remaining = progressTotal - safeDone;
-  const pct = Math.round((safeDone / progressTotal) * 100);
+  // Always render the bar — even before any step info is known. With no info
+  // the fallback paints a single pending segment so the bar reads as 0%, which
+  // is more reassuring than a hint while the user waits for the first event.
   if (!wrap) {
     wrap = document.createElement('div');
     wrap.className = 'msg-working-progress';
     const bar = document.createElement('div');
     bar.className = 'msg-working-progress-bar';
-    const fill = document.createElement('div');
-    fill.className = 'msg-working-progress-fill';
-    bar.appendChild(fill);
-    const label = document.createElement('span');
-    label.className = 'msg-working-progress-label';
+    const lastMessage = document.createElement('div');
+    lastMessage.className = 'msg-working-progress-last-message';
+    // Inner wrapper holds the clamped text; the outer flex-centres it inside
+    // the reserved 3-line block so short narrations don't stick to the top.
+    const lastMessageText = document.createElement('div');
+    lastMessageText.className = 'msg-working-progress-last-message-text';
+    lastMessage.appendChild(lastMessageText);
     const remainingTime = document.createElement('span');
     remainingTime.className = 'msg-working-progress-remaining-time';
-    wrap.append(bar, label, remainingTime);
+    wrap.append(bar, lastMessage, remainingTime);
     bubble.appendChild(wrap);
-    bubble._fillEl = fill;
-    bubble._labelEl = label;
+    bubble._barEl = bar;
+    bubble._lastMessageEl = lastMessageText;
     bubble._remainingTimeEl = remainingTime;
-    bubble._maxPct = 0;
   }
-  // Monotonic clamp on the visual fill: when COMPLEX dispatches a wave bigger
-  // than the predicted minimum, the denominator jumps (e.g. 6 → 12) and the
-  // raw pct would shrink. The label keeps the truthful "done/total" so the
-  // user still sees the real numbers; only the bar is forced to never recede.
-  const displayPct = Math.max(pct, bubble._maxPct);
-  bubble._maxPct = displayPct;
-  bubble._fillEl.style.width = displayPct + '%';
-  bubble._labelEl.textContent =
-    `${safeDone}/${progressTotal} step${progressTotal > 1 ? 's' : ''} done · ${remaining} to go`;
-  bubble._remainingTimeEl.textContent = remainingTimeText(remaining);
+  renderProgressSegments(bubble._barEl);
+  const latest = refreshMirroredNarration();
+  if (latest) {
+    bubble._lastMessageEl.innerHTML = narrationHtmlForMirror(latest);
+  } else {
+    // No narration has streamed in yet — give the slot a soft placeholder so
+    // the bubble doesn't feel half-rendered while we wait for the first one.
+    bubble._lastMessageEl.textContent = 'Thinking…';
+  }
+  bubble._remainingTimeEl.textContent = remainingTimeText();
+}
+
+// Bar segments are flex-sized by `durationMs` so a long-running role (e.g.
+// developer at 500s) visually dwarfs a quick one (merger at 30s). When the
+// server omits steps (legacy / edge), fall back to N equal segments so the
+// label/remaining-time still match the bar.
+function renderProgressSegments(bar) {
+  const steps = progressSteps.length
+    ? progressSteps
+    : fallbackEqualSteps(progressTotal, progressDone);
+  // Cheap key — only rebuild when shape or statuses actually change.
+  const key = steps.map((s) => `${s.durationMs}:${s.status}`).join('|');
+  if (bar._stepsKey === key) return;
+  bar._stepsKey = key;
+  bar.replaceChildren(...steps.map((step) => {
+    const seg = document.createElement('div');
+    seg.className = `msg-working-progress-step is-${step.status}`;
+    seg.style.flexGrow = String(Math.max(1, step.durationMs));
+    seg.title = `${step.role} · ${Math.round(step.durationMs / 1000)}s`;
+    return seg;
+  }));
+}
+
+function fallbackEqualSteps(total, done) {
+  // No info yet (right after sending a message): paint a single pending
+  // segment so the bar reads as 0%. Without this the bar would be empty
+  // and the blue stripes underneath would look like 100% done.
+  if (total <= 0) return [{ role: '', durationMs: 1, status: 'pending' }];
+  const out = [];
+  for (let i = 0; i < total; i++) {
+    out.push({ role: '', durationMs: 1, status: i < done ? 'done' : 'pending' });
+  }
+  return out;
 }
 
 function renderWorkingUi() {
@@ -263,17 +311,14 @@ function renderWorkingUi() {
     const el = document.createElement('div');
     el.className = 'msg msg-working';
     el.dataset.seq = String(Number.MAX_SAFE_INTEGER);
-    const dots = document.createElement('div');
-    dots.className = 'bouncing-dots';
-    dots.appendChild(document.createElement('span'));
-    dots.appendChild(document.createElement('span'));
-    dots.appendChild(document.createElement('span'));
-    el.appendChild(dots);
     messages.appendChild(el);
     updateWorkingProgress();
     messages.scrollTop = messages.scrollHeight;
   } else if (!working && existing) {
     existing.remove();
+    // Reveal the latest narration that the bubble had been mirroring — once
+    // the turn is over, it becomes the user-visible "result" of the turn.
+    messages.querySelectorAll('.msg-mirrored').forEach((n) => n.classList.remove('msg-mirrored'));
   }
 }
 
@@ -364,6 +409,14 @@ function handleWsMessage(event) {
     const wasWorking = working;
     working = msg.working;
     if (!wasWorking && working) {
+      // Reset stale progress from the previous turn so the bar starts at 0%
+      // and the bubble doesn't briefly flash "100% done" before the first
+      // `progress` frame of the new turn arrives.
+      progressTotal = 0;
+      progressDone = 0;
+      progressSteps = [];
+      remainingTimeMsAtReceipt = 0;
+      remainingTimeReceivedAt = 0;
       startRemainingTimeTicker();
       const oldestQueued = messages.querySelector('.msg-queued');
       if (oldestQueued) {
@@ -388,6 +441,7 @@ function handleWsMessage(event) {
   if (msg.type === 'progress') {
     progressTotal = msg.total || 0;
     progressDone  = msg.done  || 0;
+    progressSteps = Array.isArray(msg.steps) ? msg.steps : [];
     if (typeof msg.remainingTimeMs === 'number') {
       remainingTimeMsAtReceipt = msg.remainingTimeMs;
       remainingTimeReceivedAt = Date.now();
@@ -612,6 +666,12 @@ function appendMessage(role, content, seqOrOpts = ++seqCounter) {
     el.appendChild(time);
   }
   placeIntoMessages(el, seq);
+  // Refresh the working bubble's mirrored "last message" slot whenever a new
+  // assistant narration lands during a turn — the bubble shows the latest one
+  // centred between the progress bar and the remaining-time label.
+  if (role === 'assistant' && !subtype && working) {
+    updateWorkingProgress();
+  }
 }
 
 function toolDetail(toolName, input) {

@@ -1,4 +1,4 @@
-import { broadcast } from './ws-bus.js';
+import { broadcast, sendToWs } from './ws-bus.js';
 
 // Progress is agent-based: 1 step = 1 agent's work. The chat-orchestrator
 // itself is always the +1 first step, flipping to "done" as soon as it has
@@ -7,7 +7,12 @@ import { broadcast } from './ws-bus.js';
 // DEVOPS → 1 = devops; COMPLEX → 5 = planner + min wave of 1 ticket) so the
 // bar shows a stable total upfront instead of growing 1/2 → 2/3 → … For
 // COMPLEX with N>1 tickets the bar still grows naturally past the floor.
-export function sendProgress(runtime) {
+// `targetWs` (optional): when set, sends the current snapshot directly to that
+// socket and BYPASSES the dedup cache. Used on (re)connect — a joining tab
+// would otherwise never see progress info if nothing has changed since the
+// last broadcast (the cache would skip the broadcast and the new tab stays
+// stuck at 0%).
+export function sendProgress(runtime, targetWs = null) {
   if (!runtime) return;
   const { stats } = runtime;
   const dispatched = stats.dispatchedSubagentTypes.length;
@@ -15,12 +20,63 @@ export function sendProgress(runtime) {
   const total = 1 + subagents;
   const done = (dispatched > 0 ? 1 : 0) + stats.agentsCompleted;
   const remainingTimeMs = estimateRemainingMs(runtime);
+  const steps = buildSteps(runtime);
+  const payload = { type: 'progress', total, done, remainingTimeMs, steps };
+  if (targetWs) {
+    sendToWs(targetWs, payload);
+    return;
+  }
+  const stepsKey = steps.map((s) => `${s.role}:${s.durationMs}:${s.status}`).join('|');
   // Skip the broadcast when nothing observable changed — back-to-back
   // dispatches in a single event would otherwise emit duplicate frames.
   const last = stats.lastProgressSent;
-  if (last && last.total === total && last.done === done && last.remainingTimeMs === remainingTimeMs) return;
-  stats.lastProgressSent = { total, done, remainingTimeMs };
-  broadcast(runtime, { type: 'progress', total, done, remainingTimeMs });
+  if (last && last.total === total && last.done === done && last.remainingTimeMs === remainingTimeMs && last.stepsKey === stepsKey) return;
+  stats.lastProgressSent = { total, done, remainingTimeMs, stepsKey };
+  broadcast(runtime, payload);
+}
+
+// Per-step snapshot driving proportional widths on the client. The orchestrator
+// is always step 0 (matches the +1 in sendProgress's total). Dispatched roles
+// follow in order; the last (dispatched - completed) are marked in_progress
+// since completion order isn't tracked — the same heuristic estimateRemainingMs
+// uses. Predicted-not-yet-dispatched roles from FLOW_PLANS fill the tail as
+// pending so the bar shows the full estimated shape upfront.
+function buildSteps(runtime) {
+  const { dispatchedSubagentTypes: dispatchedTypes, dispatchedSubagentStartedAt: startedAts, agentsCompleted: completed, flowExpected: expected, turnStartedAt } = runtime.stats;
+  const dispatched = dispatchedTypes.length;
+  const completedCount = Math.min(dispatched, completed);
+  const predictedNotDispatched = Math.max(0, expected - dispatched);
+  const plan = FLOW_PLANS[dispatchedTypes[0]];
+  const upcomingRoles = plan
+    ? plan.slice(dispatched, dispatched + predictedNotDispatched)
+    : new Array(predictedNotDispatched).fill('unknown');
+
+  // `startedAt` (epoch ms) is set on in_progress steps so the client can
+  // animate the fill from the right offset — and resume from the correct
+  // position after a reconnect. Omitted for `done` (already at 100% of its
+  // box) and `pending` (still at 0%).
+  return [
+    {
+      role: 'orchestrator',
+      durationMs: durationFor('orchestrator'),
+      status: dispatched > 0 ? 'done' : 'in_progress',
+      startedAt: dispatched > 0 ? undefined : turnStartedAt,
+    },
+    ...dispatchedTypes.map((role, i) => {
+      const inProgress = i >= completedCount;
+      return {
+        role,
+        durationMs: durationFor(role),
+        status: inProgress ? 'in_progress' : 'done',
+        startedAt: inProgress ? startedAts[i] : undefined,
+      };
+    }),
+    ...upcomingRoles.map((role) => ({
+      role,
+      durationMs: durationFor(role),
+      status: 'pending',
+    })),
+  ];
 }
 
 // Ordered role plan for SIMPLE/MEMORY flows. Length doubles as the expected-
