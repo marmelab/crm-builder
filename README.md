@@ -1,54 +1,26 @@
 # Atomic CRM Builder
 
-Customizing a CRM can be tedious. We built Atomic CRM Builder to provide a containerized environment that helps you create your custom CRM based on [Atomic CRM](https://github.com/marmelab/atomic-crm).
+Building a custom CRM from scratch demands both domain knowledge and technical expertise. Atomic CRM Builder lets non-developers design, build, and customize a CRM tailored to their domain using plain-English instructions.
 
-The builder provides two modes:
+It uses [Atomic CRM](https://github.com/marmelab/atomic-crm) as a starting template and orchestrates a team of AI agents specialized in CRM development, powered by Claude Code. Everything runs in a containerized environment to keep execution secure and isolated. The resulting CRM is built on Supabase, React, and Shadcn.
 
-```
-MODE=demo (default)                 MODE=full
-──────────────────                  ─────────────────────────────
-FakeRest in the browser             Local Supabase (Postgres)
-Starts in ~5 seconds                Starts in ~2-3 min (first time)
-No extra prerequisites              Requires host Docker socket
-Data resets on reload               Data is persisted
-```
-
-Note: The user can toggle mode with a single click from the User Interface.
-
+<img width="1557" height="932" alt="HiringCRM" src="https://github.com/user-attachments/assets/76b57f2c-026f-43de-b312-2a434707a0ad" />
 
 ## Quick start
 
 ### Prerequisites
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed
-- Anthropic API key: [console.anthropic.com](https://console.anthropic.com) or a Claude Code subscription
+- A valid Claude Code subscription or an Anthropic API key: [console.anthropic.com](https://console.anthropic.com)
 
 ### 1. Build (once, ~5 min)
 ```bash
 docker build -t atomic-crm-dev .
 ```
 
-### 2a. Demo mode (recommended to start)
-```bash
-docker run -it --rm \
-  -e ANTHROPIC_API_KEY=sk-ant-YOUR_KEY \
-  -p 5173:5173 -p 8080:8080 \
-  atomic-crm-dev
-```
+### 2. Launch the builder
 
-### 2b. Full mode (Supabase)
 ```bash
-docker run -it --rm \
-  -e ANTHROPIC_API_KEY=sk-ant-YOUR_KEY \
-  -e MODE=full \
-  --network host \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  atomic-crm-dev
-```
-
-### With docker compose (easier)
-```bash
-make up        # demo mode
-make up-full   # full mode
+make up
 
 # First-time login:
 # Run this from another shell — the stack pauses on first boot waiting for
@@ -56,68 +28,75 @@ make up-full   # full mode
 make claude         # OAuth flow on first run — copy URL to browser, paste token back
 ```
 
-### Persist code changes across restarts
+### 3. Stop and Restart
+
 ```bash
-# Stop and restart — keeps your code changes
-make restart # or make restart-full
-
-# Full reset — deletes volumes (loses code changes)
-make wipe up
+make down        # Keep your code changes between sessions
+# or
+make wipe        # Full reset — deletes volumes (loses code changes)
 ```
-
----
-
-## Recommended workflow
-
-```
-1. Start in demo mode
-      ↓
-2. Claude develops features via prompts
-   (components, fields, views...)
-      ↓
-3. Visual validation in the browser
-      ↓
-4. Claude generates and applies the Database migrations
-      ↓
-5. Verify on real data
-```
-
----
 
 ## Usage
 
-Once started, open these URLs:
+Once started, open [`http://localhost:8080`](http://localhost:8080) to get the builder UI. The content frame displays the CRM, ready to test. The sidebar shows your build session history. To start customizing, click "New Session" to open a chat interface and prompt the assistant. It will ask follow-up questions if needed, then modify the CRM autonomously and test its changes. You can use the content frame at any time to try the modifications yourself.
 
-| URL | Content |
-|---|---|
-| `http://localhost:5173` | The CRM |
-| `http://localhost:8080` | Chat assistant (the main UI for asking Claude to ship changes) |
-| `http://localhost:54323` | Supabase Dashboard (full mode only) |
+<img width="1838" height="935" alt="ArtTeachingCRM" src="https://github.com/user-attachments/assets/5d647f71-4bc1-4246-bc14-9cc45f471bb7" />
 
-For a direct, interactive Claude session, run from your host:
+
+The builder UI also lets you run multiple sessions in parallel, browse session history, switch between frontend-only and full-stack mode, and download the modified code.
+
+Other useful urls: 
+*  `http://localhost:5173`: The CRM
+* `http://localhost:54323`: The Supabase Dashboard (full mode only)
+
+For a direct, interactive Claude session in the builder, run from your host:
+
 ```bash
 make claude         # opens `claude --dangerously-skip-permissions` in the container
                     # (also triggers OAuth on first run if ANTHROPIC_API_KEY is unset)
 ```
 
-Inside that session you can also switch modes without restarting the container:
-```bash
-switch-mode demo    # → FakeRest
-switch-mode full    # → Supabase
+## Container Isolation
+
+The entire stack runs in a docker container:
+- The CRM (database, server functions, and frontend)
+- The builder UI (chat interface, stats, real-time notifications)
+- The Claude Code session
+
+This allows to run Claude with `--dangerously-skip-permissions`, and avoids asking technical confirmation to the end user (who is not technical). 
+
+## Custom Harness
+
+The builder runs on a custom harness: a team of agents specialized in CRM development (orchestrator, architect, developer, reviewer, documentarian, etc.), along with dedicated skills, rules, and hooks. You can explore the harness setup in [`.claudeConfig/.claude`](./.claudeConfig/.claude).
+
+The harness will use a single agent for simple modifications, and spawn a team for more complex ones.
+
+**Note**: The harness uses `claude -p`. This means the tokens are charged as API calls.
+
+## Recommended workflow
+
+```
+1. Start the app in demo mode (frontend-only, mocked backend)
+      ↓
+2. Chat with the assistant to add features
+      ↓
+3. Validate in the browser on test data
+      ↓
+4. Claude develops the backend, generates and applies the Database migrations
+      ↓
+5. Validate in the browser on real data
 ```
 
----
-
-## Feature development cycle
+Here is an example:
 
 ### Phase 1 — Fast dev in demo mode
 
 ```
-You (in the chat at localhost:8080):
+You:
   "Add a 'priority' field (low/medium/high) on contacts
    with a coloured badge in the list"
 
-Claude:
+Assistant:
   → Spawns a dev team in an isolated git worktree
   → Edits ContactList.tsx, ContactEdit.tsx, types.ts
   → Reviews, validates, merges to main
@@ -128,38 +107,36 @@ Validate visually on `localhost:5173`.
 
 ### Phase 2 — Promote to your real database
 
-When a feature changes the data shape, Claude writes the SQL into
+When a feature changes the data shape, the assistant writes the SQL into
 `supabase/migrations-pending/` (invisible to Supabase CLI) and, once the
 dev wave is merged, asks for permission in plain language:
 
 ```
-Claude:
+Assistant:
   "Some of these changes affect how your data is stored.
    Want me to apply them to your real database now?"
 
 You: "yes"
 
-Claude:
+Assistant:
   → Promotes the file from supabase/migrations-pending/
     to supabase/migrations/ (one commit on main)
   → Starts Supabase if needed and applies the migration
 
 (if you are still in demo mode)
-Claude:
+Assistant:
   "Your real database is up to date. Want to switch the app
    over to your real data now?"
 
 You: "yes"
 
-Claude:
+Assistant:
   → Switches the data provider to Supabase — Vite hot-reloads
 ```
 
 You can also toggle modes yourself at any time: one click on the
 mode badge in the chat header, or `switch-mode demo` / `switch-mode full`
 from `make claude`.
-
----
 
 ## What works in demo vs full mode
 
@@ -173,3 +150,13 @@ from `make claude`.
 | Real authentication | ❌ | ✅ |
 | File attachments | ❌ | ✅ |
 | Security policies (RLS) | ❌ | ✅ |
+
+## Roadmap
+
+- Easier install
+- Automated deployment to supabase.com and Cloudflare pages
+- Automated UI tests
+
+## License
+
+MIT

@@ -196,13 +196,25 @@ try {
   console.log('✓ resume works — history + state restored');
   ws2.close();
 
-  // 8. Bogus session ID → should fall back to new session
+  // 8. Bogus session ID → should fall back to new session. Closing the WS
+  //    without ever sending a user message must clean the empty session dir
+  //    off disk (no point keeping a log-less folder that just pollutes /sessions).
   const { ws: ws3, events: e3 } = await wsConnect(`?session=not-a-uuid`);
   const init3 = await waitFor(e3, (e) => e.type === 'init', 'init on bogus id');
   assert.equal(init3.isNew, true, 'bogus id → new session');
   assert.notEqual(init3.sessionId, 'not-a-uuid');
+  const orphanId = init3.sessionId;
   ws3.close();
-  console.log('✓ invalid UUID → falls back to new session');
+  // Cleanup runs in the server's async close handler — poll briefly.
+  const deadline = Date.now() + 1000;
+  while (Date.now() < deadline) {
+    const dirs = await readdir(LOG_DIR);
+    if (!dirs.includes(orphanId)) break;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  const dirsAfter = await readdir(LOG_DIR);
+  assert.ok(!dirsAfter.includes(orphanId), 'empty session removed on disconnect');
+  console.log('✓ invalid UUID → falls back to new session, empty session cleaned up on close');
 
   // 9. GET /api/sessions/:id on missing → 404
   const missingRes = await fetch(`${BASE}/api/sessions/00000000-0000-0000-0000-000000000000`);
@@ -221,7 +233,7 @@ try {
   // 11. Folder structure on disk — only log.jsonl + meta.json, no messages.json
   const dirs = await readdir(LOG_DIR);
   const sessionDirs = dirs.filter((d) => /^[0-9a-f-]{36}$/.test(d));
-  assert.ok(sessionDirs.length >= 2, 'at least 2 session folders exist');
+  assert.ok(sessionDirs.includes(id1), 'id1 folder present');
   const files = await readdir(join(LOG_DIR, id1));
   assert.ok(files.includes('log.jsonl'), 'log.jsonl present');
   assert.ok(files.includes('meta.json'), 'meta.json present');
