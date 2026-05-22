@@ -229,19 +229,14 @@ function updateWorkingProgress() {
     wrap.className = 'msg-working-progress';
     const bar = document.createElement('div');
     bar.className = 'msg-working-progress-bar';
-    const label = document.createElement('span');
-    label.className = 'msg-working-progress-label';
     const remainingTime = document.createElement('span');
     remainingTime.className = 'msg-working-progress-remaining-time';
-    wrap.append(bar, label, remainingTime);
+    wrap.append(bar, remainingTime);
     bubble.appendChild(wrap);
     bubble._barEl = bar;
-    bubble._labelEl = label;
     bubble._remainingTimeEl = remainingTime;
   }
   renderProgressSegments(bubble._barEl);
-  bubble._labelEl.textContent =
-    `${safeDone}/${progressTotal} step${progressTotal > 1 ? 's' : ''} done · ${remaining} to go`;
   bubble._remainingTimeEl.textContent = remainingTimeText(remaining);
 }
 
@@ -283,12 +278,6 @@ function renderWorkingUi() {
     const el = document.createElement('div');
     el.className = 'msg msg-working';
     el.dataset.seq = String(Number.MAX_SAFE_INTEGER);
-    const dots = document.createElement('div');
-    dots.className = 'bouncing-dots';
-    dots.appendChild(document.createElement('span'));
-    dots.appendChild(document.createElement('span'));
-    dots.appendChild(document.createElement('span'));
-    el.appendChild(dots);
     messages.appendChild(el);
     updateWorkingProgress();
     messages.scrollTop = messages.scrollHeight;
