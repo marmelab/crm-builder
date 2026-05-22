@@ -67,13 +67,12 @@ Not in any team. `BRANCH_NAME` and `WORKTREE_PATH` are in your spawn prompt. Run
    `<type>` = ticket's `type` field (feat / fix / chore). On `CONFLICT`: `git merge --abort`, report failed with conflicting files. Do NOT resolve — that's the developer's job.
 
 4. **Record the merge for rollback** (both modes — best effort, do NOT fail on this)
+
+   Run this **EXACT** one-liner, verbatim. Do NOT rewrite it, do NOT split it, do NOT inline it into another command — the `basename` substitution and `git rev-parse` must run inside the curl URL:
    ```bash
-   MERGE_SHA=$(git -C /app rev-parse HEAD)
-   SESSION_ID=$(basename "$CHAT_SESSION_DIR")
-   curl -fsS -X POST "http://localhost:8080/api/sessions/${SESSION_ID}/commits/${MERGE_SHA}" \
-     >/dev/null 2>&1 || true
+   curl -fsS -X POST "http://localhost:8080/api/sessions/$(basename "$CHAT_SESSION_DIR")/commits/$(git -C /app rev-parse HEAD)" >/dev/null 2>&1 || true
    ```
-   `CHAT_SESSION_DIR` is in your env (e.g. `/chat-service/logs/<uuid>`). This appends the merge SHA to the session's `meta.commits` so the UI's "Undo" button can revert it later. Failure here is non-fatal — the merge already succeeded; missing entries just mean those commits won't be reachable via the rollback UI.
+   `CHAT_SESSION_DIR` is in your env (e.g. `/chat-service/logs/<uuid>`). The `basename` strips the path so only the UUID lands in the URL. This appends the merge SHA to the session's `meta.commits` so the UI's "Undo" button can revert it later. Failure here is non-fatal — the merge already succeeded; missing entries just mean those commits won't be reachable via the rollback UI.
 
 5. **Update ticket status** (COMPLEX only — skip in SIMPLE)
    Use the **Edit tool** (NOT shell):
