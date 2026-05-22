@@ -67,15 +67,22 @@ export async function processMessage(runtime, prompt) {
     const sessionDir = `${LOG_DIR}/${runtime.session.id}`;
 
     // ── PTY lifecycle ─────────────────────────────────────────────────────────
-    // The Claude TUI can exit between background turns — e.g. when there are no
-    // more queued idle-notifications and the merger's wave-complete notification
-    // arrives 30+ seconds later. A single automatic restart with --resume lets
-    // the orchestrator drain its Teams inbox (STATE D: TeamDelete + next wave).
+    // Each SubagentStop causes Claude Code to atomically replace .claude.json
+    // (backup + rename-over). This destroys the inode the orchestrator's inotify
+    // watch was monitoring for inbox delivery, causing all subsequent team
+    // messages to be silently lost.
+    //
+    // Fix: after each background_result (= orchestrator background turn end,
+    // triggered by a SubagentStop), restart the PTY with --resume. The fresh
+    // Claude Code process sets up new inotify watches on the current .claude.json
+    // inode and re-scans the inbox, delivering any pending messages.
+    //
+    // A secondary exit-based restart (5 s delay, once per user turn) handles
+    // the rare case where the PTY itself crashes unexpectedly.
     //
     // spawnOrResumePty() creates the PtySession, attaches the background event
-    // listener, and installs an exit handler that schedules one restart (5 s
-    // delay, counted via runtime.ptyRestartCount). User-initiated processMessage
-    // calls reset the counter so each new user turn gets its own restart budget.
+    // listener (which owns the background_result → restart path), and installs
+    // an exit handler for the crash-recovery restart.
 
     function attachBgListener(ptyRef) {
       if (ptyRef._bgAttached) return;
@@ -96,6 +103,36 @@ export async function processMessage(runtime, prompt) {
         }
         if (event.type === 'background_result') {
           sendProgress(runtime).catch(() => {});
+          // Each SubagentStop causes Claude Code to atomically replace .claude.json
+          // (backup + rename-over), destroying the inode the orchestrator's inotify
+          // watch was monitoring for inbox delivery. Without a restart, subsequent
+          // team messages (developer "ready for merge", merger wave-complete) are
+          // never delivered and the session stalls permanently.
+          //
+          // Restarting the PTY gives a fresh Claude Code process with new inotify
+          // watches on the current .claude.json inode. The new process re-scans the
+          // inbox on startup and delivers any pending messages, allowing the
+          // orchestrator to dispatch the next wave or confirm the merge.
+          //
+          // Guard: skip if a restart is already in flight — concurrent SubagentStops
+          // emitting rapid background_results coalesce into a single restart.
+          if (runtime.ptySession && !runtime.ptySession.closed && !runtime.ptyBgRestarting) {
+            runtime.ptyBgRestarting = true;
+            runtime.ptyRestartPending = true; // prevent runtime release during restart window
+            const ptyToKill = runtime.ptySession;
+            runtime.ptySession = null;        // exit handler sees null → skips its own restart
+            ptyToKill.kill();
+            setTimeout(() => {
+              runtime.ptyBgRestarting = false;
+              runtime.ptyRestartPending = false;
+              if (!runtime.ptySession && !runtime.busy) {
+                spawnOrResumePty();
+              } else if (runtime.clients.size === 0 && !runtime.busy && (!runtime.ptySession || runtime.ptySession.closed)) {
+                runtime.session?.close();
+                runtimes.delete(runtime.session.id);
+              }
+            }, 500);
+          }
         }
       };
       ptyRef.on('event', bgHandler);
@@ -111,6 +148,9 @@ export async function processMessage(runtime, prompt) {
 
       runtime.ptySession.once('exit', () => {
         runtime.ptySession = null;
+        // bgHandler is managing a PTY restart (background_result path) — the
+        // 500 ms timeout owns the respawn and flag cleanup; skip normal logic.
+        if (runtime.ptyBgRestarting) return;
         const restartCount = runtime.ptyRestartCount || 0;
         if (!runtime.busy && restartCount < 1) {
           // Schedule one restart to catch pending merger / next-wave notifications.
@@ -135,8 +175,10 @@ export async function processMessage(runtime, prompt) {
       });
     }
 
-    // Each user-initiated turn gets a fresh restart budget.
+    // Each user-initiated turn gets a fresh restart budget. Reset ptyBgRestarting
+    // so background_result can trigger a restart on the first SubagentStop of this turn.
     runtime.ptyRestartCount = 0;
+    runtime.ptyBgRestarting = false;
 
     if (!runtime.ptySession || runtime.ptySession.closed) {
       spawnOrResumePty();
