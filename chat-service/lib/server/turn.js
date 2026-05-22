@@ -22,6 +22,8 @@ export async function processMessage(runtime, prompt) {
   runtime.stats.agentsCompleted = 0;
   runtime.stats.flowExpected = 0;
   runtime.stats.dispatchedSubagentTypes = [];
+  runtime.stats.dispatchedSubagentStartedAt = [];
+  runtime.stats.turnStartedAt = Date.now();
   runtime.stats.lastProgressSent = null;
   sendProgress(runtime);
 
@@ -86,6 +88,7 @@ export async function processMessage(runtime, prompt) {
               runtime.stats.flowExpected = predictedFlowExpected(tool.input.subagent_type);
             }
             runtime.stats.dispatchedSubagentTypes.push(tool.input.subagent_type);
+            runtime.stats.dispatchedSubagentStartedAt.push(Date.now());
             dispatchedThisEvent = true;
           }
         }

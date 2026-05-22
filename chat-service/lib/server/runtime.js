@@ -72,6 +72,12 @@ export function createRuntime(session) {
       agentsCompleted: 0,
       flowExpected: 0,
       dispatchedSubagentTypes: [],
+      // Parallel to dispatchedSubagentTypes — epoch ms at dispatch time.
+      // Drives the per-step time-based fill animation on the client (so a
+      // step's bar advances over its predicted duration even between
+      // progress events). Also used for the orchestrator: turnStartedAt.
+      dispatchedSubagentStartedAt: [],
+      turnStartedAt: 0,
     },
   };
 }
