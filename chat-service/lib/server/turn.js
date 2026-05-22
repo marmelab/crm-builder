@@ -4,28 +4,36 @@ import { join } from 'node:path';
 import { LOG_DIR, CLAUDE_HOME, CWD } from './config.js';
 import { broadcast, sendStats } from './ws-bus.js';
 import { runtimes, transitionState } from './runtime.js';
-import { snapshotTickets, sendProgress } from './ticket-progress.js';
+import { sendProgress, predictedFlowExpected } from './ticket-progress.js';
 import { spawnClaude, extractText, extractToolUses, friendlyError } from './claude-spawn.js';
 import { endsWithQuestion } from './session-store.js';
 import {
   emptyBreakdown, addBreakdown, breakdownFromModelUsage, costFromBreakdown,
 } from '../stats/io.js';
 
+const AGENT_DISPATCH_TOOLS = new Set(['Agent', 'Task']);
+
 export async function processMessage(runtime, prompt) {
   if (!runtime) return;
 
-  // Snapshot existing tickets so this turn's counter only reflects work
-  // initiated by *this* prompt — prior-turn tickets stay baselined out.
-  // Reset the client-side counter immediately, before the working bubble
-  // mounts, so it doesn't briefly flash the previous turn's value.
-  runtime.turnTicketBaseline = await snapshotTickets(`${LOG_DIR}/${runtime.session.id}`);
-  broadcast(runtime, { type: 'progress', total: 0, done: 0 });
+  // Reset per-turn agent step counters so the progress bar reflects only
+  // work initiated by *this* prompt. Send the initial 0/1 (orchestrator
+  // alone, not yet done) immediately so the bar mounts with the bubble.
+  runtime.stats = {
+    ...runtime.stats,
+    agentsCompleted: 0,
+    flowExpected: 0,
+    dispatchedSubagentTypes: [],
+    dispatchedSubagentStartedAt: [],
+    turnStartedAt: Date.now(),
+    lastProgressSent: null,
+  };
+  sendProgress(runtime);
 
   // Claude (re)starts → session is active again.
   transitionState(runtime, 'in_progress');
   broadcast(runtime, { type: 'status', working: true });
   const toolMap = new Map();
-  const pendingTicketWrites = new Set();
   let receivedText = false;
   let rateLimit = null;
   let resultError = false;
@@ -72,9 +80,22 @@ export async function processMessage(runtime, prompt) {
           }
         }
 
+        let dispatchedThisEvent = false;
         for (const tool of extractToolUses(event)) {
           toolMap.set(tool.id, tool);
+          // Count orchestrator Agent/Task dispatches eagerly (the tool_use
+          // event lands before the runtime fires task_started), so the bar
+          // shows "1/3" right away for SIMPLE instead of growing 1/2 → 2/3.
+          if (AGENT_DISPATCH_TOOLS.has(tool.name) && tool.input?.subagent_type) {
+            if (runtime.stats.dispatchedSubagentTypes.length === 0) {
+              runtime.stats.flowExpected = predictedFlowExpected(tool.input.subagent_type);
+            }
+            runtime.stats.dispatchedSubagentTypes.push(tool.input.subagent_type);
+            runtime.stats.dispatchedSubagentStartedAt.push(Date.now());
+            dispatchedThisEvent = true;
+          }
         }
+        if (dispatchedThisEvent) sendProgress(runtime);
 
         if (event.type === 'rate_limit_event' && event.rate_limit_info?.status === 'blocked') {
           rateLimit = event.rate_limit_info;
@@ -101,7 +122,9 @@ export async function processMessage(runtime, prompt) {
           } else if (event.subtype === 'task_notification' && event.status === 'completed' && event.task_id && runtime.stats.activeAgentIds.has(event.task_id)) {
             runtime.stats.activeAgentIds.delete(event.task_id);
             runtime.stats.activeAgents = runtime.stats.activeAgentIds.size;
+            runtime.stats.agentsCompleted++;
             sendStats(runtime);
+            sendProgress(runtime);
           }
         }
 
@@ -135,32 +158,6 @@ export async function processMessage(runtime, prompt) {
           runtime.stats.activeAgents = 0;
           runtime.stats.activeAgentIds.clear();
           sendStats(runtime);
-          // The merger updates ticket status to "merged" near the end of a turn —
-          // refresh the progress counter after `result`. Fire-and-forget; an
-          // out-of-order arrival is harmless (latest read wins on the client).
-          sendProgress(runtime).catch(() => {});
-        }
-
-        // Planner Write/Edit on TASK-*.json: stage the tool_use_id when we
-        // see the assistant emit the call, then fire sendProgress once the
-        // matching tool_result lands (the file isn't on disk before that).
-        if (event.type === 'assistant') {
-          for (const tool of extractToolUses(event)) {
-            const fp = tool.input?.file_path;
-            if ((tool.name === 'Write' || tool.name === 'Edit') && fp && /\/TASK-[^/]+\.json$/.test(fp)) {
-              pendingTicketWrites.add(tool.id);
-            }
-          }
-        }
-        if (event.type === 'user' && pendingTicketWrites.size > 0) {
-          const blocks = event.message?.content || [];
-          let resolved = false;
-          for (const b of blocks) {
-            if (b?.type === 'tool_result' && pendingTicketWrites.delete(b.tool_use_id)) {
-              resolved = true;
-            }
-          }
-          if (resolved) sendProgress(runtime).catch(() => {});
         }
       } catch {}
     }
