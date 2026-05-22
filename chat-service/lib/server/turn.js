@@ -66,34 +66,24 @@ export async function processMessage(runtime, prompt) {
   try {
     const sessionDir = `${LOG_DIR}/${runtime.session.id}`;
 
-    if (!runtime.ptySession || runtime.ptySession.closed) {
-      runtime.ptySession = new PtySession(runtime.claudeSessionId, sessionDir);
-      runtime.ptySession.once('exit', () => {
-        runtime.ptySession = null;
-        // PTY is gone — release the runtime if no client is connected.
-        // (The WS-close handler skips release while the PTY is alive; this
-        // path covers the mirror case where the PTY exits while idle.)
-        if (runtime.clients.size === 0 && !runtime.busy) {
-          runtime.session?.close();
-          runtimes.delete(runtime.session.id);
-        }
-      });
-    }
+    // ── PTY lifecycle ─────────────────────────────────────────────────────────
+    // The Claude TUI can exit between background turns — e.g. when there are no
+    // more queued idle-notifications and the merger's wave-complete notification
+    // arrives 30+ seconds later. A single automatic restart with --resume lets
+    // the orchestrator drain its Teams inbox (STATE D: TeamDelete + next wave).
+    //
+    // spawnOrResumePty() creates the PtySession, attaches the background event
+    // listener, and installs an exit handler that schedules one restart (5 s
+    // delay, counted via runtime.ptyRestartCount). User-initiated processMessage
+    // calls reset the counter so each new user turn gets its own restart budget.
 
-    // Attach a long-lived background listener once per PtySession lifetime.
-    // In COMPLEX flow the orchestrator processes team-member messages (idle
-    // notifications, merge confirmations) in turns that happen entirely inside
-    // Claude Code — no processMessage call, no ptyEventsUntilResult loop. The
-    // Stop hook still fires and PtySession emits `background_result`. This
-    // listener forwards any assistant text produced during those background
-    // turns and refreshes the progress counter once the turn is done.
-    if (!runtime.ptySession._bgAttached) {
-      runtime.ptySession._bgAttached = true;
-      const ptyRef = runtime.ptySession;
+    function attachBgListener(ptyRef) {
+      if (ptyRef._bgAttached) return;
+      ptyRef._bgAttached = true;
       let bgLastText = '';
+      // When processMessage is active, ptyEventsUntilResult already handles
+      // all events. Skip here to avoid double-forwarding.
       const bgHandler = (event) => {
-        // When processMessage is active, ptyEventsUntilResult already handles
-        // all events. Skip here to avoid double-forwarding.
         if (runtime.busy) return;
         const text = extractText(event);
         if (text) {
@@ -113,6 +103,47 @@ export async function processMessage(runtime, prompt) {
         ptyRef.off('event', bgHandler);
         ptyRef._bgAttached = false;
       });
+    }
+
+    function spawnOrResumePty() {
+      runtime.ptySession = new PtySession(runtime.claudeSessionId, sessionDir);
+      attachBgListener(runtime.ptySession);
+
+      runtime.ptySession.once('exit', () => {
+        runtime.ptySession = null;
+        const restartCount = runtime.ptyRestartCount || 0;
+        if (!runtime.busy && restartCount < 1) {
+          // Schedule one restart to catch pending merger / next-wave notifications.
+          // Set ptyRestartPending so the WS-close handler and finally block don't
+          // release the runtime during the 5 s window before the new PTY spawns.
+          runtime.ptyRestartCount = restartCount + 1;
+          runtime.ptyRestartPending = true;
+          setTimeout(() => {
+            runtime.ptyRestartPending = false;
+            if (!runtime.ptySession && !runtime.busy) {
+              spawnOrResumePty();
+            } else if (runtime.clients.size === 0 && !runtime.busy && (!runtime.ptySession || runtime.ptySession.closed)) {
+              runtime.session?.close();
+              runtimes.delete(runtime.session.id);
+            }
+          }, 5000);
+        } else if (runtime.clients.size === 0 && !runtime.busy) {
+          // Restart budget exhausted or already busy — release the runtime.
+          runtime.session?.close();
+          runtimes.delete(runtime.session.id);
+        }
+      });
+    }
+
+    // Each user-initiated turn gets a fresh restart budget.
+    runtime.ptyRestartCount = 0;
+
+    if (!runtime.ptySession || runtime.ptySession.closed) {
+      spawnOrResumePty();
+    } else {
+      // PTY already alive from a previous turn or restart — just ensure the
+      // background listener is attached (it auto-detaches on PTY exit).
+      attachBgListener(runtime.ptySession);
     }
 
     runtime.ptySession.send(buildPrompt(prompt));
@@ -305,7 +336,7 @@ export async function processMessage(runtime, prompt) {
       // confirmations) may still write to the session log — closing the
       // session here would silence them. The PTY exit handler covers the
       // mirror case (PTY exits while no clients are connected).
-      if (runtime.clients.size === 0 && (!runtime.ptySession || runtime.ptySession.closed)) {
+      if (runtime.clients.size === 0 && (!runtime.ptySession || runtime.ptySession.closed) && !runtime.ptyRestartPending) {
         runtime.session?.close();
         runtimes.delete(runtime.session.id);
       }

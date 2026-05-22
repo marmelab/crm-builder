@@ -169,7 +169,7 @@ wss.on('connection', async (ws, req) => {
     // active, background orchestrator turns (e.g. wave-to-wave transitions,
     // merge confirmations) may still fire — keeping the runtime alive lets
     // them write to the session log so the user sees them on reconnect.
-    if (r.clients.size === 0 && !r.busy && (!r.ptySession || r.ptySession.closed)) {
+    if (r.clients.size === 0 && !r.busy && (!r.ptySession || r.ptySession.closed) && !r.ptyRestartPending) {
       r.session?.close();
       runtimes.delete(r.session.id);
     }
