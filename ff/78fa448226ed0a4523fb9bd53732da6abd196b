@@ -1,0 +1,25 @@
+claudeConfig/.claude/hooks/record-merger-commit.sh
+  s_14c0cd6e14ae19::t_cd533c360d8ef0 1-43
+claudeConfig/.claude/agents/merger.md
+  s_14c0cd6e14ae19::t_965d436a3ce4ec 76,80-82,91
+  s_14c0cd6e14ae19::t_2e5f41e1d6181a 69
+  s_14c0cd6e14ae19::t_157bfa0c13d489 99
+claudeConfig/.claude/settings.json
+  s_14c0cd6e14ae19::t_b82f882e1cd424 132-136
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.0",
+  "base_commit_sha": "ff78fa448226ed0a4523fb9bd53732da6abd196b",
+  "prompts": {},
+  "sessions": {
+    "s_14c0cd6e14ae19": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "696d86e9-1892-48ea-8e69-45d8b5037be8",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Jerome <jerome@marmelab.com>"
+    }
+  }
+}
