@@ -36,7 +36,7 @@ export function rewriteUserMessage(userMessage) {
   return userMessage;
 }
 
-export function spawnClaude(userMessage, claudeSessionId, sessionDir, { rollbackInProgress = false } = {}) {
+export function spawnClaude(userMessage, claudeSessionId, sessionDir) {
   const mode = process.env.MODE || MODE_DEMO;
   const env = `<mode>${mode}</mode>\n<session_dir>${sessionDir}</session_dir>`;
   const systemPrompt = getSystemPrompt();
@@ -63,11 +63,6 @@ export function spawnClaude(userMessage, claudeSessionId, sessionDir, { rollback
     CHAT_SESSION_DIR: sessionDir,
     MODE: mode,
   };
-  // Propagated to every PreToolUse / SubagentStart / SubagentStop hook (and
-  // every Agent the orchestrator spawns inherits it). Tracks the rollback
-  // handoff across multiple turns — set when the HTTP /rollback route hands
-  // off, cleared on the next fresh user message.
-  if (rollbackInProgress) baseEnv.CLAUDE_ROLLBACK_MODE = '1';
   return spawn('claude', args, {
     env: buildSpawnEnv(baseEnv, claudeSessionId),
     cwd: CWD,

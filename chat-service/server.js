@@ -140,13 +140,6 @@ wss.on('connection', async (ws, req) => {
       ? parsed.display
       : parsed.content;
     r.session.logWrite('in', { type: 'user_message', content: parsed.content, display: displayed });
-    // A fresh user message means whatever was happening before is no longer
-    // a rollback (the orchestrator already finished its rollback turns by now,
-    // or the user is interrupting). Clear the flag so subsequent spawns are
-    // back to normal mode.
-    if (r.session.meta?.rollbackInProgress) {
-      r.session.applyPatch({ rollbackInProgress: false }).catch(() => {});
-    }
     r.session.recordMessage('user', displayed).then(() => {
       // Trigger Haiku retitling on the 1st user message, once per session.
       const m = r.session.meta;

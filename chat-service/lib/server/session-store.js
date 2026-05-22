@@ -279,13 +279,6 @@ function applyMetaPatch(meta, patch) {
   if (typeof patch.state === 'string' && ALLOWED_STATES.has(patch.state)) {
     meta.state = patch.state;
   }
-  // Internal flag — flips on when the HTTP /rollback route hands a conflict
-  // over to the chat-orchestrator, so the next orchestrator spawn carries
-  // CLAUDE_ROLLBACK_MODE=1 (the signal every rollback-aware hook reads).
-  // Not exposed on the HTTP PATCH surface; not in ALLOWED_STATES.
-  if (typeof patch.rollbackInProgress === 'boolean') {
-    meta.rollbackInProgress = patch.rollbackInProgress;
-  }
   // Append-only list of merge SHAs this session has produced on the base
   // branch. The merger posts each new merge here via HTTP, and the rollback
   // route reads + flips `revertedAt` from the same list — single source of
