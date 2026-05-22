@@ -1,0 +1,24 @@
+claudeConfig/.claude/agents/merger.md
+  s_14c0cd6e14ae19::t_df2358aa764fa2 3
+  s_14c0cd6e14ae19::t_3f4663fa9340bf 19,22
+chat-service/lib/server/claude-spawn.js
+  s_14c0cd6e14ae19::t_0c47f3a856ec9c 39
+chat-service/lib/server/turn.js
+  s_14c0cd6e14ae19::t_43015bf3f672c0 35
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.11",
+  "base_commit_sha": "da33226203b8d3bd50060cb905970261ebbd1c27",
+  "prompts": {},
+  "sessions": {
+    "s_14c0cd6e14ae19": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "696d86e9-1892-48ea-8e69-45d8b5037be8",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Jerome <jerome@marmelab.com>"
+    }
+  }
+}
