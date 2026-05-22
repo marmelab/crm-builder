@@ -121,8 +121,12 @@ export async function processMessage(runtime, prompt) {
             runtime.ptyRestartPending = true; // prevent runtime release during restart window
             const ptyToKill = runtime.ptySession;
             runtime.ptySession = null;        // exit handler sees null → skips its own restart
-            ptyToKill.kill();
-            setTimeout(() => {
+            // Wait for the actual exit event rather than a fixed timer — spawning
+            // before the old process exits risks two Claude instances sharing the
+            // same session file. The inbox is persistent storage: messages written
+            // before the restart are re-delivered by the new process on startup, so
+            // no notification is lost regardless of how long the kill takes.
+            ptyToKill.once('exit', () => {
               runtime.ptyBgRestarting = false;
               runtime.ptyRestartPending = false;
               if (!runtime.ptySession && !runtime.busy) {
@@ -131,7 +135,8 @@ export async function processMessage(runtime, prompt) {
                 runtime.session?.close();
                 runtimes.delete(runtime.session.id);
               }
-            }, 500);
+            });
+            ptyToKill.kill();
           }
         }
       };
