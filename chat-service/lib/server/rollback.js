@@ -30,18 +30,19 @@ export async function withMainBranchLock(fn) {
 // Scanning all reachable commits for that marker gives us a safety net on top
 // of `meta.commits[].revertedAt`: if the optimistic mark was missed (crash,
 // race), the next rollback still skips already-reverted SHAs.
+const REVERT_PREFIX = 'This reverts commit ';
 async function findRevertedFullShas() {
   try {
     const { stdout } = await execFileAsync(
       'git',
-      ['-C', CWD, 'log', '--all', '--grep=This reverts commit', '--format=%B%x00'],
+      ['-C', CWD, 'log', '--all', '--grep=This reverts commit', '--format=%B'],
       GIT_BUF,
     );
-    const reverted = new Set();
-    const re = /This reverts commit ([0-9a-f]{40})/g;
-    let m;
-    while ((m = re.exec(stdout)) !== null) reverted.add(m[1]);
-    return reverted;
+    const reverted = stdout
+      .split('\n')
+      .filter((line) => line.startsWith(REVERT_PREFIX))
+      .map((line) => line.slice(REVERT_PREFIX.length).replace(/\.$/, ''));
+    return new Set(reverted);
   } catch (err) {
     console.warn('[rollback] findRevertedFullShas failed:', err.message);
     return new Set();
