@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import { CWD, LOG_DIR, ALLOWED_STATES, MIME_TYPES, UUID_RE, MODE_DEMO, MODE_FULL, VALID_MODES } from './config.js';
 import { listSessions, getSession, patchSession, deleteSession } from './session-store.js';
 import { runtimes } from './runtime.js';
-import { handleSessionCommitsRequest, handleSessionRollbackRequest } from './rollback.js';
+import { handleSessionCommitsRequest, handleSessionRollbackRequest, handleRecordCommit } from './rollback.js';
 import { broadcast, sendToWs } from './ws-bus.js';
 
 const execFileAsync = promisify(execFile);
@@ -221,6 +221,10 @@ export function createRequestHandler({ publicDir }) {
     const commitsMatch = req.url?.match(/^\/api\/sessions\/([0-9a-f-]+)\/commits$/i);
     if (commitsMatch && req.method === 'GET') {
       return handleSessionCommitsRequest(req, res, commitsMatch[1]);
+    }
+    const recordCommitMatch = req.url?.match(/^\/api\/sessions\/([0-9a-f-]+)\/commits\/([0-9a-f]{7,40})$/i);
+    if (recordCommitMatch && req.method === 'POST') {
+      return handleRecordCommit(req, res, recordCommitMatch[1], recordCommitMatch[2]);
     }
     const rollbackMatch = req.url?.match(/^\/api\/sessions\/([0-9a-f-]+)\/rollback$/i);
     if (rollbackMatch && req.method === 'POST') {

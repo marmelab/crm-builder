@@ -286,6 +286,24 @@ function applyMetaPatch(meta, patch) {
   if (typeof patch.rollbackInProgress === 'boolean') {
     meta.rollbackInProgress = patch.rollbackInProgress;
   }
+  // Append-only list of merge SHAs this session has produced on the base
+  // branch. The merger posts each new merge here via HTTP, and the rollback
+  // route reads + flips `revertedAt` from the same list — single source of
+  // truth, no log.jsonl parsing.
+  if (patch.addCommit && typeof patch.addCommit.sha === 'string') {
+    meta.commits = meta.commits || [];
+    if (!meta.commits.some((c) => c.sha === patch.addCommit.sha)) {
+      meta.commits.push({
+        sha: patch.addCommit.sha,
+        subject: typeof patch.addCommit.subject === 'string' ? patch.addCommit.subject : '',
+        createdAt: new Date().toISOString(),
+      });
+    }
+  }
+  if (typeof patch.markReverted === 'string') {
+    const entry = (meta.commits || []).find((c) => c.sha === patch.markReverted);
+    if (entry && !entry.revertedAt) entry.revertedAt = new Date().toISOString();
+  }
 }
 
 // Heuristic: Claude's final message ends with a question → session is waiting

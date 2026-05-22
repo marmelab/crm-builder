@@ -67,7 +67,16 @@ Not in any team. `BRANCH_NAME` and `WORKTREE_PATH` are in your spawn prompt. Run
    ```
    `<type>` = ticket's `type` field (feat / fix / chore). On `CONFLICT`: `git merge --abort`, report failed with conflicting files. Do NOT resolve — that's the developer's job.
 
-4. **Update ticket status** (COMPLEX only — skip in SIMPLE)
+4. **Record the merge for rollback** (both modes — best effort, do NOT fail on this)
+   ```bash
+   MERGE_SHA=$(git -C /app rev-parse HEAD)
+   SESSION_ID=$(basename "$CHAT_SESSION_DIR")
+   curl -fsS -X POST "http://localhost:8080/api/sessions/${SESSION_ID}/commits/${MERGE_SHA}" \
+     >/dev/null 2>&1 || true
+   ```
+   `CHAT_SESSION_DIR` is in your env (e.g. `/chat-service/logs/<uuid>`). This appends the merge SHA to the session's `meta.commits` so the UI's "Undo" button can revert it later. Failure here is non-fatal — the merge already succeeded; missing entries just mean those commits won't be reachable via the rollback UI.
+
+5. **Update ticket status** (COMPLEX only — skip in SIMPLE)
    Use the **Edit tool** (NOT shell):
    ```
    Edit(file_path: "${TICKETS_DIR}/<TASK_ID>.json", old_string: '"status": "pending"', new_string: '"status": "merged"')
@@ -78,7 +87,7 @@ Not in any team. `BRANCH_NAME` and `WORKTREE_PATH` are in your spawn prompt. Run
    - COMPLEX: `SendMessage(to: "team-lead", message: "merged TASK-XXX, commit=<short sha>")`
    - SIMPLE: return text `DONE: commit=<short sha>. files=[...]`
 
-7. **On any failure of steps 1–4**:
+7. **On any failure of steps 1–3 or 5** (step 4 is best-effort, never fails the merge):
    - COMPLEX: `SendMessage(team-lead, "TASK-XXX merge failed: <reason>")`, then idle.
    - SIMPLE: return text `FAILED: <reason>`.
 
