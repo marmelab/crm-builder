@@ -19,6 +19,10 @@
     "permissions": {
         "allow": []
     },
+    "attribution": {
+        "commit": "",
+        "pr": ""
+    },
     "hooks": {
         "PreToolUse": [
             {
