@@ -1,5 +1,5 @@
 import { on } from 'node:events';
-import { cp, copyFile, mkdir, chmod, readdir } from 'node:fs/promises';
+import { cp, copyFile, mkdir, chmod, readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { LOG_DIR, CLAUDE_HOME, CWD } from './config.js';
 import { broadcast, sendStats } from './ws-bus.js';
@@ -11,6 +11,24 @@ import { endsWithQuestion } from './session-store.js';
 import {
   emptyBreakdown, addBreakdown, breakdownFromModelUsage, costFromBreakdown,
 } from '../stats/io.js';
+
+// Return true if any team-lead inbox under ~/.claude/teams/ has unread messages.
+// Used by the inbox watchdog in attachBgListener.
+async function hasUnreadInboxMessages() {
+  const teamsDir = join(CLAUDE_HOME, '.claude', 'teams');
+  try {
+    const teams = await readdir(teamsDir);
+    for (const team of teams) {
+      const inboxPath = join(teamsDir, team, 'inboxes', 'team-lead.json');
+      try {
+        const raw = await readFile(inboxPath, 'utf8');
+        const msgs = JSON.parse(raw);
+        if (Array.isArray(msgs) && msgs.some(m => !m.read)) return true;
+      } catch { /* inbox missing or malformed — skip */ }
+    }
+  } catch { /* teams dir missing — no active team */ }
+  return false;
+}
 
 // Aborts when either the result event arrives or the session exits unexpectedly.
 async function* ptyEventsUntilResult(session) {
@@ -75,6 +93,32 @@ export async function processMessage(runtime, prompt) {
       if (ptyRef._bgAttached) return;
       ptyRef._bgAttached = true;
       let bgLastText = '';
+
+      // ── Inbox watchdog ────────────────────────────────────────────────────────
+      // Claude Code's InboxPoller (setInterval 1 s) can be permanently killed
+      // when an in-process teammate's async operation triggers a React re-render
+      // inside its AsyncLocalStorage context. During that render S2() =
+      // isInProcessTeammate() = true → G28() returns undefined → w = false →
+      // clearInterval() fires → polling is dead. The orchestrator then misses all
+      // subsequent team-inbox messages even though the PTY process is alive.
+      //
+      // Fix: poll the team-lead inbox every 3 s. If unread messages are found
+      // while the session is idle, nudge the PTY stdin with space+backspace. This
+      // triggers a re-render in the orchestrator's own event-loop tick (no teammate
+      // context active) → S2() = false → G28() returns the team-lead name →
+      // w = true → a fresh setInterval(M, 1000) is created → delivery within 1 s.
+      let watchdogTimer = null;
+      function scheduleWatchdog() {
+        watchdogTimer = setTimeout(async () => {
+          if (ptyRef.closed) return; // PTY dead — stop the watchdog
+          if (!runtime.busy && await hasUnreadInboxMessages()) {
+            ptyRef.nudge();
+          }
+          scheduleWatchdog(); // reschedule regardless — stop only when PTY closes
+        }, 3000);
+      }
+      scheduleWatchdog();
+
       // When processMessage is active, ptyEventsUntilResult already handles
       // all events. Skip here to avoid double-forwarding.
       const bgHandler = (event) => {
@@ -90,15 +134,14 @@ export async function processMessage(runtime, prompt) {
         }
         if (event.type === 'background_result') {
           sendProgress(runtime).catch(() => {});
-          // Claude Code delivers team-inbox messages via setInterval(1000 ms) polling
-          // (not inotify), so the orchestrator continues to receive background turns
-          // without any PTY restart. TranscriptWatcher uses fs.watchFile (stat
-          // polling) for the session JSONL, which is likewise immune to inotify
-          // issues. No restart needed here — the PTY stays alive between waves.
+          // Claude Code delivers team-inbox messages via setInterval(1000 ms)
+          // polling (not inotify). The watchdog above handles stalls where the
+          // InboxPoller's interval has been killed by a teammate context re-render.
         }
       };
       ptyRef.on('event', bgHandler);
       ptyRef.once('exit', () => {
+        clearTimeout(watchdogTimer);
         ptyRef.off('event', bgHandler);
         ptyRef._bgAttached = false;
       });

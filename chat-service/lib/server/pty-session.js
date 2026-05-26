@@ -160,6 +160,24 @@ export class PtySession extends EventEmitter {
     if (!this.closed) this.#pty.kill();
   }
 
+  // Nudge the PTY stdin with a harmless space+backspace sequence to trigger an
+  // Ink re-render in the orchestrator's main-thread context.
+  //
+  // Background: the InboxPoller's setInterval (1 s poll for team-lead inbox
+  // messages) can be permanently killed when an in-process teammate's async
+  // operation triggers a React re-render inside an AsyncLocalStorage context.
+  // During such a re-render, S2() = isInProcessTeammate() returns true, causing
+  // G28() to return undefined → w = false → clearInterval() → polling dead.
+  //
+  // Writing to PTY stdin from our external process triggers a re-render on the
+  // orchestrator's own event-loop tick, where no teammate context is active.
+  // S2() = false → G28() returns the team-lead name → w = true → a fresh
+  // setInterval(M, 1000) is created → InboxPoller resumes within 1 second.
+  nudge() {
+    if (this.closed || !this.#ready) return;
+    this.#pty.write(' \x7f'); // space + backspace — net-zero text change
+  }
+
   // Watch /tmp for the sentinel file written by the Stop hook (turn-complete.sh).
   // The Stop hook fires AFTER Claude has flushed the JSONL transcript, so by
   // the time we react to the sentinel the TranscriptWatcher has already (or will
