@@ -53,33 +53,38 @@ Not in any team. `BRANCH_NAME` and `WORKTREE_PATH` are in your spawn prompt. Run
    ```
    Non-empty → developer left uncommitted changes. Report failed, do not merge.
 
-2. **Return to base + reset stale debris in `/app`** (idempotent)
-   ```bash
-   cd /app && BASE=$(git symbolic-ref --short HEAD)
-   git pull --ff-only 2>/dev/null || true
-   git reset --hard HEAD && /entrypoint-helpers/apply-app-variant.sh
-   ```
+2. **Reset `/app` to base AND merge — single Bash invocation** (idempotent)
 
-3. **Merge**
+   Bash tool calls are stateless shells: a `cd /app` from a previous call does NOT carry over. Run both the reset and the merge as **one** Bash call so the `cd /app` lasts through the merge — otherwise the merge silently runs in `/app/worktrees/<...>/simple` (where `simple/<SESSION_SHORT>` is itself the HEAD, so it becomes a no-op "Already up to date" merge that never reaches main):
    ```bash
-   git merge --no-ff <BRANCH_NAME> -m "<type>(<TASK_ID>): <ticket title>"
+   cd /app && \
+     git pull --ff-only 2>/dev/null || true && \
+     git reset --hard HEAD && \
+     /entrypoint-helpers/apply-app-variant.sh && \
+     git merge --no-ff <BRANCH_NAME> -m "<type>(<TASK_ID>): <ticket title>"
    ```
-   `<type>` = ticket's `type` field (feat / fix / chore). On `CONFLICT`: `git merge --abort`, report failed with conflicting files. Do NOT resolve — that's the developer's job.
+   `<type>` = ticket's `type` field (feat / fix / chore). On `CONFLICT`: still inside `/app`, run `git merge --abort`, report failed with conflicting files. Do NOT resolve — that's the developer's job.
 
-4. **Update ticket status** (COMPLEX only — skip in SIMPLE)
+   **Verify** the merge actually landed on `/app/main` (and not in a worktree) before reporting success:
+   ```bash
+   cd /app && git log -1 --format='%H %P %s' HEAD
+   ```
+   The output's `%P` (parent list) must have **two** SHAs separated by a space — that's a true merge commit. If only one SHA, the merge degenerated into a fast-forward or no-op; report `FAILED: merge did not produce a merge commit`.
+
+3. **Update ticket status** (COMPLEX only — skip in SIMPLE)
    Use the **Edit tool** (NOT shell):
    ```
    Edit(file_path: "${TICKETS_DIR}/<TASK_ID>.json", old_string: '"status": "pending"', new_string: '"status": "merged"')
    ```
    If status was `"in_progress"`, substitute. Verify with `Read`.
 
-5. **Report**
+4. **Report**
    - COMPLEX: `SendMessage(to: "team-lead", message: "merged TASK-XXX, commit=<short sha>")`
    - SIMPLE: return text `DONE: commit=<short sha>. files=[...]`
 
-   The `commit=<sha>` substring is mandatory in both modes — the `record-merger-commit` SubagentStop hook greps it from your transcript to register the merge in the session's meta.json so the UI's "Undo" button can revert it later. You do NOT run any curl yourself.
+   The `commit=<sha>` is the **short SHA from Step 2's verify** (the `%H` printed by `git log -1`). The PostToolUse `record-merger-commit` hook also captures the merge SHA directly from `/app` HEAD — you do NOT run any curl yourself.
 
-6. **On any failure of steps 1–3**:
+5. **On any failure of steps 1–2**:
    - COMPLEX: `SendMessage(team-lead, "TASK-XXX merge failed: <reason>")`, then idle.
    - SIMPLE: return text `FAILED: <reason>`.
 
@@ -88,7 +93,8 @@ Not in any team. `BRANCH_NAME` and `WORKTREE_PATH` are in your spawn prompt. Run
 - `git push`, `gh` commands, `--no-verify`, `--force`.
 - Force-merge on conflict — abort and report failed.
 - Spawn agents, `TeamCreate`, `TeamDelete`.
-- Edit any file except the Step 4 ticket JSON.
+- Edit any file except the Step 3 ticket JSON.
+- Run `git merge` from any cwd other than `/app`. Always `cd /app && git merge …` in the **same** Bash invocation.
 
 **Per-mode differences**:
 
@@ -96,7 +102,7 @@ Not in any team. `BRANCH_NAME` and `WORKTREE_PATH` are in your spawn prompt. Run
 |---|---|---|
 | Trigger | SendMessage from `developer-TASK-XXX` | Spawn prompt contains `BRANCH_NAME` + `WORKTREE_PATH` |
 | Loop | Yes — until `shutdown_request` | No — single merge, return |
-| Step 4 (ticket status) | Yes (`TASK_ID` starts with `TASK-`) | Skip (no ticket JSON) |
+| Step 3 (ticket status) | Yes (`TASK_ID` starts with `TASK-`) | Skip (no ticket JSON) |
 | Report | `SendMessage(to: "team-lead", message: "merged TASK-XXX, commit=<sha>")` — plain text, no YAML | Return `DONE: commit=<sha>. files=[...]` |
 | On failure | `SendMessage(to: "team-lead", message: "TASK-XXX merge failed: ...")` — plain text | Return `FAILED: <reason>` |
 

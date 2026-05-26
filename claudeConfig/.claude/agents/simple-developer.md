@@ -159,7 +159,23 @@ For each SHA in `COMMITS_TO_REVERT`, in the order given:
    cd <WORKTREE_PATH> && git revert --no-edit -m 1 <sha>
    ```
 
-2. **On success**: go to the next SHA.
+2. **After the revert exits 0 — guard against empty reverts**
+
+   `git revert -m 1` of an older commit can finish cleanly while producing **zero file changes** when a later session has already modified the same lines (e.g. you're trying to undo `"X" → "Y"` but the file now says `"Z"` — git sees no `"Y"` to remove, accepts a silent no-op). The merge that follows would land an empty revert on main, leaving the user's app unchanged and the chat reporting success — a confusing UX bug.
+
+   Verify the revert touched files:
+   ```bash
+   cd <WORKTREE_PATH> && git diff --name-only HEAD^ HEAD
+   ```
+   If the output is empty → the revert is empty. Roll it back and fail:
+   ```bash
+   cd <WORKTREE_PATH> && git reset --hard HEAD^
+   ```
+   ```
+   FAILED: revert of <sha> produced no changes — target lines already absent from main (likely overwritten by a later session)
+   ```
+
+   If non-empty → go to the next SHA.
 
 3. **On conflict** (`git revert` exits non-zero, `git status` reports `You are currently reverting commit <sha>` + unmerged paths):
    - Inspect: `cd <WORKTREE_PATH> && git status --porcelain` and `git diff --diff-filter=U`.
@@ -168,7 +184,7 @@ For each SHA in `COMMITS_TO_REVERT`, in the order given:
      ```bash
      cd <WORKTREE_PATH> && git add -A && git revert --continue --no-edit
      ```
-   - Then go to the next SHA.
+   - Apply the same empty-revert guard from Step 2 before going to the next SHA.
 
 4. **When every SHA is done** (no in-progress revert, list exhausted): return the standard SIMPLE success line:
    ```
