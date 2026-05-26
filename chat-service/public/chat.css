@@ -906,6 +906,7 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
 #chat-modal-body {
   font-size: 13px; line-height: 1.5; color: #8e8e93;
   margin-bottom: 22px;
+  white-space: pre-line;
 }
 #chat-modal-actions {
   display: flex; gap: 10px; justify-content: center;

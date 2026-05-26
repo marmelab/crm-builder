@@ -65,6 +65,34 @@ async function listActiveSessionCommits(sessionId) {
   return { session, commits };
 }
 
+// For a single SHA, list later commits on the base branch that touch any of
+// the same files. Used by the UI to warn the user *before* clicking Undo
+// that this session's changes have been extended by later work — and that
+// a revert may conflict or remove pieces they didn't ask to remove.
+async function overlappingLaterCommits(sha) {
+  try {
+    const { stdout: files } = await execFileAsync(
+      'git',
+      ['-C', CWD, 'show', '--name-only', '--pretty=format:', sha],
+      GIT_BUF,
+    );
+    const fileList = files.split('\n').map((s) => s.trim()).filter(Boolean);
+    if (fileList.length === 0) return [];
+    const { stdout: laterLog } = await execFileAsync(
+      'git',
+      ['-C', CWD, 'log', `${sha}..HEAD`, '--format=%H%x09%s', '--', ...fileList],
+      GIT_BUF,
+    );
+    return laterLog.split('\n').filter(Boolean).map((line) => {
+      const [laterSha, subject] = line.split('\t');
+      return { sha: laterSha, subject };
+    });
+  } catch (err) {
+    console.warn('[rollback] overlappingLaterCommits failed for', sha, ':', err.message);
+    return [];
+  }
+}
+
 export async function handleSessionCommitsRequest(req, res, sessionId) {
   if (!UUID_RE.test(sessionId)) {
     res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -73,8 +101,14 @@ export async function handleSessionCommitsRequest(req, res, sessionId) {
   }
   try {
     const { commits } = await listActiveSessionCommits(sessionId);
+    // For each commit, find later commits on the base branch that touch the
+    // same files — Promise.all keeps it linear-ish even with N commits.
+    const enriched = await Promise.all(commits.map(async (c) => ({
+      ...c,
+      overlappingLaterCommits: await overlappingLaterCommits(c.sha),
+    })));
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ sessionId, commits }));
+    res.end(JSON.stringify({ sessionId, commits: enriched }));
   } catch (err) {
     console.error('handleSessionCommitsRequest failed:', err);
     res.writeHead(500, { 'Content-Type': 'application/json' });

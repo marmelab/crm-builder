@@ -154,56 +154,106 @@ COMMITS_TO_REVERT:
 
 For each SHA in `COMMITS_TO_REVERT`, in the order given:
 
-1. **Attempt the revert**
-   ```bash
-   cd <WORKTREE_PATH> && git revert --no-edit -m 1 <sha>
-   ```
+### Step 1 — Read the commit you're about to undo
 
-2. **After the revert exits 0 — guard against empty reverts**
+Before touching anything, get the canonical record of what this commit changed. This is the **ground truth** you'll use to resolve conflicts and to interpret empty reverts:
 
-   `git revert -m 1` of an older commit can finish cleanly while producing **zero file changes** when a later session has already modified the same lines (e.g. you're trying to undo `"X" → "Y"` but the file now says `"Z"` — git sees no `"Y"` to remove, accepts a silent no-op). The merge that follows would land an empty revert on main, leaving the user's app unchanged and the chat reporting success — a confusing UX bug.
+```bash
+cd <WORKTREE_PATH> && git show --stat <sha>          # which files, how big
+cd <WORKTREE_PATH> && git show <sha>                  # full diff
+```
 
-   Verify the revert touched files:
-   ```bash
-   cd <WORKTREE_PATH> && git diff --name-only HEAD^ HEAD
-   ```
-   If the output is empty → the revert is empty. Roll it back and fail:
-   ```bash
-   cd <WORKTREE_PATH> && git reset --hard HEAD^
-   ```
-   ```
-   FAILED: revert of <sha> produced no changes — target lines already absent from main (likely overwritten by a later session)
-   ```
+Read the diff. Identify, in your head, **exactly** what this commit added (the `+` lines on the "after" side) and what it replaced (the `-` lines). The revert's job is to remove the `+` and put back the `-` — nothing else.
 
-   If non-empty → go to the next SHA.
+### Step 2 — Attempt the revert
 
-3. **On conflict** (`git revert` exits non-zero, `git status` reports `You are currently reverting commit <sha>` + unmerged paths):
-   - Inspect: `cd <WORKTREE_PATH> && git status --porcelain` and `git diff --diff-filter=U`.
-   - Resolve each conflict file with Edit/Write. Prefer the post-revert side (the one that drops the additions the original commit introduced). Keep it minimal — remove conflict markers, pick the right side, do not refactor or rename.
-   - Stage and finalise the revert:
-     ```bash
-     cd <WORKTREE_PATH> && git add -A && git revert --continue --no-edit
-     ```
-   - Apply the same empty-revert guard from Step 2 before going to the next SHA.
+```bash
+cd <WORKTREE_PATH> && git revert --no-edit -m 1 <sha>
+```
 
-4. **When every SHA is done** (no in-progress revert, list exhausted): return the standard SIMPLE success line:
-   ```
-   DONE: branch=simple/<SESSION_SHORT_ID>. files=[<list of resolved files across all reverts>]
-   ```
-   The orchestrator's STATE S-MERGE will then dispatch the regular SIMPLE merger to merge your branch back into the base.
+Three possible outcomes — match yours below.
 
-5. **On unrecoverable failure** (a revert you can't resolve, or `git revert --continue` keeps failing): abort and return:
-   ```bash
-   cd <WORKTREE_PATH> && git revert --abort 2>/dev/null || true
-   ```
-   ```
-   FAILED: rollback merge failed: <one-line reason>
-   ```
+### Outcome A — Clean revert with real changes
+
+`git revert` exited 0 AND `git diff --name-only HEAD^ HEAD` is non-empty. Sanity-check: do the changed files / changed lines match what Step 1 told you to expect? If yes, go to next SHA.
+
+### Outcome B — Empty revert (clean exit, zero changes)
+
+`git revert` exited 0 BUT `git diff --name-only HEAD^ HEAD` is empty.
+
+This means a later commit on the base branch has **already removed or transformed** the lines your target commit added. Two sub-cases:
+
+- **B1 — Pure substitution** (e.g. target said `X → Y`, current main says `Z`): the user's intent — "undo X → Y" — can sometimes still be expressed as `Z → X`. Look at Step 1's `+` strings; grep current main for them; if they're absent but the file at the same location now has a different value, that's the later commit's overwrite. Edit the file to replace that later value with the original `-` strings from Step 1. Then `git add -A && git commit -m "simple: semantic revert of <sha-short>"`. Re-check with `git diff --name-only HEAD^ HEAD` — it should be non-empty now.
+- **B2 — Target already fully absent** (the later commit removed the addition entirely, no equivalent value to swap): the target commit's effect is already gone from main. Nothing to revert.
+  ```bash
+  cd <WORKTREE_PATH> && git reset --hard HEAD^
+  ```
+  ```
+  FAILED: revert of <sha> produced no changes — its additions have already been removed by a later commit
+  ```
+
+If you're unsure which sub-case applies, prefer B2 (FAILED) — a confusing-but-honest failure is better than a hallucinated edit that touches files the user didn't expect.
+
+### Outcome C — Conflict (non-zero exit, unmerged paths)
+
+`git status` shows `You are currently reverting commit <sha>` plus `UU`/`AA`/`DU`/`UD` entries.
+
+```bash
+cd <WORKTREE_PATH> && git status --porcelain
+cd <WORKTREE_PATH> && git diff --diff-filter=U
+```
+
+For each conflict file, the markers look like:
+
+```
+<<<<<<< HEAD
+<current state on the base branch — includes whatever later commits added>
+=======
+<state after applying the revert — the target commit's additions are removed,
+ but later commits' additions on the SAME lines might also be missing here>
+>>>>>>> parent of <sha>...
+```
+
+**Goal**: produce a version where the target commit's `+` lines (from Step 1) are removed, but **every** later commit's contribution that you can identify is preserved.
+
+Heuristic, in order:
+
+1. **Read both sides side-by-side**. Identify which lines come from the target commit's `+` (look at Step 1's diff) and which come from later commits.
+2. **Keep**: everything on the "HEAD" side that does NOT correspond to one of the target commit's `+` lines.
+3. **Drop**: the target commit's `+` lines (and only those).
+4. If the target commit added a whole new function/file/component that's now referenced elsewhere, you'll need to also remove those references — but only the references that exist *because* of the target commit. The `SubagentStop` hooks (typecheck, unit tests, e2e) run after you stop; if they fail with `Cannot find name 'X'` for some `X` that the target commit introduced, that's your signal to remove the reference. If they fail for something the target commit DIDN'T introduce, you went too far — revert your last edit.
+
+After resolving every conflict file:
+
+```bash
+cd <WORKTREE_PATH> && git add -A && git revert --continue --no-edit
+```
+
+Then re-check `git diff --name-only HEAD^ HEAD`. If empty, apply the Outcome B logic. Otherwise, go to next SHA.
+
+### Step 3 — All SHAs processed
+
+```
+DONE: branch=simple/<SESSION_SHORT_ID>. files=[<every file you touched, deduped>]
+```
+
+The orchestrator's STATE S-MERGE will dispatch the regular SIMPLE merger to merge your branch back into the base.
+
+### Step 4 — Unrecoverable failure
+
+If at any point you can't make progress (a conflict you genuinely can't read, three rounds of validation hook failures with no fix in sight, etc.):
+
+```bash
+cd <WORKTREE_PATH> && git revert --abort 2>/dev/null || true
+```
+```
+FAILED: rollback merge failed: <one-line, plain-English reason — say what was confusing>
+```
 
 ## NEVER (ROLLBACK_CONFLICT mode)
 
-- ❌ Run `git merge`, `git push`, `git checkout`, `git reset`, `--no-verify`.
+- ❌ Run `git merge`, `git push`, `git checkout`, `--no-verify`. `git reset --hard HEAD^` is allowed only to undo your own empty revert as documented in Outcome B.
 - ❌ Edit anything outside `<WORKTREE_PATH>/`. Never edit `/app/...` directly, never edit `.git/` internals.
-- ❌ Refactor or rename — resolve the conflict, nothing else.
+- ❌ Drive-by refactors, prettier formatting changes, or unrelated edits. Edits must be **caused** by the revert (target additions to remove) or by a typecheck/unit/e2e failure that the revert created.
 - ❌ Dispatch agents, `TeamCreate`, `TeamDelete`, or `SendMessage` — you are solo here, exactly like SIMPLE mode.
 - ❌ Stop without either `DONE:` or `FAILED:` — the orchestrator's STATE S-MERGE relies on those literal prefixes.
