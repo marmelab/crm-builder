@@ -83,6 +83,7 @@ const TOOL_LABELS = {
   Bash:         '⚡ Running command',
   Glob:         '🔍 Searching files',
   Grep:         '🔍 Searching code',
+  SendMessage:  '✉️  Message',
   system:       '🔌 Session started',
   result:       '✅ Turn complete',
 };
@@ -854,21 +855,36 @@ function toolDetail(toolName, input) {
     case 'Bash':  return short(input.command, 80);
     case 'Grep':  return `"${input.pattern}"${input.path ? ' in ' + input.path : ''}`;
     case 'Glob':  return input.pattern;
+    case 'SendMessage': {
+      const to = input.to ? `→ ${input.to}` : '→ ?';
+      const body = (input.content || '').replace(/\s+/g, ' ').trim();
+      return body ? `${to}: ${body.length > 200 ? body.slice(0, 200) + '…' : body}` : to;
+    }
     default:      return null;
   }
 }
 
+// Substring-match fallback in agentColor() means longer keys must come first
+// (`simple-developer` before `developer`, `quality-reviewer` before `reviewer`).
 const AGENT_COLORS = {
-  planner:    '#34d399',
-  developer:  '#f97316',
+  'simple-developer': '#fb923c',
+  'quality-reviewer': '#a78bfa',
   'code-reviewer':    '#a78bfa',
   'security-reviewer':'#f43f5e',
   'test-validator':   '#38bdf8',
+  architect:          '#c084fc',
+  orchestrator:       '#fbbf24',
+  planner:            '#34d399',
+  developer:          '#f97316',
+  merger:             '#2dd4bf',
+  documentator:       '#facc15',
+  devops:             '#94a3b8',
 };
 
 function agentColor(label) {
   if (!label) return null;
   const key = label.toLowerCase();
+  if (AGENT_COLORS[key]) return AGENT_COLORS[key];
   for (const [name, color] of Object.entries(AGENT_COLORS)) {
     if (key.includes(name)) return color;
   }
