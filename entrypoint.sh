@@ -333,6 +333,6 @@ _stop() {
 }
 trap _stop TERM INT
 
-/usr/bin/supervisord -n -c /etc/supervisor/conf.d/supervisord.conf &
+/usr/bin/supervisord --user=root -n -c /etc/supervisor/conf.d/supervisord.conf &
 SUPERVISOR_PID=$!
 wait $SUPERVISOR_PID
