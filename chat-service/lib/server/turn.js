@@ -1,36 +1,7 @@
 import { on } from 'node:events';
 import { cp, copyFile, mkdir, chmod, readdir } from 'node:fs/promises';
-import { statSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { LOG_DIR, CLAUDE_HOME, CWD } from './config.js';
-
-// Slug mirrors pty-session.js PROJECT_SLUG: '/app' → '-app'
-const PROJECT_SLUG = CWD.replace(/\//g, '-');
-
-// Return true if any developer-type subagent sidechain JSONL was updated
-// within the last 120 seconds (i.e. the developer is still running its turn).
-// Used to guard PTY restarts: restarting while the developer is active severs
-// its connection and abandons the work-in-progress.
-function isDevSubagentActive(runtime) {
-  try {
-    const claudeSessionId = runtime.claudeSessionId;
-    if (!claudeSessionId) return false;
-    const subagentsDir = join(CLAUDE_HOME, '.claude', 'projects', PROJECT_SLUG, claudeSessionId, 'subagents');
-    const files = readdirSync(subagentsDir).filter(f => f.endsWith('.meta.json'));
-    const MAX_AGE_MS = 120_000; // 2 min — long enough for a slow LLM inference call
-    const now = Date.now();
-    for (const file of files) {
-      const meta = JSON.parse(readFileSync(join(subagentsDir, file), 'utf8'));
-      const agentType = meta.agentType || '';
-      // Only check developer-type agents (not planner, quality-reviewer, merger, etc.)
-      if (!agentType.startsWith('developer-') && agentType !== 'developer') continue;
-      const jsonlPath = join(subagentsDir, file.replace('.meta.json', '.jsonl'));
-      const st = statSync(jsonlPath);
-      if (now - st.mtimeMs < MAX_AGE_MS) return true; // developer active within 2 min
-    }
-    return false;
-  } catch { return false; }
-}
 import { broadcast, sendStats } from './ws-bus.js';
 import { runtimes, transitionState } from './runtime.js';
 import { snapshotTickets, sendProgress } from './ticket-progress.js';
@@ -96,30 +67,9 @@ export async function processMessage(runtime, prompt) {
     const sessionDir = `${LOG_DIR}/${runtime.session.id}`;
 
     // ── PTY lifecycle ─────────────────────────────────────────────────────────
-    // Each SubagentStop causes Claude Code to atomically replace .claude.json
-    // (backup + rename-over). This destroys the inode the orchestrator's inotify
-    // watch was monitoring for inbox delivery, causing all subsequent team
-    // messages to be silently lost.
-    //
-    // Fix: after each background_result (= orchestrator background turn end,
-    // triggered by a SubagentStop), restart the PTY with --resume IF no
-    // developer-type subagent is currently active. The fresh Claude Code process
-    // sets up new inotify watches on the current .claude.json inode and re-scans
-    // the inbox, delivering any pending messages.
-    //
-    // Guard: developer subagents are child processes of the orchestrator. Killing
-    // the orchestrator while the developer is running propagates SIGHUP to the
-    // developer, severing its connection and abandoning work-in-progress. We
-    // therefore skip the restart when a developer sidechain JSONL was updated
-    // within the last 2 minutes. The next background_result (fired when the
-    // developer eventually completes its turn and exits) retries the restart.
-    //
-    // A secondary exit-based restart (5 s delay, once per user turn) handles
-    // the rare case where the PTY itself crashes unexpectedly.
-    //
     // spawnOrResumePty() creates the PtySession, attaches the background event
-    // listener (which owns the background_result → restart path), and installs
-    // an exit handler for the crash-recovery restart.
+    // listener (which forwards background orchestrator turns to WS clients),
+    // and installs an exit handler for crash-recovery restart (once, 5 s delay).
 
     function attachBgListener(ptyRef) {
       if (ptyRef._bgAttached) return;
@@ -140,50 +90,11 @@ export async function processMessage(runtime, prompt) {
         }
         if (event.type === 'background_result') {
           sendProgress(runtime).catch(() => {});
-          // Each SubagentStop causes Claude Code to atomically replace .claude.json
-          // (backup + rename-over), destroying the inode the orchestrator's inotify
-          // watch was monitoring for inbox delivery. Without a restart, subsequent
-          // team messages (developer "ready for merge", merger wave-complete) are
-          // never delivered and the session stalls permanently.
-          //
-          // Restarting the PTY gives a fresh Claude Code process with new inotify
-          // watches on the current .claude.json inode. The new process re-scans the
-          // inbox on startup and delivers any pending messages, allowing the
-          // orchestrator to dispatch the next wave or confirm the merge.
-          //
-          // Guard: skip if a restart is already in flight — concurrent SubagentStops
-          // emitting rapid background_results coalesce into a single restart.
-          if (runtime.ptySession && !runtime.ptySession.closed && !runtime.ptyBgRestarting) {
-            // Guard: if a developer-type subagent was active within the last 2 min,
-            // the developer is still running its current turn. Killing the orchestrator
-            // PTY now would sever the developer's connection (it is a child process of
-            // the orchestrator and receives SIGHUP on PTY close), abandoning its
-            // work-in-progress and stalling the session. Skip the restart; the next
-            // background_result (fired when the developer eventually completes) will
-            // retry and succeed once the developer is idle.
-            if (isDevSubagentActive(runtime)) return;
-
-            runtime.ptyBgRestarting = true;
-            runtime.ptyRestartPending = true; // prevent runtime release during restart window
-            const ptyToKill = runtime.ptySession;
-            runtime.ptySession = null;        // exit handler sees null → skips its own restart
-            // Wait for the actual exit event rather than a fixed timer — spawning
-            // before the old process exits risks two Claude instances sharing the
-            // same session file. The inbox is persistent storage: messages written
-            // before the restart are re-delivered by the new process on startup, so
-            // no notification is lost regardless of how long the kill takes.
-            ptyToKill.once('exit', () => {
-              runtime.ptyBgRestarting = false;
-              runtime.ptyRestartPending = false;
-              if (!runtime.ptySession && !runtime.busy) {
-                spawnOrResumePty();
-              } else if (runtime.clients.size === 0 && !runtime.busy && (!runtime.ptySession || runtime.ptySession.closed)) {
-                runtime.session?.close();
-                runtimes.delete(runtime.session.id);
-              }
-            });
-            ptyToKill.kill();
-          }
+          // Claude Code delivers team-inbox messages via setInterval(1000 ms) polling
+          // (not inotify), so the orchestrator continues to receive background turns
+          // without any PTY restart. TranscriptWatcher uses fs.watchFile (stat
+          // polling) for the session JSONL, which is likewise immune to inotify
+          // issues. No restart needed here — the PTY stays alive between waves.
         }
       };
       ptyRef.on('event', bgHandler);
@@ -199,9 +110,6 @@ export async function processMessage(runtime, prompt) {
 
       runtime.ptySession.once('exit', () => {
         runtime.ptySession = null;
-        // bgHandler is managing a PTY restart (background_result path) — the
-        // 500 ms timeout owns the respawn and flag cleanup; skip normal logic.
-        if (runtime.ptyBgRestarting) return;
         const restartCount = runtime.ptyRestartCount || 0;
         if (!runtime.busy && restartCount < 1) {
           // Schedule one restart to catch pending merger / next-wave notifications.
@@ -226,10 +134,8 @@ export async function processMessage(runtime, prompt) {
       });
     }
 
-    // Each user-initiated turn gets a fresh restart budget. Reset ptyBgRestarting
-    // so background_result can trigger a restart on the first SubagentStop of this turn.
+    // Each user-initiated turn gets a fresh crash-recovery restart budget.
     runtime.ptyRestartCount = 0;
-    runtime.ptyBgRestarting = false;
 
     if (!runtime.ptySession || runtime.ptySession.closed) {
       spawnOrResumePty();

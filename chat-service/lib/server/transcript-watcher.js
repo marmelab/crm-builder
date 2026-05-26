@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { readFile, readdir, mkdir } from 'node:fs/promises';
-import { watch } from 'node:fs';
+import { watch, watchFile, unwatchFile } from 'node:fs';
 import { join, basename } from 'node:path';
 
 export class TranscriptWatcher extends EventEmitter {
@@ -8,7 +8,6 @@ export class TranscriptWatcher extends EventEmitter {
   #projectDir;
   #jsonlPath = null;
   #linesRead = 0;
-  #fileWatcher = null;
   #dirWatcher = null;
   #debounce = null;
   closed = false;
@@ -55,7 +54,7 @@ export class TranscriptWatcher extends EventEmitter {
   close() {
     this.closed = true;
     clearTimeout(this.#debounce);
-    this.#fileWatcher?.close();
+    if (this.#jsonlPath) unwatchFile(this.#jsonlPath);
     this.#dirWatcher?.close();
   }
 
@@ -130,8 +129,14 @@ export class TranscriptWatcher extends EventEmitter {
   }
 
   #watchFile() {
-    // Debounce rapid change events — JSONL writes can trigger multiple events.
-    this.#fileWatcher = watch(this.#jsonlPath, { persistent: false }, () => {
+    // Use fs.watchFile (stat-based polling) instead of fs.watch (inotify) for
+    // the session JSONL. Stat polling is immune to inotify limit exhaustion,
+    // silent error events, and atomic file replacement — all of which can cause
+    // fs.watch to silently stop delivering events with no observable error.
+    // The 500 ms interval is fine: flush() is called explicitly at every turn
+    // boundary (result / background_result), so incremental polling only needs
+    // to cover intermediate events during long turns.
+    watchFile(this.#jsonlPath, { persistent: false, interval: 500 }, () => {
       clearTimeout(this.#debounce);
       this.#debounce = setTimeout(() => this.#poll().catch(() => {}), 50);
     });
