@@ -1,7 +1,36 @@
 import { on } from 'node:events';
 import { cp, copyFile, mkdir, chmod, readdir } from 'node:fs/promises';
+import { statSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { LOG_DIR, CLAUDE_HOME, CWD } from './config.js';
+
+// Slug mirrors pty-session.js PROJECT_SLUG: '/app' → '-app'
+const PROJECT_SLUG = CWD.replace(/\//g, '-');
+
+// Return true if any developer-type subagent sidechain JSONL was updated
+// within the last 120 seconds (i.e. the developer is still running its turn).
+// Used to guard PTY restarts: restarting while the developer is active severs
+// its connection and abandons the work-in-progress.
+function isDevSubagentActive(runtime) {
+  try {
+    const claudeSessionId = runtime.claudeSessionId;
+    if (!claudeSessionId) return false;
+    const subagentsDir = join(CLAUDE_HOME, '.claude', 'projects', PROJECT_SLUG, claudeSessionId, 'subagents');
+    const files = readdirSync(subagentsDir).filter(f => f.endsWith('.meta.json'));
+    const MAX_AGE_MS = 120_000; // 2 min — long enough for a slow LLM inference call
+    const now = Date.now();
+    for (const file of files) {
+      const meta = JSON.parse(readFileSync(join(subagentsDir, file), 'utf8'));
+      const agentType = meta.agentType || '';
+      // Only check developer-type agents (not planner, quality-reviewer, merger, etc.)
+      if (!agentType.startsWith('developer-') && agentType !== 'developer') continue;
+      const jsonlPath = join(subagentsDir, file.replace('.meta.json', '.jsonl'));
+      const st = statSync(jsonlPath);
+      if (now - st.mtimeMs < MAX_AGE_MS) return true; // developer active within 2 min
+    }
+    return false;
+  } catch { return false; }
+}
 import { broadcast, sendStats } from './ws-bus.js';
 import { runtimes, transitionState } from './runtime.js';
 import { snapshotTickets, sendProgress } from './ticket-progress.js';
@@ -73,9 +102,17 @@ export async function processMessage(runtime, prompt) {
     // messages to be silently lost.
     //
     // Fix: after each background_result (= orchestrator background turn end,
-    // triggered by a SubagentStop), restart the PTY with --resume. The fresh
-    // Claude Code process sets up new inotify watches on the current .claude.json
-    // inode and re-scans the inbox, delivering any pending messages.
+    // triggered by a SubagentStop), restart the PTY with --resume IF no
+    // developer-type subagent is currently active. The fresh Claude Code process
+    // sets up new inotify watches on the current .claude.json inode and re-scans
+    // the inbox, delivering any pending messages.
+    //
+    // Guard: developer subagents are child processes of the orchestrator. Killing
+    // the orchestrator while the developer is running propagates SIGHUP to the
+    // developer, severing its connection and abandoning work-in-progress. We
+    // therefore skip the restart when a developer sidechain JSONL was updated
+    // within the last 2 minutes. The next background_result (fired when the
+    // developer eventually completes its turn and exits) retries the restart.
     //
     // A secondary exit-based restart (5 s delay, once per user turn) handles
     // the rare case where the PTY itself crashes unexpectedly.
@@ -117,6 +154,15 @@ export async function processMessage(runtime, prompt) {
           // Guard: skip if a restart is already in flight — concurrent SubagentStops
           // emitting rapid background_results coalesce into a single restart.
           if (runtime.ptySession && !runtime.ptySession.closed && !runtime.ptyBgRestarting) {
+            // Guard: if a developer-type subagent was active within the last 2 min,
+            // the developer is still running its current turn. Killing the orchestrator
+            // PTY now would sever the developer's connection (it is a child process of
+            // the orchestrator and receives SIGHUP on PTY close), abandoning its
+            // work-in-progress and stalling the session. Skip the restart; the next
+            // background_result (fired when the developer eventually completes) will
+            // retry and succeed once the developer is idle.
+            if (isDevSubagentActive(runtime)) return;
+
             runtime.ptyBgRestarting = true;
             runtime.ptyRestartPending = true; // prevent runtime release during restart window
             const ptyToKill = runtime.ptySession;
