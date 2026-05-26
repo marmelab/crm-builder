@@ -178,6 +178,24 @@ export class PtySession extends EventEmitter {
     this.#pty.write(' \x7f'); // space + backspace — net-zero text change
   }
 
+  // Send a rapid burst of nudges over ~count×intervalMs ms.
+  // Each nudge triggers a separate Ink re-render attempt. With many in-process
+  // teammates alive (each holding an AsyncLocalStorage context), a single nudge
+  // has a low probability of landing in a clean context. A burst of N nudges
+  // raises the probability dramatically: if each attempt has probability p of
+  // succeeding, the burst succeeds with probability 1-(1-p)^N.
+  nudgeBurst(count = 5, intervalMs = 40) {
+    if (this.closed || !this.#ready) return;
+    let i = 0;
+    const fire = () => {
+      if (i++ < count && !this.closed) {
+        this.#pty.write(' \x7f');
+        if (i < count) setTimeout(fire, intervalMs);
+      }
+    };
+    fire();
+  }
+
   // Watch /tmp for the sentinel file written by the Stop hook (turn-complete.sh).
   // The Stop hook fires AFTER Claude has flushed the JSONL transcript, so by
   // the time we react to the sentinel the TranscriptWatcher has already (or will

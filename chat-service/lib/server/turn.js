@@ -107,12 +107,27 @@ export async function processMessage(runtime, prompt) {
       // triggers a re-render in the orchestrator's own event-loop tick (no teammate
       // context active) → S2() = false → G28() returns the team-lead name →
       // w = true → a fresh setInterval(M, 1000) is created → delivery within 1 s.
+      //
+      // Escalation strategy: a single nudge has a low probability of landing in
+      // a clean context when many in-process teammates are alive. After 30 s of
+      // stall (10 failed single nudges), switch to burst mode: 5 rapid nudges
+      // with 40 ms spacing. The burst dramatically raises the probability that at
+      // least one nudge triggers a re-render with S2() = false.
       let watchdogTimer = null;
+      let staleCount = 0; // consecutive ticks with unread messages (stall length)
       function scheduleWatchdog() {
         watchdogTimer = setTimeout(async () => {
           if (ptyRef.closed) return; // PTY dead — stop the watchdog
           if (!runtime.busy && await hasUnreadInboxMessages()) {
-            ptyRef.nudge();
+            staleCount++;
+            if (staleCount > 10) {
+              // Stall persisted > 30 s — switch to burst mode (5 nudges × 40 ms).
+              ptyRef.nudgeBurst(5, 40);
+            } else {
+              ptyRef.nudge();
+            }
+          } else {
+            staleCount = 0; // inbox clear or session busy — reset escalation
           }
           scheduleWatchdog(); // reschedule regardless — stop only when PTY closes
         }, 3000);
