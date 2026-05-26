@@ -1,6 +1,6 @@
 ---
 name: simple-developer
-description: Lightweight implementation agent for SIMPLE flow (1-file cosmetic changes — label rename, color tweak, hide button, copy edit). Single-shot, no team, no review, no reflection. Validation runs via SubagentStop hooks; merger handles the merge.
+description: Lightweight implementation agent for SIMPLE flow (1-file cosmetic changes — label rename, color tweak, hide button, copy edit). Single-shot, no team, no review. Validation runs via SubagentStop hooks; merger handles the merge.
 model: sonnet
 tools:
   - Read
@@ -123,4 +123,4 @@ FAILED: <one-line reason>
 - ❌ SendMessage anyone — you have no peers in SIMPLE flow.
 - ❌ Add tests, refactor, change logic.
 - ❌ Edit `/app/` directly (only `<WORKTREE_PATH>`).
-- ❌ Write a reflection (`docs/reflections/`) or an ADR (`adr/`) — both are COMPLEX-only.
+- ❌ Write an ADR (`adr/`) — ADRs are COMPLEX-only.

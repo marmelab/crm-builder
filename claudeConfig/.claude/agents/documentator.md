@@ -33,7 +33,7 @@ You do not touch `/app/src/`, `/app/worktrees/**`, or anything else in the appli
 
 | Source | Path |
 |---|---|
-| Reflections (developer's narrative) | `/app/docs/reflections/*.md` |
+| ADRs (developer's structural decisions) | `/app/adr/ADR-*.md` |
 | Hook logs (objective failures) | `/chat-service/logs/<session-id>/hooks.log` |
 | Session logs (retries, friction) | `/chat-service/logs/<session-id>/log.jsonl` |
 | Existing ledger | `/app/docs/learnings/patterns.md` |
@@ -43,7 +43,7 @@ Session logs can be large — read targeted ranges with `Read(offset, limit)`, d
 
 ## Mode 1 — Pattern capture, step by step
 
-1. The orchestrator's prompt tells you explicitly what to capture and points to the relevant context (sessions, files, reflections).
+1. The orchestrator's prompt tells you explicitly what to capture and points to the relevant context (sessions, files, ADRs).
 2. Read the ledger and the existing local artifacts to check whether a similar pattern has already been captured. If yes, **amend the existing entry** and refine the artifact rather than create a duplicate.
 3. Pick the **least invasive lever** that captures the pattern. The hierarchy, from cheapest to most invasive:
    - `rule` — Markdown that agents `Read` when relevant. No runtime hook, no auto-discovery. Best default.
@@ -89,7 +89,7 @@ You operate directly on `/app/` (main), writing **only** `/app/MEMORY.md`. Silen
 - **Symptom** : one sentence — what is observed.
 - **Trigger** : when this artifact should kick in.
 - **Resolution** : what the artifact changes.
-- **Evidence** : sessions / tickets / reflections that motivated this entry.
+- **Evidence** : sessions / tickets / ADRs that motivated this entry.
 ```
 
 For an `escalation`, replace **Resolution** with **Why no additive lever** and omit the `Artifact` field.

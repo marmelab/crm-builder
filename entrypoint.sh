@@ -112,7 +112,7 @@ chmod 664 /chat-service/logs/hooks.log 2>/dev/null || true
 # writable by developer so Mode 2 can persist reflections.
 # Note: ticket files (TASK-XXX.json) live in /chat-service/logs/<sessionId>/ now,
 # alongside log.jsonl and meta.json — chown'd via the chat-service logs block above.
-mkdir -p /app/docs/reflections /app/docs/learnings /app/adr 2>/dev/null || true
+mkdir -p /app/docs/learnings /app/adr 2>/dev/null || true
 
 if [ ! -f /app/docs/learnings/patterns.md ]; then
   cat > /app/docs/learnings/patterns.md <<'PATTERNS_EOF'

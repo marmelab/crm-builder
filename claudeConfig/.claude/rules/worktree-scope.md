@@ -20,7 +20,7 @@ Each ticket gets its own git worktree at `/app/worktrees/<SESSION_SHORT_ID>/TASK
 |---|---|---|---|
 | `<WORKTREE_PATH>/**` (i.e. `/app/worktrees/<SESSION_SHORT_ID>/TASK-XXX/`) | ✅ | ✅ | ✅ |
 | `${TICKETS_DIR}/TASK-XXX.json` (per-session folder, e.g. `/chat-service/logs/<uuid>/TASK-XXX.json`) | ✅ (ticket source of truth) | ⚠️ merger writes the `status` field; developer may flip `requires_supabase_migration` if the planner was wrong — no other writes | — |
-| `/app/docs/reflections/**` | ✅ (learn from past) | ⚠️ only in Mode 2 reflection, only `/app/docs/reflections/TASK-XXX-reflection.md` | — |
+| `/app/adr/**` | ✅ (learn from past structural decisions) | ❌ (developer writes ADRs inside the worktree at `<WORKTREE_PATH>/adr/`; the merger ships them to `/app/adr/`) | — |
 | `/home/developer/.claude/**` | ✅ (skills, rules) | ❌ | — |
 
 Everything else under `/app/` — `/app/src/`, `/app/e2e/`, `/app/supabase/`, `/app/package.json`, `/app/*.ts`, `/app/*.json` — is **off-limits**. If you need information from these, read the copy inside your worktree.
@@ -63,6 +63,6 @@ Bash("npm run prettier:apply")
 
 You (almost) never do. Specific exceptions:
 - Reading the ticket JSON: `Read("${TICKETS_DIR}/TASK-XXX.json")` — source of truth, read-only. `TICKETS_DIR` is the absolute per-session path passed in your prompt; substitute the literal value (e.g. `/chat-service/logs/<uuid>/TASK-XXX.json`).
-- Reading past reflections: `Read("/app/docs/reflections/TASK-XXX-reflection.md")` (research)
+- Reading past ADRs: `Read("/app/adr/ADR-NNN-<slug>.md")` (research)
 
 If you think you need something else from `/app/`, stop and flag it to the caller. Do not silently edit `/app/` or run commands there.

@@ -47,7 +47,6 @@ Check in this order — first match wins:
 | **SETUP** | The first user turn contains `<intent>setup</intent>` (the chat UI's "Define your business" button), OR a clear natural-language signal in any language meaning "set up my CRM" / "start from scratch" / "define my business". | STATE SETUP-INTERVIEW → STATE SETUP-PLAN → then STATE B → C → D → (POST-DEV) |
 | **MODE-SWITCH** | User asks to switch data mode: "use real data", "connect my database", "switch to demo", "use sample data", etc. — no code change, system operation only. | STATE MS-RUN → STATE MS-DONE |
 | **MEMORY** | user asks to remember a way of doing something or document a recurring friction (*"remember this"*, *"document this behavior"*, *"turn this into a rule"*) — no code change | STATE M-DOC → STATE M-DONE (documentator only, no team) |
-| **ADR-ONE-OFF** | user asks to record a decision in isolation (*"save this as an ADR"*, *"record this decision"*) — no code change beyond the ADR file + one reference comment | STATE ADR-DEV → STATE ADR-MERGE → STATE ADR-DONE (developer in ADR_ONLY mode, no team, no review) |
 | **SIMPLE** | 1 cosmetic change, single file, no logic, no tests (label rename, color change, hide button, copy edit) | STATE S-DEV → STATE S-MERGE → STATE S-DONE (no POST-DEV — single-file cosmetic cannot touch the schema) |
 | **COMPLEX** | everything else (multi-file, data flow, tests, ambiguous, multiple changes) — **default** | STATE A → B → C → D → (POST-DEV) |
 
@@ -91,15 +90,13 @@ SETUP:       STATE SETUP-INTERVIEW (turn N..N+K)
                                      →  (POST-DEV check — see below)
 MODE-SWITCH: STATE MS-RUN (turn N)   →  STATE MS-DONE (turn N+1)
 MEMORY:      STATE M-DOC (turn N)    →  STATE M-DONE (turn N+1)
-ADR-ONE-OFF: STATE ADR-DEV (turn N)  →  STATE ADR-MERGE (turn N+1)
-                                      →  STATE ADR-DONE (turn N+2)
 SIMPLE:      STATE S-DEV (turn N)    →  STATE S-MERGE (turn N+1)
                                       →  STATE S-DONE (turn N+2)   [no POST-DEV]
 COMPLEX:     STATE A (turn N)        →  STATE B (turn N+1)
                                       →  STATE C (turns N+2..N+M)
                                       →  STATE D (turn N+M+1)
                                       →  (POST-DEV check — see below)
-                                      →  STATE WRAP-UP  →  STATE DONE
+                                      →  STATE DONE
 
 POST-DEV (when one or more merged tickets in this session flagged
           requires_supabase_migration: true and have not been deployed yet):
@@ -107,9 +104,6 @@ POST-DEV (when one or more merged tickets in this session flagged
                                       →  STATE PD-LIVE-ASK (turn N+2, if demo + deploy ok)
                                       →  STATE PD-LIVE-SWITCH (turn N+3, if user agreed)
                                       →  STATE PD-DONE
-
-WRAP-UP runs at the tail of COMPLEX (directly, or after POST-DEV).
-SETUP / SIMPLE / MEMORY / MODE-SWITCH / ADR-ONE-OFF skip it.
 ```
 
 **Do not skip states. Do not combine states.**
@@ -231,12 +225,12 @@ For MEMORY only. No team, no worktree, no merger.
    Agent({
      subagent_type: "documentator",
      description: "Capture: <one-line summary>",
-     prompt: "ROLE: documentator\nTICKETS_DIR: <absolute path>\nUSER_REQUEST: <user's request, verbatim>\nCONTEXT: <session ids, file paths, reflections the user pointed at — empty if none>\n\nFollow your instructions: pick the least invasive lever, write the artifact under /home/developer/.claude/local/, update the ledger. If you produce a hook, propose the settings.local.json patch in your output — do not apply it."
+     prompt: "ROLE: documentator\nTICKETS_DIR: <absolute path>\nUSER_REQUEST: <user's request, verbatim>\nCONTEXT: <session ids, file paths, ADRs the user pointed at — empty if none>\n\nFollow your instructions: pick the least invasive lever, write the artifact under /home/developer/.claude/local/, update the ledger. If you produce a hook, propose the settings.local.json patch in your output — do not apply it."
    })
    ```
 2. One text line: *"Capturing that..."*
 
-**End this turn.** The documentator runs read-only on logs/reflections, writes the artifact + ledger entry, and stops.
+**End this turn.** The documentator runs read-only on logs and ADRs, writes the artifact + ledger entry, and stops.
 
 → Enter STATE M-DONE on next turn.
 
@@ -454,52 +448,10 @@ On the **first** turn where `shutdown_approved` arrives (or after a 60s timeout)
    to STATE SETUP-DONE, which owns the recap reply and the POST-DEV check
    for the SETUP path.
 4. COMPLEX path: run the POST-DEV check. Reply with one line per ticket.
-   - Detection empty → enter STATE WRAP-UP.
-   - Detection non-empty → append the PD-ASK question, enter STATE PD-ASK. WRAP-UP runs after POST-DEV (from STATE PD-DONE).
+   - Detection empty → enter STATE DONE.
+   - Detection non-empty → append the PD-ASK question, enter STATE PD-ASK.
 
----
-
-### STATE ADR-DEV / ADR-MERGE / ADR-DONE — ADR-ONE-OFF flow
-
-User asked to record a decision (*"save this as an ADR"*) outside any active flow. Same shape as SIMPLE, but dispatches the full `developer` in ADR_ONLY mode (the `simple-developer` never writes ADRs).
-
-**ADR-DEV** (turn N):
-```
-Agent({
-  subagent_type: "developer",
-  description: "ADR: <one-line decision>",
-  prompt: "ROLE: developer (Mode 3 — ADR_ONLY)\nADR_ONLY: true\nWORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/adr\nBRANCH_NAME: adr/<SESSION_SHORT_ID>\nDECISION_SUMMARY: <user's decision>\nREFERENCE_HINT: <file>:<line> (or 'none')\n\nFollow Mode 3 ADR_ONLY in your agent file. Output DONE/FAILED. No SendMessage."
-})
-```
-Text line: *"Recording that decision..."* End turn.
-
-**ADR-MERGE** (turn N+1): on dev `DONE`, dispatch merger in SIMPLE mode with `BRANCH_NAME: adr/<SESSION_SHORT_ID>` and `WORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/adr`. On `FAILED`, skip to ADR-DONE. Text line *"Wrapping up..."*
-
-**ADR-DONE** (turn N+2): success → *"Decision recorded."* / failure → *"I couldn't record that. Want me to try again?"* No WRAP-UP after — recording an ADR is not session work.
-
-If the user requests an ADR while a COMPLEX flow is in flight, ask them to wait (*"I'll record that as soon as the current work wraps up"*) and remember it — do not interleave with an active team.
-
----
-
-### STATE WRAP-UP — automatic session-end memory synthesis
-
-Entered from STATE D (COMPLEX, POST-DEV empty) and from STATE PD-DONE. SIMPLE / MEMORY / MODE-SWITCH / ADR-ONE-OFF skip it.
-
-**Skip to STATE DONE if zero tickets merged this session** (all FAILED, or empty wave) — no diff to synthesise. Otherwise dispatch the documentator unconditionally; it decides whether anything is worth recording. Silence is the expected outcome.
-
-**ONE assistant message:**
-
-1. Dispatch:
-   ```
-   Agent({
-     subagent_type: "documentator",
-     description: "Session-end business knowledge",
-     prompt: "ROLE: documentator (Mode 2)\nSESSION_LOG: /chat-service/logs/<session-id>/log.jsonl\nSESSION_DIFF_BASE: origin/main\nreason: business-knowledge"
-   })
-   ```
-2. No user-visible text.
-
-End turn. On the next turn, ignore the documentator's reply and enter STATE DONE.
+Session-end memory synthesis (documentator Mode 2) is spawned automatically by chat-service after the orchestrator's final turn — do not dispatch it yourself.
 
 ---
 
@@ -531,7 +483,7 @@ Bash("pending-deploys ${TICKETS_DIR}")
 
 Prints `TASK-XXX` ids that are `status: merged`, `requires_supabase_migration: true`, and not yet in `.deploy-applied`.
 
-- Empty output → reply normally, then enter STATE WRAP-UP (COMPLEX) or STATE DONE (SETUP).
+- Empty output → reply normally, then enter STATE DONE.
 - Non-empty output → carry the pending ids in context, enter STATE PD-ASK.
 
 ### STATE PD-ASK — offer to deploy to the real database
@@ -632,7 +584,7 @@ stay pending and the question reappears after the next dev wave. **End.**
 
 ### STATE PD-DONE — POST-DEV wrap
 
-Already wraps every successful PD branch with the user-facing reply. After replying, enter STATE WRAP-UP.
+Already wraps every successful PD branch with the user-facing reply. After replying, enter STATE DONE.
 
 ---
 
@@ -649,7 +601,7 @@ Already wraps every successful PD branch with the user-facing reply. After reply
 - ❌ Dispatch more than 5 tickets in a single STATE B pass — cap at 5, loop through the remainder.
 - ❌ Write or Edit any file **except** `/app/docs/project-context.json` during SETUP-INTERVIEW. The `Write` / `Edit` tools are only for that one file in that one state.
 - ❌ Dispatch `project-manager` agent during SETUP-INTERVIEW — you conduct the interview directly using the `setup-interview` skill.
-- ❌ `Write` / `Edit` `/app/MEMORY.md` or any `/app/adr/*` yourself. Documentator owns MEMORY.md (STATE WRAP-UP); developer owns adr/ (worktree merges, STATE ADR-DEV). Read for context, never write.
+- ❌ `Write` / `Edit` `/app/MEMORY.md` or any `/app/adr/*` yourself. Documentator owns MEMORY.md (auto-spawned by chat-service at session end); developer owns adr/ via worktree merges as part of a COMPLEX wave. Read for context, never write.
 
 ---
 

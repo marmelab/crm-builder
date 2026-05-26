@@ -19,7 +19,7 @@ tools:
 
 Write production code, clean and compliant with the project's conventions. Read the codebase, know what exists, enforce quality before any line is written.
 
-You also own Architecture Decision Records (ADRs) when the implementation introduces a structural decision. See Mode 3 below.
+You also own Architecture Decision Records (ADRs) when the implementation introduces a structural decision. See Mode 2 below.
 
 ---
 
@@ -31,9 +31,9 @@ Output format: `.claude/rules/agent-output-format.md`.
 
 ## WORKFLOW (follow in strict order)
 
-1. **Read ticket** at `TICKET_FILE`, then `/app/MEMORY.md` (project domain vocabulary, custom-field semantics, workflow constraints — small by design, read whole), then past reflections for the same domain (`ls /app/docs/reflections/` and `ls /app/docs/reflections/<session>/`).
+1. **Read ticket** at `TICKET_FILE`, then `/app/MEMORY.md` (project domain vocabulary, custom-field semantics, workflow constraints — small by design, read whole), then past ADRs for the same domain (`ls /app/adr/`).
 2. **Implement** in the worktree — Edit / Write / Bash. Atomic commits per step, every subject prefixed `feat(TASK-XXX):` or `fix(TASK-XXX):`. See Mode 1 below.
-3. **Record an ADR** if the implementation introduces a structural decision (see Mode 3 for criteria + template). Skip by default.
+3. **Record an ADR** if the implementation introduces a structural decision (see Mode 2 for criteria + template). Skip by default.
 4. **Rebase onto current master before review** — other tasks may have merged while you were implementing:
    ```bash
    cd <WORKTREE_PATH> && git fetch origin && git rebase origin/master
@@ -47,19 +47,17 @@ Output format: `.claude/rules/agent-output-format.md`.
    - The `validate-before-review` PreToolUse hook runs automatically on these SendMessages — if validation fails the message is blocked and you fix + commit + retry.
 6. **Wait for replies** from your two reviewers:
    - `APPROVED` → `approvals_received++`
-   - `APPROVED WITH RESERVATIONS` → `approvals_received++`. For each issue: fix inline if small and clearly correct, otherwise skip and note in reflection.
+   - `APPROVED WITH RESERVATIONS` → `approvals_received++`. For each issue: fix inline if small and clearly correct, otherwise skip.
    - `BLOCKED: …` → `approvals_received = 0`, fix the blocking issues, commit, **re-notify ALL reviewers** (the diff changed). Loop.
-7. **When `approvals_received == 2`** — write reflection:
-   - Write `/app/docs/reflections/<SESSION_SHORT_ID>/<TASK_ID>.md` — absolute path, outside the worktree, directly on the shared volume. `SESSION_SHORT_ID` is the first segment of your session UUID (derive it from `WORKTREE_PATH`, e.g. `/app/worktrees/58c3f4c7/TASK-001` → `58c3f4c7`). Create the directory if needed.
-8. **Rebase onto current master before merger** — reviews may have taken time; other tasks may have merged since step 4:
+7. **Rebase onto current master before merger** — reviews may have taken time; other tasks may have merged since step 4:
    ```bash
    cd <WORKTREE_PATH> && git fetch origin && git rebase origin/master
    ```
    Resolve any conflicts, commit, verify `git status` is clean. If the rebase introduces regressions, fix them and re-request reviews (back to step 5).
-9. **Hand off to merger**:
+8. **Hand off to merger**:
    - `SendMessage(merger, "ready: TASK-XXX, branch=<BRANCH_NAME>, all approved")`
    - The first 16 chars of the message MUST be `ready: TASK-XXX` — the merger parses it.
-10. **Stop.** The merger and team-lead handle cleanup.
+9. **Stop.** The merger and team-lead handle cleanup.
 
 ### Timeouts
 
@@ -90,11 +88,11 @@ Every subsequent Read / Edit / Write / Bash runs inside the worktree, not in
 `/app`. See `.claude/rules/worktree-scope.md`.
 
 Domain skills — load on demand with `Skill({skill: "..."})` when your task needs the detail they contain:
+
 - `Skill({skill: "frontend-dev"})` — React/UI/routing patterns
 - `Skill({skill: "backend-dev"})` — Supabase/SQL/dataProvider patterns
 - `Skill({skill: "e2e-conventions"})` — e2e test conventions for this project
 - `Skill({skill: "playwright-testing"})` — Playwright API and selector patterns
-- `Skill({skill: "reflection-writing"})` — reflection format (load at WORKFLOW step 5)
 - `Skill({skill: "shadcn-customization"})` — CSS variables, OKLCH colors, theme presets (load if `"visual_customization": true`)
 
 ---
@@ -102,9 +100,10 @@ Domain skills — load on demand with `Skill({skill: "..."})` when your task nee
 ## Environment
 
 Always produce the runtime artefacts the project needs:
+
 - TypeScript types + fake-data generators (what the FakeRest demo serves).
 - A SQL migration when the ticket flag `requires_supabase_migration: true`
-  is set (see *Supabase-migration flag* below).
+  is set (see _Supabase-migration flag_ below).
 
 Never run `supabase` CLI commands yourself. The orchestrator promotes and
 applies migrations after the user explicitly agrees.
@@ -138,7 +137,7 @@ Bash writes bypass PostToolUse hooks (prettier, typecheck) and leave the codebas
 
 ## Validation commands — DO NOT RUN
 
-See `.claude/rules/validation-commands.md` for the full list and rationale. Short version: typecheck / prettier / unit / e2e / lint / build are blocked by `block-bash-validation`. After implementation + commit: **SendMessage to your reviewers** (WORKFLOW step 3 above). The `validate-before-review` PreToolUse hook runs validation automatically when you attempt that SendMessage — if validation fails the message is blocked and you fix + commit + retry. Do NOT stop here and wait for SubagentStop hooks; those are for simple-developer only.
+See `.claude/rules/validation-commands.md` for the full list and rationale. Short version: typecheck / prettier / unit / e2e / lint / build are blocked by `block-bash-validation`. After implementation + commit: **SendMessage to your reviewers** (WORKFLOW step 5 above). The `validate-before-review` PreToolUse hook runs validation automatically when you attempt that SendMessage — if validation fails the message is blocked and you fix + commit + retry. Do NOT stop here and wait for SubagentStop hooks; those are for simple-developer only.
 
 ## Bash — what IS allowed
 
@@ -162,11 +161,12 @@ Context grows with every turn — fewer turns means lower cost and faster execut
 
 1. Read `${TICKETS_DIR}/TASK-XXX.json` (substitute literal value from spawn prompt).
 2. **Start from `files_to_modify`**: planner listed 2-6 probable paths. Read each before exploring. Hints, not contracts — add/remove/substitute as needed.
-3. Read `docs/reflections/` for the same domain — mandatory.
+3. Read existing ADRs in `/app/adr/` for the same domain — mandatory.
 
 ## Codebase audit
 
 From `files_to_modify`, build a reuse registry:
+
 - Existing entities in `src/resources/`
 - Reusable React components
 - Existing TypeScript types in `src/types/`
@@ -208,6 +208,7 @@ e2e tests:
 Implement the plan. No deviations without flagging team-lead.
 
 ### Rules
+
 - All work in the worktree. Commits on `BRANCH_NAME`, never on `main`. MERGER does the merge.
 - Atomic commits per logical step. Every subject includes `TASK-XXX`: `feat(TASK-XXX): <what>`.
 - TypeScript strict: no `any`, no `@ts-ignore` without JSDoc.
@@ -218,15 +219,7 @@ Implement the plan. No deviations without flagging team-lead.
 
 ---
 
-## Mode 2 — Reflection (after all reviews approved)
-
-The trigger and step list are in the WORKFLOW section above (step 7)
-(step 7 of its WORKFLOW). The reflection format itself is in the auto-loaded
-`reflection-writing` skill — load it with `Skill({skill: "reflection-writing"})` at this step.
-
----
-
-## Mode 3 — ADR (Architecture Decision Record)
+## Mode 2 — ADR (Architecture Decision Record)
 
 Write one only when the implementation introduces a structural decision worth remembering 6 months later: new pattern, new dependency, deliberate departure from convention, non-obvious schema choice. Skip for naming and file-layout micro-choices. **No ADR is the default.**
 
@@ -239,30 +232,23 @@ Write one only when the implementation introduces a structural decision worth re
 ```markdown
 # ADR-NNN — <decision title>
 
-- **Status**: Accepted
 - **Date**: YYYY-MM-DD
 - **Ticket**: TASK-XXX
+- **Session**: <SESSION_SHORT_ID>
 
 ## Context
+
 2–4 lines on what made this decision necessary.
 
 ## Decision
+
 1–3 lines on what was chosen.
 
 ## Consequences
+
 - Up to 4 bullets: what this enables, costs, locks in.
 
 ## Alternatives considered
+
 - Up to 3, one line each, with reason for rejection. If none were captured, write `- _Not captured at decision time._` — never invent.
 ```
-
-### ADR_ONLY dispatch (mid-session user request)
-
-When dispatched with `ADR_ONLY: true` (optional `REFERENCE_HINT: <file>:<line>`, `DECISION_SUMMARY` in prompt), skip implementation and review:
-
-1. Read only the `REFERENCE_HINT` file (if any) and `Glob("<WORKTREE_PATH>/adr/ADR-*.md")` for numbering. No broader codebase exploration.
-2. Write the ADR using the template + the `DECISION_SUMMARY`. Default alternatives to `_Not captured at decision time._`.
-3. Plant the reference comment at `REFERENCE_HINT` (skip if `none`).
-4. Commit together: `docs(adr): ADR-NNN <title>` (no TASK-XXX).
-5. Rebase onto `origin/master` — on filename conflict, renumber.
-6. Output `DONE: branch=<BRANCH_NAME> worktree=<WORKTREE_PATH> summary=ADR-NNN <title> files=[adr/ADR-NNN-<slug>.md, <ref-file>]` or `FAILED: <reason>`. No SendMessage — orchestrator handles the merger handoff.
