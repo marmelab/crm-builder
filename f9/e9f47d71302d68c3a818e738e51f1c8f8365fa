@@ -1,0 +1,22 @@
+chat-service/lib/server/rollback.js
+  s_14c0cd6e14ae19::t_9963961c8d024e 68-76,78,80,83,85-87,99-100,103
+chat-service/public/lib/rollback/index.js
+  s_14c0cd6e14ae19::t_2ffb668831ed33 37-40,44,50
+  s_14c0cd6e14ae19::t_4d6633e55921df 45
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "f9e9f47d71302d68c3a818e738e51f1c8f8365fa",
+  "prompts": {},
+  "sessions": {
+    "s_14c0cd6e14ae19": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "696d86e9-1892-48ea-8e69-45d8b5037be8",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Jerome <jerome@marmelab.com>"
+    }
+  }
+}
