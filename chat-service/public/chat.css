@@ -78,15 +78,16 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
 #mode-toggle {
   display: flex; align-items: center; gap: 8px;
   width: 100%; padding: 10px 14px;
-  background: none; border: none; border-bottom: 1px solid #2c2c2e;
+  margin-top: auto;
+  background: none; border: none; border-top: 1px solid #2c2c2e;
   color: #8e8e93; cursor: pointer;
   font-family: inherit; font-size: 13px; font-weight: 500; text-align: left;
   transition: background .15s, color .15s;
 }
 .mode-toggle-icon { display: block; flex-shrink: 0; transition: color .2s; }
 #mode-toggle.mode-full { color: #34d399; }
-#mode-toggle.mode-starting { color: #fbbf24; }
-#mode-toggle:hover { background: #2c2c2e; color: #fff; }
+#mode-toggle:hover:not(:disabled) { background: #2c2c2e; color: #fff; }
+#mode-toggle:disabled { opacity: 0.45; cursor: not-allowed; }
 /* Collapsed: icon only, centered — mirrors #chat-new collapsed style */
 #chat-history-panel.collapsed #mode-toggle { justify-content: center; padding: 10px 0; }
 #chat-history-panel.collapsed #mode-toggle .mode-toggle-label { display: none; }
@@ -125,7 +126,6 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
 #history-download-btn {
   display: flex; align-items: center; gap: 8px;
   width: 100%; padding: 10px 14px;
-  margin-top: auto;
   background: none; border: none;
   border-top: 1px solid #2c2c2e;
   color: #8e8e93; cursor: pointer;
