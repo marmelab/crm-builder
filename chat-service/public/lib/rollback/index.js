@@ -35,15 +35,15 @@ export function initRollback({ getSessionId, appendMessage }) {
       const sessionTitle = document.getElementById('chat-title')?.textContent?.trim();
 
       // If undoing any of this session's commits would conflict against the
-      // current state of the project, warn the user — the agent will still
-      // try, but the result may not be what they expect.
+      // current state of the project, warn the user — undoing may also
+      // remove modifications made after this session, or fail entirely.
       const willConflict = data.commits.some((c) => c.wouldConflict);
-      const baseBody = sessionTitle
-        ? `Every change made in the session "${sessionTitle}" will be undone. Other sessions stay untouched.`
-        : 'Every change made in this session will be undone. Other sessions stay untouched.';
+      const intro = sessionTitle
+        ? `Every change made in the session "${sessionTitle}" will be undone.`
+        : 'Every change made in this session will be undone.';
       const body = willConflict
-        ? `${baseBody}\n\nSome of this session's work was changed again later. The undo might not give the result you expect, or may fail.`
-        : baseBody;
+        ? `${intro}\n\nOther changes made after this session may also be removed, or the undo may fail.`
+        : `${intro} Other sessions stay untouched.`;
       const ok = await openConfirmModal({
         title: 'Undo this session?',
         body,
