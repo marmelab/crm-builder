@@ -45,11 +45,5 @@ services:
       - "${PORT_CRM:-5173}:5173"
       - "${PORT_CHAT:-8080}:8080"
 
-# Pin `claude-auth` to a fixed name so OAuth credentials are shared across
-# every multi-instance stack. Without this, `-p <instance>` would namespace
-# the volume (e.g. feat-x_claude-auth), forcing a fresh OAuth flow for each
-# branch. The base stack (no -p) still uses its own crm-builder_claude-auth,
-# so expect a one-time OAuth on the first multi-instance launch.
-volumes:
-  claude-auth:
-    name: atomic-crm-claude-auth
+# `claude-auth` is pinned in docker-compose.yml (name: atomic-crm-claude-auth)
+# so OAuth credentials are shared across the base stack and every -p instance.
