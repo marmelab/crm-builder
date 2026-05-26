@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help build up up-full down wipe restart restart-full logs shell claude test test-unit test-smoke bench bench-update clean-sessions reset \
+.PHONY: help build up up-full up-instance down down-instance wipe restart restart-full logs shell claude test test-unit test-smoke bench bench-update clean-sessions reset \
         start demo full stop kill image log tail bash exec tests smoke clean archive reload
 
 # Detect running container — used by claude/shell targets
@@ -18,8 +18,25 @@ up: ## Start in demo mode (FakeRest, no Supabase)
 up-full: ## Start in full mode (Supabase)
 	MODE=full docker compose up
 
+up-instance: ## Start a named instance: make up-instance INSTANCE=feat-x CRM=5174 CHAT=8081
+	@if [ -z "$(INSTANCE)" ] || [ -z "$(CRM)" ] || [ -z "$(CHAT)" ]; then \
+		echo "Usage: make up-instance INSTANCE=<name> CRM=<host-port> CHAT=<host-port>"; \
+		exit 1; \
+	fi
+	INSTANCE=$(INSTANCE) PORT_CRM=$(CRM) PORT_CHAT=$(CHAT) \
+	docker compose -p $(INSTANCE) \
+	  -f docker-compose.yml -f docker-compose.multi.yml up
+
 down: ## Stop container (graceful Supabase teardown if needed)
 	./scripts/down.sh
+
+down-instance: ## Stop a named instance: make down-instance INSTANCE=feat-x
+	@if [ -z "$(INSTANCE)" ]; then \
+		echo "Usage: make down-instance INSTANCE=<name>"; \
+		exit 1; \
+	fi
+	docker compose -p $(INSTANCE) \
+	  -f docker-compose.yml -f docker-compose.multi.yml down
 
 wipe: ## Stop container AND remove all volumes (wipes crm checkout, deps, sessions)
 	./scripts/down.sh -v
