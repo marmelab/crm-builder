@@ -1,0 +1,22 @@
+docker-compose.multi.yml
+  s_292a7a4a9a028c::t_35f43ed12987ba 1-46
+Makefile
+  s_292a7a4a9a028c::t_0d8912f8d4d208 3
+  s_292a7a4a9a028c::t_140f30995a95cb 21-29,33-39
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "3af46cba1a7df538a9f41044866ddfb66120114c",
+  "prompts": {},
+  "sessions": {
+    "s_292a7a4a9a028c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7c7f6679-fe7f-4e61-a675-ed4230b73454",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Jerome <jerome@marmelab.com>"
+    }
+  }
+}
