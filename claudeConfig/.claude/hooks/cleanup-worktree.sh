@@ -37,27 +37,31 @@ while IFS= read -r line; do
     CURRENT_BRANCH="${line#branch refs/heads/}"
   elif [[ -z "$line" ]]; then
     if [[ "$CURRENT_PATH" == "$WORKTREE_BASE"/* ]] || [[ "$CURRENT_PATH" == "$WORKTREE_BASE" ]]; then
-      # Only remove if the branch has developer commits AND is merged into master.
-      # Two separate checks are required:
-      # - A detached HEAD has no branch name to check.
-      # - A freshly created branch (no commits yet) has HEAD == master, so
-      #   git branch --merged master would flag it as merged; check for commits
-      #   first to avoid removing a worktree the developer just started on.
-      # - An unmerged branch with commits must be preserved until the merger runs.
+      # Only remove if the branch is merged into master OR has no commits.
+      # Check order matters:
+      # 1. Detached HEAD — no branch name, skip.
+      # 2. Merged — remove immediately. After git merge --no-ff, all branch
+      #    commits are reachable from master, so git log master..branch is
+      #    EMPTY even though real work was done. Checking --merged first
+      #    avoids the SKIP-NO-COMMITS false-positive that caused worktrees to
+      #    survive after a successful merge.
+      # 3. Not merged + no commits ahead — freshly created branch (HEAD ==
+      #    master), skip so the developer can still use it.
+      # 4. Not merged + has commits — merger hasn't run yet, preserve.
       if [ -z "$CURRENT_BRANCH" ]; then
         echo "[$(date -Iseconds)] cleanup-worktree SKIP-DETACHED $CURRENT_PATH (detached HEAD)" >> "$LOG" 2>/dev/null || true
         SKIPPED=$((SKIPPED + 1))
         continue
       fi
-      AHEAD=$(git -C /app log --oneline "master..$CURRENT_BRANCH" 2>/dev/null | head -1 || true)
-      if [ -z "$AHEAD" ]; then
-        echo "[$(date -Iseconds)] cleanup-worktree SKIP-NO-COMMITS $CURRENT_PATH branch=$CURRENT_BRANCH" >> "$LOG" 2>/dev/null || true
-        SKIPPED=$((SKIPPED + 1))
-        continue
-      fi
       IS_MERGED=$(git -C /app branch --merged master 2>/dev/null | grep -F " $CURRENT_BRANCH" | head -1 || true)
       if [ -z "$IS_MERGED" ]; then
-        echo "[$(date -Iseconds)] cleanup-worktree SKIP-UNMERGED $CURRENT_PATH branch=$CURRENT_BRANCH" >> "$LOG" 2>/dev/null || true
+        # Not yet merged — only skip if the branch has commits to preserve.
+        AHEAD=$(git -C /app log --oneline "master..$CURRENT_BRANCH" 2>/dev/null | head -1 || true)
+        if [ -z "$AHEAD" ]; then
+          echo "[$(date -Iseconds)] cleanup-worktree SKIP-NO-COMMITS $CURRENT_PATH branch=$CURRENT_BRANCH" >> "$LOG" 2>/dev/null || true
+        else
+          echo "[$(date -Iseconds)] cleanup-worktree SKIP-UNMERGED $CURRENT_PATH branch=$CURRENT_BRANCH" >> "$LOG" 2>/dev/null || true
+        fi
         SKIPPED=$((SKIPPED + 1))
         continue
       fi
