@@ -65,31 +65,26 @@ async function listActiveSessionCommits(sessionId) {
   return { session, commits };
 }
 
-// For a single SHA, list later commits on the base branch that touch any of
-// the same files. Used by the UI to warn the user *before* clicking Undo
-// that this session's changes have been extended by later work — and that
-// a revert may conflict or remove pieces they didn't ask to remove.
-async function overlappingLaterCommits(sha) {
+// Simulates `git revert -m 1 <sha>` against current HEAD without touching
+// the working tree. Returns true iff the revert would produce conflict
+// markers. Uses modern `git merge-tree` (Git ≥ 2.38): a 3-way merge where
+// merge-base = <sha>, ours = HEAD, theirs = <sha>'s first parent (the
+// pre-merge state) — the exact tree git produces for a `revert -m 1`.
+//
+// Exit codes: 0 = clean, 1 = conflict, ≥2 = error (treat as "unknown" →
+// no warning, don't block the user on tooling).
+async function wouldRevertConflict(sha) {
   try {
-    const { stdout: files } = await execFileAsync(
+    await execFileAsync(
       'git',
-      ['-C', CWD, 'show', '--name-only', '--pretty=format:', sha],
+      ['-C', CWD, 'merge-tree', `--merge-base=${sha}`, 'HEAD', `${sha}^1`],
       GIT_BUF,
     );
-    const fileList = files.split('\n').map((s) => s.trim()).filter(Boolean);
-    if (fileList.length === 0) return [];
-    const { stdout: laterLog } = await execFileAsync(
-      'git',
-      ['-C', CWD, 'log', `${sha}..HEAD`, '--format=%H%x09%s', '--', ...fileList],
-      GIT_BUF,
-    );
-    return laterLog.split('\n').filter(Boolean).map((line) => {
-      const [laterSha, subject] = line.split('\t');
-      return { sha: laterSha, subject };
-    });
+    return false;
   } catch (err) {
-    console.warn('[rollback] overlappingLaterCommits failed for', sha, ':', err.message);
-    return [];
+    if (err.code === 1) return true;
+    console.warn('[rollback] wouldRevertConflict failed for', sha, ':', err.message);
+    return false;
   }
 }
 
@@ -101,11 +96,11 @@ export async function handleSessionCommitsRequest(req, res, sessionId) {
   }
   try {
     const { commits } = await listActiveSessionCommits(sessionId);
-    // For each commit, find later commits on the base branch that touch the
-    // same files — Promise.all keeps it linear-ish even with N commits.
+    // For each commit, dry-run its revert to know whether it would conflict.
+    // Parallel because each call is independent (read-only against the repo).
     const enriched = await Promise.all(commits.map(async (c) => ({
       ...c,
-      overlappingLaterCommits: await overlappingLaterCommits(c.sha),
+      wouldConflict: await wouldRevertConflict(c.sha),
     })));
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ sessionId, commits: enriched }));
