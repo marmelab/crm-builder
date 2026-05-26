@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help build up up-full up-instance down down-instance wipe restart restart-full logs shell claude test test-unit test-smoke bench bench-update clean-sessions reset \
+.PHONY: help build build-instance up up-full up-instance down down-instance wipe restart restart-full logs shell claude test test-unit test-smoke bench bench-update clean-sessions reset \
         start demo full stop kill image log tail bash exec tests smoke clean archive reload
 
 # Resolve the target container for claude/shell. Prefer INSTANCE=<name>;
@@ -33,18 +33,25 @@ help: ## Show this help
 build: ## Build the atomic-crm-dev Docker image
 	docker build -t atomic-crm-dev .
 
+build-instance: ## Build a uniquely-tagged image for a worktree: make build-instance TAG=wt1
+	@if [ -z "$(TAG)" ]; then \
+		echo "Usage: make build-instance TAG=<name>"; \
+		exit 1; \
+	fi
+	docker build -t atomic-crm-dev:$(TAG) .
+
 up: ## Start in demo mode (FakeRest, no Supabase)
 	docker compose up
 
 up-full: ## Start in full mode (Supabase)
 	MODE=full docker compose up
 
-up-instance: ## Start a named instance: make up-instance INSTANCE=feat-x CRM=5174 CHAT=8081
+up-instance: ## Start a named instance: make up-instance INSTANCE=feat-x CRM=5174 CHAT=8081 [IMAGE=atomic-crm-dev:feat-x]
 	@if [ -z "$(INSTANCE)" ] || [ -z "$(CRM)" ] || [ -z "$(CHAT)" ]; then \
-		echo "Usage: make up-instance INSTANCE=<name> CRM=<host-port> CHAT=<host-port>"; \
+		echo "Usage: make up-instance INSTANCE=<name> CRM=<host-port> CHAT=<host-port> [IMAGE=<tag>]"; \
 		exit 1; \
 	fi
-	INSTANCE=$(INSTANCE) PORT_CRM=$(CRM) PORT_CHAT=$(CHAT) \
+	INSTANCE=$(INSTANCE) PORT_CRM=$(CRM) PORT_CHAT=$(CHAT) IMAGE=$(IMAGE) \
 	docker compose -p $(INSTANCE) \
 	  -f docker-compose.yml -f docker-compose.multi.yml up
 
