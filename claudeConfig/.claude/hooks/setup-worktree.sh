@@ -34,18 +34,23 @@ APP_DIR=${APP_DIR:-/app}
 BASE=$(git -C "$APP_DIR" symbolic-ref --short HEAD 2>/dev/null || echo main)
 
 # Create the per-session integration branch, its fixed fork anchor, and the
-# integration worktree exactly once. The anchor ref never moves and is the
-# stable diff baseline for migrations (later phase).
+# integration worktree. The anchor ref never moves and is the stable diff
+# baseline for migrations (later phase). Branch creation and worktree creation
+# are guarded independently so a partial failure retries on the next invocation.
+SESSION_WT="${APP_DIR}/worktrees/${SESSION_SHORT}/_session"
 if ! git -C "$APP_DIR" show-ref --verify --quiet "refs/heads/session/${SESSION_SHORT}"; then
   git -C "$APP_DIR" branch "session/${SESSION_SHORT}"      "$BASE" 2>/dev/null || true
   git -C "$APP_DIR" branch "session-base/${SESSION_SHORT}" "$BASE" 2>/dev/null || true
-  SESSION_WT="${APP_DIR}/worktrees/${SESSION_SHORT}/_session"
-  if [ ! -d "$SESSION_WT" ]; then
-    mkdir -p "$(dirname "$SESSION_WT")"
-    git -C "$APP_DIR" worktree add "$SESSION_WT" "session/${SESSION_SHORT}" 2>/dev/null || true
-    [ -e "$SESSION_WT/node_modules" ] || cp -al "${APP_DIR}/node_modules" "$SESSION_WT/node_modules" 2>/dev/null || true
+fi
+if [ ! -d "$SESSION_WT" ]; then
+  mkdir -p "$(dirname "$SESSION_WT")"
+  git -C "$APP_DIR" worktree add "$SESSION_WT" "session/${SESSION_SHORT}" 2>/dev/null || true
+  [ -e "$SESSION_WT/node_modules" ] || cp -al "${APP_DIR}/node_modules" "$SESSION_WT/node_modules" 2>/dev/null || true
+  if [ -d "$SESSION_WT" ]; then
+    echo "[$(date -Iseconds)] setup-worktree SESSION-BRANCH created session/${SESSION_SHORT} from $BASE" >> "$LOG" 2>/dev/null || true
+  else
+    echo "[$(date -Iseconds)] setup-worktree SESSION-BRANCH FAILED _session worktree session/${SESSION_SHORT}" >> "$LOG" 2>/dev/null || true
   fi
-  echo "[$(date -Iseconds)] setup-worktree SESSION-BRANCH created session/${SESSION_SHORT} from $BASE" >> "$LOG" 2>/dev/null || true
 fi
 
 STDIN=$(cat)

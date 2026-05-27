@@ -11,6 +11,7 @@ assert() { # label, condition-exit
 }
 
 TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
 export APP_DIR="$TMP/app"
 mkdir -p "$APP_DIR"
 git -C "$APP_DIR" init -q -b main
@@ -31,6 +32,9 @@ test -d "$APP_DIR/worktrees/ab12cd34/TASK-001"; assert "task worktree created" $
 # Task branch must fork from the session branch, not main directly:
 git -C "$APP_DIR" merge-base --is-ancestor session/ab12cd34 ab12cd34/TASK-001 2>/dev/null; assert "task branch forked from session branch" $?
 
+# Restart scenario: a second dispatch with the same session must be a no-op (exit 0).
+echo '{"agent_type":"developer-TASK-001"}' | bash "$HOOK" >/dev/null 2>&1
+assert "idempotent second run exits 0" $?
+
 echo "PASS=$PASS FAIL=$FAIL"
-rm -rf "$TMP"
 [ "$FAIL" = "0" ]
