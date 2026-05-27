@@ -1,0 +1,24 @@
+claudeConfig/.claude/hooks/test/setup-worktree.test.sh
+  s_3e8f094224eb5f::t_b9d1422ebfa1db 1-36
+claudeConfig/.claude/hooks/setup-worktree.sh
+  s_3e8f094224eb5f::t_e9e84b3883abeb 33-50
+  s_3e8f094224eb5f::t_f2b62be8385a5d 57,60
+  s_3e8f094224eb5f::t_1de8981873db10 70,75,85-86,90
+  s_3e8f094224eb5f::t_9ac7f1878c0459 103
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "1b607966d939b9266649064b46c917e372d20ea8",
+  "prompts": {},
+  "sessions": {
+    "s_3e8f094224eb5f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aae53a2f-811a-427c-8791-ed3cc87bdd33",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Jerome <jerome@marmelab.com>"
+    }
+  }
+}
