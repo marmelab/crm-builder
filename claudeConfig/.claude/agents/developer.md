@@ -34,12 +34,12 @@ Output format: `.claude/rules/agent-output-format.md`.
 1. **Read ticket** at `TICKET_FILE`, then `/app/MEMORY.md` (project domain vocabulary, custom-field semantics, workflow constraints — small by design, read whole), then past ADRs for the same domain (`ls /app/adr/`).
 2. **Implement** in the worktree — Edit / Write / Bash. Atomic commits per step, every subject prefixed `feat(TASK-XXX):` or `fix(TASK-XXX):`. See _Implementation rules_ below.
 3. **Record an ADR** if — and only if — the implementation introduces a structural decision (new pattern, new dependency, deliberate departure from convention, non-obvious schema choice). Skip by default. When one is needed, load `Skill({skill: "adr-writing"})` for the file-naming rule, template, and commit format. The ADR lands inside your worktree (the merger ships it to `/app/adr/` like any other change).
-4. **Rebase onto current main before review** — other tasks may have merged while you were implementing:
+4. **Rebase onto the session branch before review** — sibling tasks merge into `session/<SESSION_SHORT_ID>` (not main) while you work, so rebase onto it. Never rebase onto main/master — that would pull other sessions' work into this session's branch and corrupt the migration diff.
    ```bash
-   cd <WORKTREE_PATH> && git fetch origin main --quiet && git rebase origin/main
+   cd <WORKTREE_PATH> && git rebase session/<SESSION_SHORT_ID>
    ```
    Resolve any conflicts, then `git add` + `git rebase --continue`. Commit the result if needed.
-   Only proceed once `git status` shows a clean tree on top of the latest `origin/main`.
+   Only proceed once `git status` shows a clean tree on top of the latest `session/<SESSION_SHORT_ID>`.
 5. **Request review** (both at once):
    - `SendMessage(quality-reviewer-TASK-XXX, "ready, please review")`
    - `SendMessage(test-validator-TASK-XXX, "ready, please validate")`
@@ -49,9 +49,9 @@ Output format: `.claude/rules/agent-output-format.md`.
    - `APPROVED` → `approvals_received++`
    - `APPROVED WITH RESERVATIONS` → `approvals_received++`. For each issue: fix inline if small and clearly correct, otherwise skip.
    - `BLOCKED: …` → `approvals_received = 0`, fix the blocking issues, commit, **re-notify ALL reviewers** (the diff changed). Loop.
-7. **Rebase onto current main before merger** — reviews may have taken time; other tasks may have merged since step 4:
+7. **Rebase onto the session branch before merger** — reviews may have taken time; sibling tasks may have merged into `session/<SESSION_SHORT_ID>` since step 4:
    ```bash
-   cd <WORKTREE_PATH> && git fetch origin main --quiet && git rebase origin/main
+   cd <WORKTREE_PATH> && git rebase session/<SESSION_SHORT_ID>
    ```
    Resolve any conflicts, commit, verify `git status` is clean. If the rebase introduces regressions, fix them and re-request reviews (back to step 5).
 8. **Hand off to merger**:
