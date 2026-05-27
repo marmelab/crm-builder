@@ -351,6 +351,8 @@ TICKETS_DIR: <absolute per-session path>
 Output: "DONE: commit=<short sha>. files=[<paths>]" OR "FAILED: <reason>"
 ```
 
+The SIMPLE merger does Stage A (branch → session branch) then PROMOTION (Stage B: session branch → main) in one shot, so its `DONE` sha is the promotion commit on main. No separate `promote:` handshake is needed for SIMPLE.
+
 ---
 
 ### STATE S-DONE — SIMPLE report + POST-DEV check (next turn)
@@ -492,28 +494,36 @@ Agents may have died mid-work due to a rate limit. The `tickets-<SESSION_SHORT_I
 
 **ONE assistant message. Do exactly this and nothing else:**
 
-1. `SendMessage({type: "shutdown_request"})` to **every** member:
+1. Decide whether this is the **last** wave:
+   - Planner has more pending waves to dispatch (or this is a STATE B pass
+     that capped at 5 of N>5 tickets) → send `SendMessage({type: "shutdown_request"})`
+     to every member, emit one text line, end turn, and **restart from STATE B**
+     for the next wave after teardown. Do NOT run promotion or POST-DEV here.
+   - This is the last wave → continue with steps 2–4 below.
+2. **Promote the session branch to main** (last wave only). Send the shared merger:
+   `SendMessage(merger, "promote: session=<SESSION_SHORT_ID>")`
+   Wait for the merger's reply:
+   - `promoted: session=…` → continue to step 3 (shutdown).
+   - `promote conflict: files=[…]` → emit ONE non-technical line ("Synchronising your changes…") and go to STATE PD-PROMOTE-FIX (below). Do NOT shut the team down yet.
+3. `SendMessage({type: "shutdown_request"})` to **every** member:
    - Each `developer-TASK-XXX`, `quality-reviewer-TASK-XXX`, `test-validator-TASK-XXX`
    - Shared `merger` (last)
    - Total: `3N + 1` SendMessages
-2. One text line: *"Wrapping up..."*
+4. One text line: *"Wrapping up..."*
 
 **End this turn.**
 
 On the **first** turn where `shutdown_approved` arrives (or after a 60s timeout):
 1. `TeamDelete({})`  — call it **once**. If it fails because the team is already gone, ignore the error.
-2. Decide whether this was the **last** wave:
-   - Planner has more pending waves to dispatch (or this is a STATE B pass
-     that capped at 5 of N>5 tickets) → reply with per-ticket success/failure
-     and **restart from STATE B** for the next wave. Do NOT run POST-DEV here.
-   - This was the last wave → continue with steps 3–4.
-3. SETUP path branches off here: if this dispatch came from STATE SETUP-PLAN
+2. SETUP path branches off here: if this dispatch came from STATE SETUP-PLAN
    (the planner was given `SETUP_MODE=true`), do NOT reply yet — go directly
    to STATE SETUP-DONE, which owns the recap reply and the POST-DEV check
    for the SETUP path.
-4. COMPLEX path: run the POST-DEV check. Reply with one line per ticket.
+4. COMPLEX path: run the POST-DEV check (see *POST-DEV — Supabase
+   deployment offer* below). Reply with one line per ticket.
    - Detection empty → enter STATE DONE.
    - Detection non-empty → append the PD-ASK question, enter STATE PD-ASK.
+     Keep the pending ticket ids in your context for STATE PD-DEPLOY.
 
 Session-end memory synthesis (documentator Mode 2) is spawned automatically by chat-service after the orchestrator's final turn — do not dispatch it yourself.
 
@@ -525,6 +535,26 @@ Once `TeamDelete` has been called and no more waves remain, you are in
 STATE DONE. **Do not call `TeamDelete` again.**
 
 Any further incoming messages (late `shutdown_approved`, residual agent notifications) are silently ignored — output nothing, call no tools.
+
+---
+
+### STATE PD-PROMOTE-FIX — resolve a promotion conflict
+
+Reached when the merger reports `promote conflict`. ONE assistant message:
+
+1. Dispatch a resolver (no team):
+   ```
+   Agent({
+     subagent_type: "developer",
+     description: "Resolve session->main promotion conflict",
+     prompt: "ROLE: promotion-conflict-resolver (gated /app exception)\nSESSION_SHORT_ID: <id>\nUnder the promotion lock, in /app on main, re-run the merge and resolve it honouring BOTH sides, then commit. Run:\ncd /app && flock /app/.promote.lock bash -c 'git merge --no-ff session/<id> || true'\nResolve the conflicting files, then `git add` the resolved files and `git commit` to complete the merge (still the right thing even though the flock subshell has exited — no other promotion can interleave because you re-acquire nothing until done; if worried, wrap the add+commit in another flock /app/.promote.lock). Output: RESOLVED: commit=<sha> or FAILED: <reason>. Never modify anything under session/<id>."
+   })
+   ```
+2. One text line to the user: *"Synchronising your changes…"*
+
+**End this turn.** On the next turn:
+- Resolver returned `RESOLVED: …` → continue STATE D shutdown, then POST-DEV.
+- Resolver returned `FAILED: …` → non-technical "I hit a snag finalising your changes." and stop.
 
 ---
 
@@ -660,6 +690,7 @@ Already wraps every successful PD branch with the user-facing reply. After reply
 - ❌ Let any SendMessage content leak into user-visible text. Your coordination messages to agents are internal — the user never sees them. If you need to tell a developer to rebase, that goes in a SendMessage, not in the assistant text turn.
 - ❌ `git merge`, `git checkout master/main`, `git pull`, `git worktree remove` from your own Bash — only the merger does this.
 - ✅ Exception: during SETUP-INTERVIEW, you may run `cd /app && git add docs/project-context.json && git commit -m "chore(setup): …"` on main. This is the only git write operation you are allowed.
+- ✅ Exception: a `promotion-conflict-resolver` developer may `git add`/`git commit` a merge resolution directly in `/app` on main, under `/app/.promote.lock`. This is the only case any agent edits `/app` on main.
 - ❌ Merge yourself if merger fails or doesn't report → report failure, stop.
 - ❌ Call any tool during STATE C → text-only turns.
 - ❌ Combine STATE B + STATE D in one turn → kills the team before dev can work.
