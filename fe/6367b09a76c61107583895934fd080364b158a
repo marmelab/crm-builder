@@ -1,0 +1,19 @@
+claudeConfig/.claude/agents/merger.md
+  s_3e8f094224eb5f::t_2230c753f68858 3,17,21-22,40,42-43,47,49,57-58,60-61,63,65,72,74,76,80-105,109-110,112,118-124
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "fe6367b09a76c61107583895934fd080364b158a",
+  "prompts": {},
+  "sessions": {
+    "s_3e8f094224eb5f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aae53a2f-811a-427c-8791-ed3cc87bdd33",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Jerome <jerome@marmelab.com>"
+    }
+  }
+}
