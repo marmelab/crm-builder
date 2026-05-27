@@ -1,0 +1,19 @@
+docs/superpowers/specs/2026-05-27-deferred-migration-generation-design.md
+  s_3e8f094224eb5f::t_e072a399b44534 1-228
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "d56fa206d9f6cc76c4635b69a5542273924ca165",
+  "prompts": {},
+  "sessions": {
+    "s_3e8f094224eb5f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aae53a2f-811a-427c-8791-ed3cc87bdd33",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Jerome <jerome@marmelab.com>"
+    }
+  }
+}
