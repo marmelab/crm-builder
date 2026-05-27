@@ -2,6 +2,7 @@
 /sessions*/
 /old-sessions/
 /crm-docs*/
+/crm-source*/
 test.md
 chat-service/tests/results/run-*.json
 

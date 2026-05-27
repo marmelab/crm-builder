@@ -17,7 +17,7 @@ Two compose profiles: `demo` (FakeRest) and `full` (Supabase, needs Docker socke
 
 `entrypoint.sh`: syncs `claudeConfig/.claude/` → `/home/developer/.claude`, applies App.tsx variant, overwrites `/app/.claude/settings.json` with `{"hooks":{}}` (prevents upstream format-file.sh fight with our hooks).
 
-Single `crm-app` volume for `/app` — keeps `node_modules` and `worktrees/` on the same device so `cp -al` hard-links node_modules into each worktree (zero disk cost).
+`./crm-source` bind mount for `/app` — host-visible so users can browse/edit the CRM source and share it with co-workers. `node_modules` and `worktrees/` live in the same mount so `cp -al` hard-links node_modules into each worktree (zero disk cost). First run: `entrypoint.sh` copies `/opt/atomic-crm-source/` (staged in the Dockerfile) into the empty bind mount.
 
 ## Chat-service (`chat-service/`)
 

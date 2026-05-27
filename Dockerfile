@@ -128,6 +128,16 @@ COPY claudeConfig/.claude/ /root/.claude/
 RUN cp -r /root/.claude /home/developer/.claude \
     && chown -R developer:developer /home/developer/.claude
 
+# ── Stage source for bind-mounted /app ────────────────────────
+# /app is bind-mounted from ./crm-source on the host (see docker-compose.yml)
+# so users can browse and share the CRM source from their machine. The bind
+# mount hides any content baked into the image at /app, so we relocate the
+# build artifacts here. entrypoint.sh restores them into /app on first run
+# when the bind mount is empty.
+RUN mv /app /opt/atomic-crm-source \
+    && mkdir -p /app \
+    && chown developer:developer /app
+
 # 5173  → CRM (Vite)
 # 54321 → Supabase API  (MODE=full only)
 # 54323 → Supabase Dashboard (MODE=full only)
