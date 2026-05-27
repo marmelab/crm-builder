@@ -56,9 +56,14 @@ async function deliverUnreadInboxMessages(ptyRef) {
           const text = (msg.text || msg.message || '').toString();
           // Same format the Claude Code runtime uses when InboxPoller delivers
           // a SendMessage from a teammate to the team-lead.
-          ptyRef.write(`<teammate-message teammate_id="${from}">${text}</teammate-message>\r`);
-          // Small gap so the TUI processes each block independently.
-          await new Promise(r => setTimeout(r, 150));
+          // IMPORTANT: use ptyRef.send() not ptyRef.write(). Sending text+'\r'
+          // in a single write() call causes Ink's input handler to miss the CR
+          // for messages longer than ~50 chars (TUI renders input but never
+          // submits). send() uses a 50 ms gap between text and '\r', matching
+          // the PtySession#doSend implementation.
+          ptyRef.send(`<teammate-message teammate_id="${from}">${text}</teammate-message>`);
+          // Longer gap so the TUI fully processes each submission before the next.
+          await new Promise(r => setTimeout(r, 500));
         }
       } catch { /* inbox missing or malformed — skip */ }
     }
