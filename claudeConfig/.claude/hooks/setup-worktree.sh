@@ -30,16 +30,34 @@ if [ -z "$SESSION_SHORT" ]; then
   exit 0
 fi
 
+APP_DIR=${APP_DIR:-/app}
+BASE=$(git -C "$APP_DIR" symbolic-ref --short HEAD 2>/dev/null || echo main)
+
+# Create the per-session integration branch, its fixed fork anchor, and the
+# integration worktree exactly once. The anchor ref never moves and is the
+# stable diff baseline for migrations (later phase).
+if ! git -C "$APP_DIR" show-ref --verify --quiet "refs/heads/session/${SESSION_SHORT}"; then
+  git -C "$APP_DIR" branch "session/${SESSION_SHORT}"      "$BASE" 2>/dev/null || true
+  git -C "$APP_DIR" branch "session-base/${SESSION_SHORT}" "$BASE" 2>/dev/null || true
+  SESSION_WT="${APP_DIR}/worktrees/${SESSION_SHORT}/_session"
+  if [ ! -d "$SESSION_WT" ]; then
+    mkdir -p "$(dirname "$SESSION_WT")"
+    git -C "$APP_DIR" worktree add "$SESSION_WT" "session/${SESSION_SHORT}" 2>/dev/null || true
+    [ -e "$SESSION_WT/node_modules" ] || cp -al "${APP_DIR}/node_modules" "$SESSION_WT/node_modules" 2>/dev/null || true
+  fi
+  echo "[$(date -Iseconds)] setup-worktree SESSION-BRANCH created session/${SESSION_SHORT} from $BASE" >> "$LOG" 2>/dev/null || true
+fi
+
 STDIN=$(cat)
 # agent_type in SubagentStart stdin contains the full agent name (e.g. developer-TASK-001)
 AGENT_TYPE=$(node -e 'try{const i=JSON.parse(process.argv[1]||"{}");process.stdout.write(i.agent_type||"")}catch{process.stdout.write("")}' "$STDIN" 2>/dev/null || echo "")
 TASK_ID=$(echo "$AGENT_TYPE" | grep -oE 'TASK-[0-9]+' || echo "")
 
 if [ -n "$TASK_ID" ]; then
-  WORKTREE_PATH="/app/worktrees/${SESSION_SHORT}/${TASK_ID}"
+  WORKTREE_PATH="${APP_DIR}/worktrees/${SESSION_SHORT}/${TASK_ID}"
   BRANCH_NAME="${SESSION_SHORT}/${TASK_ID}"
 elif [ "$AGENT_TYPE" = "simple-developer" ]; then
-  WORKTREE_PATH="/app/worktrees/${SESSION_SHORT}/simple"
+  WORKTREE_PATH="${APP_DIR}/worktrees/${SESSION_SHORT}/simple"
   BRANCH_NAME="simple/${SESSION_SHORT}"
 else
   echo "[$(date -Iseconds)] setup-worktree SKIP unknown agent_type=$AGENT_TYPE" >> "$LOG" 2>/dev/null || true
@@ -49,11 +67,12 @@ fi
 echo "[$(date -Iseconds)] setup-worktree START agent=$AGENT_TYPE path=$WORKTREE_PATH branch=$BRANCH_NAME" >> "$LOG" 2>/dev/null || true
 
 # Recovery 1: already registered → restart, use as-is
-if git -C /app worktree list --porcelain 2>/dev/null | grep -qF "worktree $WORKTREE_PATH"; then
+if git -C "$APP_DIR" worktree list --porcelain 2>/dev/null | grep -qF "worktree $WORKTREE_PATH"; then
   echo "[$(date -Iseconds)] setup-worktree SKIP already registered ($WORKTREE_PATH)" >> "$LOG" 2>/dev/null || true
   exit 0
 fi
 
+# Never targets _session (different path; created in the session-branch block above).
 # Recovery 2: orphan dir → clean slate
 if [ -d "$WORKTREE_PATH" ]; then
   rm -rf "$WORKTREE_PATH"
@@ -63,12 +82,12 @@ fi
 mkdir -p "$(dirname "$WORKTREE_PATH")"
 
 # Recovery 3: orphan branch → force-delete so -b works cleanly
-if git -C /app branch --list "$BRANCH_NAME" 2>/dev/null | grep -q .; then
-  git -C /app branch -D "$BRANCH_NAME" 2>/dev/null || true
+if git -C "$APP_DIR" branch --list "$BRANCH_NAME" 2>/dev/null | grep -q .; then
+  git -C "$APP_DIR" branch -D "$BRANCH_NAME" 2>/dev/null || true
   echo "[$(date -Iseconds)] setup-worktree DELETED orphan branch $BRANCH_NAME" >> "$LOG" 2>/dev/null || true
 fi
 
-if git -C /app worktree add "$WORKTREE_PATH" -b "$BRANCH_NAME" HEAD 2>/tmp/wt-err; then
+if git -C "$APP_DIR" worktree add "$WORKTREE_PATH" -b "$BRANCH_NAME" "session/${SESSION_SHORT}" 2>/tmp/wt-err; then
   echo "[$(date -Iseconds)] setup-worktree CREATED branch=$BRANCH_NAME path=$WORKTREE_PATH" >> "$LOG" 2>/dev/null || true
 else
   ERR=$(cat /tmp/wt-err 2>/dev/null)
@@ -81,7 +100,7 @@ fi
 
 # Hard-link node_modules (zero disk cost, keeps vitest cache valid)
 if [ ! -e "$WORKTREE_PATH/node_modules" ]; then
-  cp -al /app/node_modules "$WORKTREE_PATH/node_modules"
+  cp -al "${APP_DIR}/node_modules" "$WORKTREE_PATH/node_modules"
   echo "[$(date -Iseconds)] setup-worktree node_modules hard-linked" >> "$LOG" 2>/dev/null || true
 fi
 
