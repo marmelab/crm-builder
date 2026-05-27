@@ -29,5 +29,8 @@ services:
 volumes:
   crm-app:
   supabase-cache:
+  # Pinned name so OAuth credentials survive `-p <instance>` namespacing
+  # and are shared with every multi-instance stack (see docker-compose.multi.yml).
   claude-auth:
+    name: atomic-crm-claude-auth
   crm-docs:

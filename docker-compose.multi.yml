@@ -1,0 +1,49 @@
+# ─────────────────────────────────────────────────────────────
+#  Multi-instance override for docker-compose.yml.
+#
+#  Replaces host networking with bridge + explicit port maps so
+#  several stacks can run side-by-side. Pair with `docker compose
+#  -p <name>` to namespace containers, volumes, and networks.
+#
+#  Usage (preferred):
+#    make up-instance   INSTANCE=feat-x CRM=5174 CHAT=8081
+#    make down-instance INSTANCE=feat-x
+#
+#  Or directly:
+#    INSTANCE=feat-x PORT_CRM=5174 PORT_CHAT=8081 \
+#      docker compose -p feat-x \
+#        -f docker-compose.yml -f docker-compose.multi.yml up
+#
+#  Variables (override via shell or `--env-file`):
+#    INSTANCE   short name used in container_name (default: default)
+#    PORT_CRM   host port for the Vite dev server (default: 5173)
+#    PORT_CHAT  host port for the chat-service WebSocket (default: 8080)
+#    IMAGE      image tag to run (default: atomic-crm-dev).
+#               For per-branch builds:
+#                 docker build -t atomic-crm-dev:my-branch .
+#                 IMAGE=atomic-crm-dev:my-branch
+#
+#  Caveats:
+#    - MODE=full needs host networking to reach Supabase's
+#      localhost:54321, so stick to demo mode (FakeRest) for
+#      multi-instance.
+#    - The ./sessions bind mount stays shared across instances.
+#      Sessions are unique by id so there's no write conflict, but
+#      the chat list will show sessions from every instance.
+#    - Banners printed by entrypoint.sh still announce ports
+#      5173/8080 (the in-container ports). Use PORT_CRM / PORT_CHAT
+#      from the host.
+# ─────────────────────────────────────────────────────────────
+
+services:
+
+  crm-app:
+    image: ${IMAGE:-atomic-crm-dev}
+    container_name: atomic-crm-${INSTANCE:-default}
+    network_mode: bridge
+    ports:
+      - "${PORT_CRM:-5173}:5173"
+      - "${PORT_CHAT:-8080}:8080"
+
+# `claude-auth` is pinned in docker-compose.yml (name: atomic-crm-claude-auth)
+# so OAuth credentials are shared across the base stack and every -p instance.
