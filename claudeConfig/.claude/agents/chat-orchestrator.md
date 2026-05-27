@@ -570,7 +570,7 @@ the change touched `supabase/migrations-pending/`). It does NOT run for:
 ### STATE PD-ASK — open satisfaction question (every COMPLEX/SETUP request)
 
 Always ask, in the user's language, plain words only — never mention database,
-saving, migration, Supabase:
+migration, deploy, Supabase:
 
 > *"Here are your changes — does everything look the way you want, or should I adjust something?"*
 
