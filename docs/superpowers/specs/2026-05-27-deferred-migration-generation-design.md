@@ -75,21 +75,33 @@ checkout of `/app`.
 
 ### 1A. `setup-worktree.sh` (modify)
 
-- Before creating a task worktree, ensure the session branch exists:
-  `git -C /app show-ref --verify --quiet refs/heads/session/<SESSION_SHORT> ||
-   git -C /app branch session/<SESSION_SHORT> <base>` (use the dynamically
-  detected base, main/master).
-- **At the moment the session branch is created**, store its fork base (one
-  value): `git -C /app rev-parse <base> > /app/worktrees/<SESSION_SHORT>/.session-base`.
-  This is the stable diff baseline for migrations. It must NOT be recomputed
-  later with `git merge-base`: after the first promotion the merge-base of
-  main and the session branch collapses onto the session tip (the session
-  becomes an ancestor of main's merge commit), yielding an empty diff. The
-  stored fork base stays correct across any number of promotions.
+- Before creating a task worktree, ensure the session branch **and** its
+  fork-anchor ref exist (both created from the same base, only once):
+  ```
+  git -C /app show-ref --verify --quiet refs/heads/session/<SESSION_SHORT> || {
+    git -C /app branch session/<SESSION_SHORT>      <base>   # accumulator (advances)
+    git -C /app branch session-base/<SESSION_SHORT> <base>   # fork anchor (never moves)
+  }
+  ```
+  (use the dynamically detected base, main/master).
+- The diff baseline for migrations is the **anchor ref**, not `git merge-base`:
+  after the first promotion the merge-base of main and the session branch
+  collapses onto the session tip (the session becomes an ancestor of main's
+  merge commit), yielding an empty diff. The anchor ref stays correct across
+  any number of promotions and is robust to other sessions merging into main
+  (the diff `session-base/<id>..session/<id>` never references main).
 - Create the task worktree branched from `session/<SESSION_SHORT>` instead of
   `HEAD`. COMPLEX: `<SESSION_SHORT>/<TASK_ID>`. SIMPLE/migration:
   `simple/<SESSION_SHORT>`.
 - The existing orphan-recovery logic is preserved.
+
+### 1A-bis. `developer.md` rebase target (modify) — keeps the branch pure
+
+The developer currently rebases onto `origin/master` (workflow steps 3 and 7).
+The branch's isolation guarantee depends on `session/<id>` receiving **only**
+this session's work, so tasks must rebase onto **`session/<id>`**, not master —
+otherwise a task would pull another session's main work into the session branch
+and contaminate the diff. Change both rebase steps to target the session branch.
 
 ### 1B. `merger.md` (modify) — two stages
 
@@ -118,9 +130,10 @@ checkout of `/app`.
 
 ### 1E. Session branch teardown
 
-- `session/<id>` persists for the session's lifetime (it is the accumulator).
-  Cleaned up when the session is torn down; a leftover branch is harmless and
-  handled by orphan-recovery on the next session with the same short id.
+- `session/<id>` and `session-base/<id>` persist for the session's lifetime
+  (accumulator + anchor). Both cleaned up when the session is torn down; leftover
+  refs are harmless and re-created from base by orphan-recovery on the next
+  session with the same short id.
 
 ---
 
@@ -223,10 +236,12 @@ satisfaction question to SIMPLE; default no.)
 ### 2C. New skill `writing-migrations`
 
 Guides `simple-developer` in migration mode:
-1. Read the stored session fork base: `/app/worktrees/<SESSION_SHORT>/.session-base`
-   (do NOT use `git merge-base` — it breaks after the first promotion).
-2. `git diff <fork-base>..session/<id>` → identify schema-relevant changes (TS
-   entity types, fake-data generators, dataProvider resource configs).
+1. `git diff session-base/<SESSION_SHORT>..session/<SESSION_SHORT>` — the
+   branch's full diff since creation (do NOT use `git merge-base` — it breaks
+   after the first promotion; do NOT diff against main — other sessions pollute
+   it).
+2. From that diff, identify schema-relevant changes (TS entity types, fake-data
+   generators, dataProvider resource configs).
 3. For each changed entity, compare the desired schema (TS types) against the
    schema already in `supabase/migrations/` + `supabase/schemas/`; emit only the
    incremental delta.
@@ -279,9 +294,8 @@ Supabase if needed, `supabase migration up`, reload PostgREST schema cache.
 ### 2G. `pending-deploys.mjs` (rework)
 
 Replace flag-based detection with a session-branch diff check: does
-`<fork-base>..session/<id>` (fork base read from `.session-base`) touch
-schema-relevant paths whose delta is not yet in `supabase/migrations/`? Output
-non-empty when a deploy is worth offering.
+`session-base/<id>..session/<id>` touch schema-relevant paths whose delta is not
+yet in `supabase/migrations/`? Output non-empty when a deploy is worth offering.
 
 ### 2H. Cleanup
 
@@ -296,8 +310,11 @@ non-empty when a deploy is worth offering.
 ## Resolved since first draft
 
 - **No SHA ledger.** Per-promotion merge SHAs are not recorded — the migration
-  diff uses the session branch against its stored fork base (`.session-base`),
-  so the SHAs add nothing.
+  diff is the branch's full diff since creation
+  (`git diff session-base/<id>..session/<id>`), anchored by a git ref set at
+  branch creation. Robust to other sessions merging into main, since main is
+  never referenced. Requires tasks to rebase onto `session/<id>` (not master)
+  so the branch stays pure (component 1A-bis).
 - **No new reviewer agent.** Reuse `quality-reviewer` single-shot + a targeted
   `member-idle-gate` bypass (component 2D-bis).
 - **`.deploy-applied` removed.** Idempotency now comes from cross-checking
@@ -315,9 +332,9 @@ non-empty when a deploy is worth offering.
 - **App.tsx variant interaction:** confirm the `git reset --hard HEAD +
   apply-app-variant.sh` dance behaves under the new promote-to-main step (no
   App.tsx conflict, correct variant after promotion).
-- **`.session-base` capture point:** confirm the first `setup-worktree` of every
-  flow (COMPLEX wave, SETUP planner-driven wave, SIMPLE) creates the session
-  branch and stores the fork base before any merge.
+- **Anchor-ref capture point:** confirm the first `setup-worktree` of every
+  flow (COMPLEX wave, SETUP planner-driven wave, SIMPLE) creates
+  `session/<id>` + `session-base/<id>` before any merge.
 
 ## Non-goals
 
