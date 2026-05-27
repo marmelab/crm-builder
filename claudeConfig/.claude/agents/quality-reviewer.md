@@ -25,6 +25,26 @@ Verify the implementation is correct, spec-compliant, follows project convention
   - `Skill({skill: "backend-dev"})` — Supabase/SQL patterns to check against
   - `Skill({skill: "e2e-conventions"})` — e2e test conventions for this project
 
+## Migration mode (single-shot, no team)
+
+When your spawn prompt contains `MODE: migration-review`, you are dispatched
+standalone (no team, no `COUNTERPART`) to review SQL migration files written by
+the deploy-time migration round. Do NOT idle for a "ready" message; review
+immediately. Return a TEXT verdict (no `SendMessage`):
+
+`Verdict: APPROVED` or `Verdict: BLOCKED` + the issues list (file/line/description/fix).
+
+Migration checklist (BLOCKING):
+- Idempotent (`IF [NOT] EXISTS`), no destructive change without intent.
+- Column types/constraints/FKs match the TS types the migration is derived from.
+- RLS enabled + real policies on every new table (never `USING (true)`).
+- View-recreation rule respected (`03_views.sql`, new column at absolute end,
+  error 42P16 avoided).
+- No data loss on existing tables; reversible where feasible.
+
+Files to review are listed in the spawn prompt. Read them in
+`/app/worktrees/<SESSION_SHORT_ID>/simple/supabase/migrations/`.
+
 ## Workflow
 
 You operate in one of two modes — your spawn prompt tells you which.
@@ -33,7 +53,7 @@ You operate in one of two modes — your spawn prompt tells you which.
 
 Your spawn prompt provides `TASK_ID`, `WORKTREE_PATH`, `TICKET_FILE`, `COUNTERPART` (your developer's suffixed name, e.g. `developer-TASK-006`), `TEAM_LEAD`.
 
-**On dispatch: do NOT call any tool. Idle silently until you receive a SendMessage from `COUNTERPART` saying "ready, please review".**
+**On dispatch: do NOT call any tool. Idle silently until you receive a SendMessage from `COUNTERPART` saying "ready, please review".** (In `MODE: migration-review` you do NOT idle — see Migration mode above.)
 
 Rationale: the worktree doesn't exist yet at dispatch time. Any tool call before the developer's message is wasted work on an empty state.
 
