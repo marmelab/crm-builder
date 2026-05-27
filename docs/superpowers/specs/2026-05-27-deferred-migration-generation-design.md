@@ -81,9 +81,12 @@ checkout of `/app`.
   git -C /app show-ref --verify --quiet refs/heads/session/<SESSION_SHORT> || {
     git -C /app branch session/<SESSION_SHORT>      <base>   # accumulator (advances)
     git -C /app branch session-base/<SESSION_SHORT> <base>   # fork anchor (never moves)
+    git -C /app worktree add /app/worktrees/<SESSION_SHORT>/_session session/<SESSION_SHORT>
   }
   ```
-  (use the dynamically detected base, main/master).
+  (use the dynamically detected base, main/master). The `_session` worktree is
+  the integration checkout where task→session merges happen, so `/app` can stay
+  on main for the demo (see 1F).
 - The diff baseline for migrations is the **anchor ref**, not `git merge-base`:
   after the first promotion the merge-base of main and the session branch
   collapses onto the session tip (the session becomes an ancestor of main's
@@ -105,35 +108,69 @@ and contaminate the diff. Change both rebase steps to target the session branch.
 
 ### 1B. `merger.md` (modify) — two stages
 
-- **Stage A — task merge (per task).** Merge `<task branch>` → `session/<id>`
-  (instead of into main). COMPLEX: loop over developer messages as today, but
-  the merge target is the session branch. Update ticket status as today.
-- **Stage B — promotion (end of request).** On an explicit promotion instruction
-  from the orchestrator (e.g. `SendMessage(merger, "promote: session=<id>")`),
-  checkout main, `git merge --no-ff session/<id>`, report done. SIMPLE
-  single-shot: do Stage A then Stage B in one run.
-- Conflict handling unchanged (abort + report). The merger still never does
-  `git add`/`git commit`, and writes no files (no SHA ledger).
+- **Stage A — task merge (per task).** In the `_session` integration worktree:
+  `cd /app/worktrees/<SESSION_SHORT>/_session && git merge --no-ff <task branch>`
+  → merges the task into `session/<id>`. `/app` (main) is not touched. COMPLEX:
+  loop over developer messages as today; merge target is the session worktree.
+  Update ticket status as today. On conflict: abort + report (developer's job).
+- **Stage B — promotion (end of request).** On a promotion instruction from the
+  orchestrator (`SendMessage(merger, "promote: session=<id>")`): in `/app` (on
+  main), **under the promotion lock** (1F), `git merge --no-ff session/<id>`,
+  then report `promoted: session=<id>, commit=<sha>` or `promote conflict:
+  files=[...]`. SIMPLE single-shot: Stage A (in `_session`) then Stage B.
+- The merger still never does `git add`/`git commit` and writes no files. On a
+  promote conflict it aborts the merge and reports — it does **not** resolve.
 
 ### 1C. `chat-orchestrator.md` (modify) — promotion step
 
 - After a request's final wave teardown (STATE D, last wave), before POST-DEV:
-  send the merger the **promote** instruction, wait for its done report. Only
-  then run the satisfaction question.
+  send the merger the **promote** instruction and wait.
+  - `promoted: …` → run the satisfaction question.
+  - `promote conflict: …` → emit a non-technical "syncing changes" line and
+    dispatch a **conflict resolver** (1F). On resolver success → satisfaction
+    question. On resolver failure → non-technical "hit a snag" + stop.
 - SIMPLE: the single-shot merger already does Stage A + B.
 
 ### 1D. `worktree-scope.md` + rules (modify)
 
-- Document the new fork source (`session/<id>`) and that task branches are
-  forked from the session branch, merged back into it, and the session branch is
-  promoted to main once per request.
+- Document the new fork source (`session/<id>`), the `_session` integration
+  worktree as the task-merge target, and that the session branch is promoted to
+  main once per request under the promotion lock.
 
 ### 1E. Session branch teardown
 
-- `session/<id>` and `session-base/<id>` persist for the session's lifetime
-  (accumulator + anchor). Both cleaned up when the session is torn down; leftover
-  refs are harmless and re-created from base by orphan-recovery on the next
-  session with the same short id.
+- `session/<id>`, `session-base/<id>`, and the `_session` worktree persist for
+  the session's lifetime (accumulator + anchor + integration checkout). All
+  cleaned up when the session is torn down; leftovers are harmless and
+  re-created from base by orphan-recovery on the next session with the same
+  short id.
+
+### 1F. Same-container concurrency (multiple sessions share main)
+
+Multiple sessions can run in one container, each with its own merger, all
+promoting into the same `main`. Three mechanisms:
+
+1. **Integration worktree (per session).** Task→session merges run in
+   `/app/worktrees/<SESSION_SHORT>/_session` (checked out on `session/<id>`), so
+   `/app` stays on main for the single Vite demo and sessions never fight over
+   `/app`'s checkout. Distinct worktrees/branches → task merges of different
+   sessions don't contend.
+2. **Promotion lock.** All promotions target the one `/app` main worktree, so
+   they must serialize. Wrap the Stage-B merge in a container-global `flock`
+   (e.g. `/app/.promote.lock`): one session promotes at a time, preventing
+   `.git/index.lock` corruption.
+3. **Conflict resolver.** Two sessions touching the same lines make the
+   `session→main` merge conflict. The merger aborts + reports; the orchestrator
+   dispatches a **developer-type resolver** that, under the promotion lock and in
+   `/app` on main (an explicit, gated exception to worktree-scope), re-runs the
+   merge, resolves the conflict honoring both sides, `git add` + `git commit`s
+   the merge, and reports. `session/<id>` is never modified, so the migration
+   diff stays pure. (Resolver agent + model: open detail.)
+
+The migration feature (Part 2) is unaffected by all of this: promotion merges
+the session branch **into** main and never modifies the session branch, so
+`session-base/<id>..session/<id>` remains exact even under concurrent
+promotions and conflict resolution.
 
 ---
 
@@ -164,8 +201,10 @@ and contaminate the diff. Change both rebase steps to target the session branch.
    second non-technical message signals saving ("Saving your changes — this can
    take a moment") and the migration round runs behind it. The words database,
    migration, deploy, Supabase are never shown.
-8. **Concurrency** — isolation is now by construction (Part 1), correct even for
-   concurrent sessions in the same container.
+8. **Concurrency** — same-container multi-session is in scope (each session has
+   its own merger, all promoting into one shared main). Handled in Part 1 (1F):
+   integration worktree, promotion lock, auto conflict resolver. The migration
+   diff is unaffected because promotion never modifies the session branch.
 
 ## Flow (Part 2)
 
@@ -325,6 +364,12 @@ yet in `supabase/migrations/`? Output non-empty when a deploy is worth offering.
 - **Promotion trigger mechanics:** exact orchestrator↔merger handshake to
   promote `session/<id>` → main after the request's last wave, given the merger
   is normally being torn down at that point (STATE D).
+- **Conflict resolver agent:** which agent type/model resolves a `session→main`
+  promotion conflict in `/app` (developer/opus vs simple-developer/sonnet), and
+  the gated worktree-scope exception that lets it edit `/app` on main.
+- **Promotion lock scope:** confirm a single container-global lock
+  (`/app/.promote.lock` via `flock`) is sufficient and does not deadlock with
+  the per-session mergers' own `.git/index.lock` retries.
 - **Schema-relevant file heuristic** in `writing-migrations` / `pending-deploys`:
   pin the exact globs under `src/` that imply a schema change (entity types,
   fake-data generators, dataProvider resource configs) against the real CRM repo
