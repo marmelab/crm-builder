@@ -547,10 +547,10 @@ Reached when the merger reports `promote conflict`. ONE assistant message:
    Agent({
      subagent_type: "developer",
      description: "Resolve session->main promotion conflict",
-     prompt: "ROLE: promotion-conflict-resolver (gated /app exception)\nSESSION_SHORT_ID: <id>\nUnder the promotion lock, in /app on main, re-run the merge and resolve it honouring BOTH sides, then commit. Run:\ncd /app && flock /app/.promote.lock bash -c 'git merge --no-ff session/<id> || true'\nResolve the conflicting files, then `git add` the resolved files and `git commit` to complete the merge (still the right thing even though the flock subshell has exited — no other promotion can interleave because you re-acquire nothing until done; if worried, wrap the add+commit in another flock /app/.promote.lock). Output: RESOLVED: commit=<sha> or FAILED: <reason>. Never modify anything under session/<id>."
+     prompt: "ROLE: promotion-conflict-resolver (gated /app exception)\nSESSION_SHORT_ID: <id>\nUnder the promotion lock, in /app on main, re-run the merge and resolve it honouring BOTH sides, then commit. Run:\ncd /app && flock /app/.promote.lock bash -c 'git merge --no-ff session/<id> || true'\nResolve the conflicting files, then complete the merge with a single locked commit:\nflock /app/.promote.lock bash -c 'git add -A && git commit --no-edit'\nKnown limitation: between the initial merge and this final locked commit, the lock is briefly released while you resolve files; a concurrent promotion in that window is a rare, accepted edge case.\nOutput: RESOLVED: commit=<sha> or FAILED: <reason>. Never modify anything under session/<id>."
    })
    ```
-2. One text line to the user: *"Synchronising your changes…"*
+2. (no new user line — already shown in STATE D)
 
 **End this turn.** On the next turn:
 - Resolver returned `RESOLVED: …` → continue STATE D shutdown, then POST-DEV.
