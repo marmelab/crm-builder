@@ -1,0 +1,20 @@
+Makefile
+  s_38991a05216d1b::t_c126bd6b60dd47 49,54-55
+  s_38991a05216d1b::t_4cd138eec21a50 36-38,41
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "40b0066dbbe029165ab6eee2e88fc22f56e8cf0a",
+  "prompts": {},
+  "sessions": {
+    "s_38991a05216d1b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3b8db4d3-99b9-4c3b-a622-c4917e60d7f9",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Jerome <jerome@marmelab.com>"
+    }
+  }
+}
