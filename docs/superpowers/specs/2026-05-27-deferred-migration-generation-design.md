@@ -56,24 +56,50 @@ present in `supabase/migrations/`.
 6. **Deploy detection** — `pending-deploys` switches to a git-diff check (does
    the session's merged work touch schema-relevant files not yet covered by
    `supabase/migrations/`?). The `requires_supabase_migration` ticket flag is
-   no longer used for this.
+   **removed entirely** from the ticket schema, planner, developer, and scripts
+   (no inert metadata kept).
+7. **End-of-dev message** — the old technical offer ("these changes affect how
+   your data is stored, want to deploy?") is removed. At the end of every dev
+   cycle the orchestrator asks an **open, non-technical satisfaction question**
+   (e.g. "Here are your changes — does everything look the way you want, or
+   should I adjust something?"). On an affirmative reply, a second non-technical
+   message signals that the work is being saved ("Saving your changes — this can
+   take a moment"), and the migration round runs behind it. The words
+   "database", "migration", "deploy", "Supabase" are never shown to the user.
+8. **Concurrency boundary** — the clean isolation boundary is the **container**.
+   One container = one `/app` volume = one git history = one Vite. Parallel work
+   is run as separate containers (the altports pattern), each with an independent
+   baseline, so `git diff <baseline>..HEAD` never sees another container's
+   merges. Multiple chat sessions inside a *single* container share main by
+   design (shared app, shared App.tsx variant) and are therefore not isolated —
+   this is out of scope and not a supported parallel model.
 
 ## Flow
 
 ```
-Regular dev waves (COMPLEX / SIMPLE / SETUP)
+Regular dev waves (COMPLEX / SETUP)
    developer / simple-developer produce ONLY TypeScript types + fake-data.
    No SQL migration is ever written here.
         │
         ▼
-POST-DEV detection (STATE PD)
-   pending-deploys: does the session diff touch schema-relevant files
-   not yet covered by supabase/migrations/ ?
-        │  yes
-        ▼
-STATE PD-ASK  → "Some of these changes affect how your data is stored.
-                 Want me to apply them to your real database now?"
-        │  user agrees
+STATE PD-ASK  → open, non-technical satisfaction question, always asked at
+                end of dev:
+                "Here are your changes — does everything look the way you
+                 want, or should I adjust something?"
+        │
+        ├─ user wants to adjust / new request → re-enter CLASSIFICATION
+        │                                        (new wave), then ask again
+        │
+        └─ user is satisfied
+                │
+                ▼
+        detection: pending-deploys — does the session diff touch
+        schema-relevant files not yet covered by supabase/migrations/ ?
+                │
+                ├─ no  → "Great, everything's set." → DONE
+                │
+                └─ yes → non-technical "Saving your changes — this can take a
+                         moment." then:
         ▼
 ╔════════════════════ MIGRATION ROUND (new) ════════════════════╗
 ║ 1. simple-developer (migration mode, skill: writing-migrations) ║
@@ -98,8 +124,13 @@ STATE PD-ASK  → "Some of these changes affect how your data is stored.
 STATE PD-DEPLOY → apply-migrations (supabase migration up)
         │
         ▼
-record deployed state, then existing PD-LIVE-ASK / PD-DONE branches
+demo mode → PD-LIVE-ASK ("Want to see your real data in the app now?")
+full mode → PD-DONE ("Your changes are saved.")
 ```
+
+SIMPLE (single cosmetic) keeps its current terminal report — it cannot touch
+the schema, so there is nothing to persist. (Open: whether to also append the
+satisfaction question there; default is no.)
 
 The migration round is **orchestrator-sequenced and team-free**, mirroring the
 SIMPLE flow (S-DEV → … → S-MERGE) with a review step inserted. No `TeamCreate`,
@@ -120,11 +151,10 @@ dispatches the next.
 ### B. `planner.md` (modify)
 
 - Drop the rule "Supabase migrations are always separate tickets".
-- Drop `requires_supabase_migration` as a content-driving flag. Schema-shaped
-  changes fold into the feature ticket (types + fake-data).
-- (The field may remain in the ticket JSON schema as inert metadata, but
-  nothing reads it for migration authoring or deploy detection. Prefer removing
-  it to avoid confusion — to be finalized in the plan.)
+- **Remove `requires_supabase_migration` entirely** from the ticket format,
+  field semantics, and the "what every data-shaped ticket must produce"
+  section. Schema-shaped changes fold into the feature ticket (types +
+  fake-data). No migration tickets, no migration flag.
 
 ### C. New skill `writing-migrations`
 
@@ -175,16 +205,29 @@ issues). No `SendMessage`.
 
 ### G. `chat-orchestrator.md` (modify)
 
-Insert the migration round into the POST-DEV deploy path. New states between
-"user agreed to deploy" and the apply step:
-- PD-MIG-DEV — dispatch simple-developer (migration mode).
-- PD-MIG-REVIEW — dispatch quality-reviewer (migration mode); loop to PD-MIG-DEV
-  on BLOCKED.
-- PD-MIG-MERGE — dispatch merger (SIMPLE mode).
-- then existing PD-DEPLOY runs the (simplified) apply step.
+Rework POST-DEV around the open satisfaction question:
+- **STATE PD-ASK** — no longer gated on a pending-migration detection. At the
+  end of every COMPLEX/SETUP dev cycle, ask the open, non-technical satisfaction
+  question. No technical words.
+- **STATE PD-RESPOND**:
+  - Adjustment / new request → re-enter CLASSIFICATION (new wave); POST-DEV
+    asks the satisfaction question again afterward.
+  - Affirmative → run `pending-deploys`. Empty → acknowledge ("everything's
+    set") and DONE. Non-empty → emit the non-technical "saving your changes"
+    message and enter the migration round.
+  - Ambiguous → re-ask the open question.
+- **Migration round states** (only when there is something to persist):
+  - PD-MIG-DEV — dispatch simple-developer (migration mode).
+  - PD-MIG-REVIEW — dispatch quality-reviewer (migration mode); loop to
+    PD-MIG-DEV on BLOCKED.
+  - PD-MIG-MERGE — dispatch merger (SIMPLE mode).
+- **STATE PD-DEPLOY** — the (simplified) apply step, then PD-LIVE-ASK (demo) /
+  PD-DONE (full).
 
-If the migration round produces zero files, skip straight to "already up to
-date" without an apply.
+The migration round derives content from the diff, so it can legitimately
+produce zero files even after a non-empty `pending-deploys` (e.g. a change the
+schema already covers). In that case skip the apply and go to "everything's
+set". All POST-DEV user-facing strings stay non-technical.
 
 ### H. `apply-migrations.sh` (simplify)
 
@@ -204,20 +247,24 @@ deploy is worth offering.
 
 - Remove `supabase/migrations-pending/` references across agents, rules,
   scripts, CLAUDE.md.
+- Remove every `requires_supabase_migration` reference (planner, developer,
+  worktree-scope rule, pending-deploys, CLAUDE.md).
 - Update CLAUDE.md and any rule files (e.g. worktree-scope, validation-commands)
-  that mention the old migration-writing behavior.
+  that mention the old migration-writing behavior or the old deploy-offer
+  wording.
 
 ## Open implementation details (resolve in the plan)
 
 - Exact dispatch identity for the quality-reviewer single-shot so that
   `member-idle-gate` does not block a team-less reviewer.
-- Whether `requires_supabase_migration` is fully removed from the ticket schema
-  or left inert.
 - The precise heuristic in `writing-migrations` / `pending-deploys` for
   "schema-relevant files" (which globs under `src/` count).
 - Whether `.session-base` should also be captured for the SETUP path (planner
   dispatch) — confirm the first `setup-worktree` of a SETUP session fires before
   any merge.
+- `.deploy-applied` ledger: with detection now diff-based and idempotency from
+  cross-checking `supabase/migrations/`, decide whether the ledger is still
+  needed or can be dropped.
 
 ## Non-goals
 
