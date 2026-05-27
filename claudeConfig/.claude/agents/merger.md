@@ -44,7 +44,7 @@ Each incoming message MUST start with `"ready: TASK-XXX, branch=<branch>"`. For 
 
 ### SIMPLE mode
 
-Not in any team. `BRANCH_NAME`, `WORKTREE_PATH`, and `SESSION_SHORT_ID` are in your spawn prompt. Run Stage A once, then immediately run Stage B, and return.
+Not in any team. `BRANCH_NAME` and `WORKTREE_PATH` are in your spawn prompt. Derive `SESSION_SHORT_ID` from `BRANCH_NAME` (the segment after `simple/`, or after the first `/`) or from `WORKTREE_PATH` (the path segment under `/worktrees/`). Run Stage A once, then immediately run Stage B, and return.
 
 ### MERGE STEPS — Stage A (task → session branch)
 
@@ -97,16 +97,16 @@ Not in any team. `BRANCH_NAME`, `WORKTREE_PATH`, and `SESSION_SHORT_ID` are in y
 
 ```bash
 cd /app && flock /app/.promote.lock bash -c '
-  BASE=$(git symbolic-ref --short HEAD)
   git reset --hard HEAD && /entrypoint-helpers/apply-app-variant.sh
-  git merge --no-ff session/<SESSION_SHORT_ID> -m "merge(session): <SESSION_SHORT_ID>"
+  git merge --no-ff session/<SESSION_SHORT_ID> -m "merge(session): <SESSION_SHORT_ID>" \
+    || { git merge --abort; exit 1; }
 '
 ```
 
 - Success → report `promoted: session=<SESSION_SHORT_ID>, commit=<short sha>`.
   - COMPLEX: `SendMessage(to: "team-lead", message: "promoted: session=<SESSION_SHORT_ID>, commit=<short sha>")`, then continue idling.
   - SIMPLE: return text `DONE: commit=<short sha>. files=[...]`
-- On `CONFLICT` → `git merge --abort` (still inside the lock), report `promote conflict: files=[<paths>]`. Do NOT resolve — the orchestrator dispatches a resolver.
+- On non-zero exit (conflict): the lock block already ran `git merge --abort` before releasing the lock. Report `promote conflict: files=[<paths>]` (read the conflicting files from the merge output). Do NOT resolve — the orchestrator dispatches a resolver.
   - COMPLEX: `SendMessage(to: "team-lead", message: "promote conflict: files=[<paths>]")`, then idle.
   - SIMPLE: return text `FAILED: promote conflict: files=[<paths>]`.
 - The `flock` serialises promotions across concurrent sessions sharing main.
@@ -125,7 +125,7 @@ cd /app && flock /app/.promote.lock bash -c '
 
 | Aspect | COMPLEX | SIMPLE |
 |---|---|---|
-| Trigger | SendMessage from `developer-TASK-XXX` | Spawn prompt contains `BRANCH_NAME` + `WORKTREE_PATH` + `SESSION_SHORT_ID` |
+| Trigger | SendMessage from `developer-TASK-XXX` | Spawn prompt contains `BRANCH_NAME` + `WORKTREE_PATH` (derive `SESSION_SHORT_ID` from either) |
 | Stage A target | `session/<SESSION_SHORT_ID>` in `_session` worktree | `session/<SESSION_SHORT_ID>` in `_session` worktree |
 | Stage B trigger | Explicit `promote: session=<SESSION_SHORT_ID>` from team-lead | Automatic after Stage A success |
 | Stage B target | main (in `/app`, under `flock`) | main (in `/app`, under `flock`) |
