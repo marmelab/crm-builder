@@ -29,7 +29,7 @@ try {
 } catch {}
 
 const pending = [];
-for (const f of readdirSync(dir).filter((x) => /^TASK-\d+\.json$/.test(x))) {
+for (const f of readdirSync(dir).filter((x) => /^TASK-[A-Za-z0-9-]+\.json$/.test(x))) {
   try {
     const j = JSON.parse(readFileSync(join(dir, f), 'utf8'));
     if (j.status === 'merged'

@@ -66,18 +66,27 @@ Not in any team. `BRANCH_NAME` and `WORKTREE_PATH` are in your spawn prompt. Run
    ```
    `<type>` = ticket's `type` field (feat / fix / chore). On `CONFLICT`: `git merge --abort`, report failed with conflicting files. Do NOT resolve — that's the developer's job.
 
-4. **Update ticket status** (COMPLEX only — skip in SIMPLE)
+4. **Update ticket status** (only if a ticket file exists for this branch)
+   - **COMPLEX**: `TASK_ID` is known from the SendMessage parsing. Always update `${TICKETS_DIR}/<TASK_ID>.json`.
+   - **SIMPLE**: a pseudo-ticket file may exist when the change touched a migration. Look it up:
+     ```bash
+     ls ${TICKETS_DIR}/TASK-SIMPLE-*.json 2>/dev/null
+     ```
+     - Exactly one match → that is the pseudo-ticket for this merge; update it.
+     - No matches → cosmetic-only SIMPLE; skip this step entirely.
+     - Multiple matches → pick the most recent (`ls -t | head -1`) and update only that one.
+
    Use the **Edit tool** (NOT shell):
    ```
-   Edit(file_path: "${TICKETS_DIR}/<TASK_ID>.json", old_string: '"status": "pending"', new_string: '"status": "merged"')
+   Edit(file_path: "${TICKETS_DIR}/<TICKET_ID>.json", old_string: '"status": "in_progress"', new_string: '"status": "merged"')
    ```
-   If status was `"in_progress"`, substitute. Verify with `Read`.
+   If status was `"pending"`, substitute. Verify with `Read`.
 
-6. **Report**
+5. **Report**
    - COMPLEX: `SendMessage(to: "team-lead", message: "merged TASK-XXX, commit=<short sha>")`
    - SIMPLE: return text `DONE: commit=<short sha>. files=[...]`
 
-7. **On any failure of steps 1–4**:
+6. **On any failure of steps 1–4**:
    - COMPLEX: `SendMessage(team-lead, "TASK-XXX merge failed: <reason>")`, then idle.
    - SIMPLE: return text `FAILED: <reason>`.
 
@@ -86,7 +95,7 @@ Not in any team. `BRANCH_NAME` and `WORKTREE_PATH` are in your spawn prompt. Run
 - `git push`, `gh` commands, `--no-verify`, `--force`.
 - Force-merge on conflict — abort and report failed.
 - Spawn agents, `TeamCreate`, `TeamDelete`.
-- Edit any file except the Step 5 ticket JSON.
+- Edit any file except the Step 4 ticket JSON.
 
 **Per-mode differences**:
 
@@ -94,7 +103,7 @@ Not in any team. `BRANCH_NAME` and `WORKTREE_PATH` are in your spawn prompt. Run
 |---|---|---|
 | Trigger | SendMessage from `developer-TASK-XXX` | Spawn prompt contains `BRANCH_NAME` + `WORKTREE_PATH` |
 | Loop | Yes — until `shutdown_request` | No — single merge, return |
-| Step 5 (ticket status) | Yes (`TASK_ID` starts with `TASK-`) | Skip (no ticket JSON) |
+| Step 4 (ticket status) | Yes (`TASK_ID` from SendMessage) | Conditional: yes if a `TASK-SIMPLE-*.json` file exists in `${TICKETS_DIR}` (migration written), else skip |
 | Report | `SendMessage(to: "team-lead", message: "merged TASK-XXX, commit=<sha>")` — plain text, no YAML | Return `DONE: commit=<sha>. files=[...]` |
 | On failure | `SendMessage(to: "team-lead", message: "TASK-XXX merge failed: ...")` — plain text | Return `FAILED: <reason>` |
 

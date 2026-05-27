@@ -40,7 +40,7 @@ Tests: `cd chat-service && npm test` — uses glob `'test/**/*.test.js'` (direct
 | chat-orchestrator | sonnet | User-facing, routes, narrates. SIMPLE flow dispatches simple-developer + merger directly (no team). |
 | planner | sonnet | Decomposes → tickets JSON with waves + file hints. |
 | developer | opus | Implements + commits in worktree. Also writes ADRs in `adr/` when the change introduces a structural decision. |
-| simple-developer | sonnet | 1-file cosmetic changes only. No team, no review, never writes ADRs — SubagentStop hooks validate. |
+| simple-developer | sonnet | 1-file cosmetic OR 1 single-field change on an existing entity (schema + view + type + form + show) OR 1 list filter reusing existing components (no new custom React component). No team, no review, never writes ADRs — SubagentStop hooks validate. POST-DEV runs if a migration was written. |
 | quality-reviewer | sonnet | Semantic code + security review only. Never re-runs validation. |
 | test-validator | haiku | Integration wiring + e2e presence. |
 | merger | haiku | `git merge --no-ff` only. **Never `git add`/`git commit`**. |
