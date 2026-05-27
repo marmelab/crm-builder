@@ -1,5 +1,5 @@
 import { on } from 'node:events';
-import { cp, copyFile, mkdir, chmod, readdir, readFile } from 'node:fs/promises';
+import { cp, copyFile, mkdir, chmod, readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { LOG_DIR, CLAUDE_HOME, CWD } from './config.js';
 import { broadcast, sendStats } from './ws-bus.js';
@@ -28,6 +28,41 @@ async function hasUnreadInboxMessages() {
     }
   } catch { /* teams dir missing — no active team */ }
   return false;
+}
+
+// Read every unread inbox message for team-lead across all active teams, mark
+// them read, and inject them directly into the PTY as <teammate-message> blocks.
+// Used by the watchdog when InboxPoller is permanently dead and nudges have failed
+// for 30 s — bypasses InboxPoller entirely so the orchestrator receives teammate
+// reports without needing a PTY restart (which would destroy the team context).
+async function deliverUnreadInboxMessages(ptyRef) {
+  if (ptyRef.closed) return;
+  const teamsDir = join(CLAUDE_HOME, '.claude', 'teams');
+  try {
+    const teams = await readdir(teamsDir);
+    for (const team of teams) {
+      const inboxPath = join(teamsDir, team, 'inboxes', 'team-lead.json');
+      try {
+        const raw = await readFile(inboxPath, 'utf8');
+        const msgs = JSON.parse(raw);
+        if (!Array.isArray(msgs)) continue;
+        const unread = msgs.filter(m => !m.read);
+        if (unread.length === 0) continue;
+        // Mark all as read before injecting to prevent double-delivery if the
+        // watchdog fires again before the orchestrator processes the messages.
+        await writeFile(inboxPath, JSON.stringify(msgs.map(m => ({ ...m, read: true }))));
+        for (const msg of unread) {
+          const from = msg.from || 'teammate';
+          const text = (msg.text || msg.message || '').toString();
+          // Same format the Claude Code runtime uses when InboxPoller delivers
+          // a SendMessage from a teammate to the team-lead.
+          ptyRef.write(`<teammate-message teammate_id="${from}">${text}</teammate-message>\r`);
+          // Small gap so the TUI processes each block independently.
+          await new Promise(r => setTimeout(r, 150));
+        }
+      } catch { /* inbox missing or malformed — skip */ }
+    }
+  } catch { /* teams dir missing — no active team */ }
 }
 
 // Aborts when either the result event arrives or the session exits unexpectedly.
@@ -108,11 +143,12 @@ export async function processMessage(runtime, prompt) {
       // context active) → S2() = false → G28() returns the team-lead name →
       // w = true → a fresh setInterval(M, 1000) is created → delivery within 1 s.
       //
-      // Escalation strategy: a single nudge has a low probability of landing in
-      // a clean context when many in-process teammates are alive. After 30 s of
-      // stall (10 failed single nudges), switch to burst mode: 5 rapid nudges
-      // with 40 ms spacing. The burst dramatically raises the probability that at
-      // least one nudge triggers a re-render with S2() = false.
+      // Escalation strategy: a single nudge may restart InboxPoller when it lands
+      // in a clean re-render context. After 30 s of failed nudges (staleCount > 10),
+      // switch to direct delivery: read the inbox files and inject the teammate
+      // messages as <teammate-message> blocks into PTY stdin — the same format
+      // the Claude Code runtime uses when InboxPoller fires normally. This bypasses
+      // InboxPoller entirely and keeps the PTY (and its team context) alive.
       let watchdogTimer = null;
       let staleCount = 0; // consecutive ticks with unread messages (stall length)
       function scheduleWatchdog() {
@@ -147,8 +183,11 @@ export async function processMessage(runtime, prompt) {
               }
               // Merger not yet done — fall through to burst nudge and keep waiting.
             } else if (staleCount > 10) {
-              // Stall persisted > 30 s — switch to burst mode (5 nudges × 40 ms).
-              ptyRef.nudgeBurst(5, 40);
+              // Stall persisted > 30 s — directly inject the queued inbox messages.
+              // InboxPoller is permanently dead; nudges can't revive it reliably.
+              // Injecting <teammate-message> blocks bypasses InboxPoller and keeps
+              // the PTY (and its team/inbox context) alive.
+              await deliverUnreadInboxMessages(ptyRef);
             } else {
               ptyRef.nudge();
             }
