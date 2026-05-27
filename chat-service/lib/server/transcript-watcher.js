@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import { readFile, readdir, mkdir } from 'node:fs/promises';
 import { watch, watchFile, unwatchFile } from 'node:fs';
 import { join, basename } from 'node:path';
+import { emptyBreakdown, addBreakdown, breakdownFromUsage } from '../stats/io.js';
 
 export class TranscriptWatcher extends EventEmitter {
   #sessionId;
@@ -161,7 +162,10 @@ export class TranscriptWatcher extends EventEmitter {
     const lines = content.split('\n');
     for (let i = this.#linesRead; i < lines.length; i++) {
       const raw = lines[i].trim();
-      if (!raw) { if (i < lines.length - 1) this.#linesRead = i + 1; continue; }
+      if (!raw) {
+        if (i < lines.length - 1) this.#linesRead = i + 1;
+        continue;
+      }
       let entry;
       try { entry = JSON.parse(raw); } catch { break; } // partial line — retry next poll
       this.#linesRead = i + 1;
@@ -173,13 +177,10 @@ export class TranscriptWatcher extends EventEmitter {
         const model = entry.message?.model;
         const u = entry.message?.usage;
         if (model && u) {
-          const prev = this.#turnUsage.get(model) || { input: 0, cacheCreate: 0, output: 0, cacheRead: 0 };
-          this.#turnUsage.set(model, {
-            input:       prev.input       + (u.input_tokens                || 0),
-            cacheCreate: prev.cacheCreate + (u.cache_creation_input_tokens || 0),
-            output:      prev.output      + (u.output_tokens               || 0),
-            cacheRead:   prev.cacheRead   + (u.cache_read_input_tokens     || 0),
-          });
+          this.#turnUsage.set(model, addBreakdown(
+            this.#turnUsage.get(model) || emptyBreakdown(),
+            breakdownFromUsage(u),
+          ));
         }
 
         // Emit synthetic task_started for each Agent() tool call so activeAgents
@@ -243,13 +244,10 @@ export class TranscriptWatcher extends EventEmitter {
                 const model = e.message?.model;
                 const u = e.message?.usage;
                 if (!model || !u) continue;
-                const prev = usage.get(model) || { input: 0, cacheCreate: 0, output: 0, cacheRead: 0 };
-                usage.set(model, {
-                  input:       prev.input       + (u.input_tokens                || 0),
-                  cacheCreate: prev.cacheCreate + (u.cache_creation_input_tokens || 0),
-                  output:      prev.output      + (u.output_tokens               || 0),
-                  cacheRead:   prev.cacheRead   + (u.cache_read_input_tokens     || 0),
-                });
+                usage.set(model, addBreakdown(
+                  usage.get(model) || emptyBreakdown(),
+                  breakdownFromUsage(u),
+                ));
               }
             })
         );

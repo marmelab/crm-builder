@@ -1,10 +1,11 @@
 import { on } from 'node:events';
 import { cp, copyFile, mkdir, chmod, readdir, readFile, writeFile } from 'node:fs/promises';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { join } from 'node:path';
-import { LOG_DIR, CLAUDE_HOME, CWD } from './config.js';
+import { LOG_DIR, CLAUDE_HOME, PROJECT_DIR } from './config.js';
 import { broadcast, sendStats } from './ws-bus.js';
 import { runtimes, transitionState } from './runtime.js';
-import { snapshotTickets, sendProgress } from './ticket-progress.js';
+import { sendProgress } from './ticket-progress.js';
 import { rewriteUserMessage, extractText, extractToolUses, friendlyError } from './claude-spawn.js';
 import { PtySession } from './pty-session.js';
 import { endsWithQuestion } from './session-store.js';
@@ -12,21 +13,33 @@ import {
   emptyBreakdown, addBreakdown, breakdownFromModelUsage, costFromBreakdown,
 } from '../stats/io.js';
 
-// Return true if any team-lead inbox under ~/.claude/teams/ has unread messages.
+// Consecutive watchdog ticks with unread messages before escalating.
+const WATCHDOG_NUDGE_TICKS  = 10;  // 30 s  — switch from nudge to direct delivery
+const WATCHDOG_BURST_TICKS  = 100; // 300 s — burst-nudge; kill PTY if merger finished
+
+// Yield {inboxPath, msgs, unread} for every team-lead inbox that exists.
+// Shared by hasUnreadInboxMessages and deliverUnreadInboxMessages to avoid
+// duplicating the directory-traversal logic.
+async function* iterateTeamLeadInboxes() {
+  const teamsDir = join(CLAUDE_HOME, '.claude', 'teams');
+  let teams;
+  try { teams = await readdir(teamsDir); } catch { return; /* teams dir missing */ }
+  for (const team of teams) {
+    const inboxPath = join(teamsDir, team, 'inboxes', 'team-lead.json');
+    try {
+      const msgs = JSON.parse(await readFile(inboxPath, 'utf8'));
+      if (!Array.isArray(msgs)) continue;
+      yield { inboxPath, msgs, unread: msgs.filter(m => !m.read) };
+    } catch { /* inbox missing or malformed — skip */ }
+  }
+}
+
+// Return true if any team-lead inbox has unread messages.
 // Used by the inbox watchdog in attachBgListener.
 async function hasUnreadInboxMessages() {
-  const teamsDir = join(CLAUDE_HOME, '.claude', 'teams');
-  try {
-    const teams = await readdir(teamsDir);
-    for (const team of teams) {
-      const inboxPath = join(teamsDir, team, 'inboxes', 'team-lead.json');
-      try {
-        const raw = await readFile(inboxPath, 'utf8');
-        const msgs = JSON.parse(raw);
-        if (Array.isArray(msgs) && msgs.some(m => !m.read)) return true;
-      } catch { /* inbox missing or malformed — skip */ }
-    }
-  } catch { /* teams dir missing — no active team */ }
+  for await (const { unread } of iterateTeamLeadInboxes()) {
+    if (unread.length > 0) return true;
+  }
   return false;
 }
 
@@ -37,37 +50,26 @@ async function hasUnreadInboxMessages() {
 // reports without needing a PTY restart (which would destroy the team context).
 async function deliverUnreadInboxMessages(ptyRef) {
   if (ptyRef.closed) return;
-  const teamsDir = join(CLAUDE_HOME, '.claude', 'teams');
-  try {
-    const teams = await readdir(teamsDir);
-    for (const team of teams) {
-      const inboxPath = join(teamsDir, team, 'inboxes', 'team-lead.json');
-      try {
-        const raw = await readFile(inboxPath, 'utf8');
-        const msgs = JSON.parse(raw);
-        if (!Array.isArray(msgs)) continue;
-        const unread = msgs.filter(m => !m.read);
-        if (unread.length === 0) continue;
-        // Mark all as read before injecting to prevent double-delivery if the
-        // watchdog fires again before the orchestrator processes the messages.
-        await writeFile(inboxPath, JSON.stringify(msgs.map(m => ({ ...m, read: true }))));
-        for (const msg of unread) {
-          const from = msg.from || 'teammate';
-          const text = (msg.text || msg.message || '').toString();
-          // Same format the Claude Code runtime uses when InboxPoller delivers
-          // a SendMessage from a teammate to the team-lead.
-          // IMPORTANT: use ptyRef.send() not ptyRef.write(). Sending text+'\r'
-          // in a single write() call causes Ink's input handler to miss the CR
-          // for messages longer than ~50 chars (TUI renders input but never
-          // submits). send() uses a 50 ms gap between text and '\r', matching
-          // the PtySession#doSend implementation.
-          ptyRef.send(`<teammate-message teammate_id="${from}">${text}</teammate-message>`);
-          // Longer gap so the TUI fully processes each submission before the next.
-          await new Promise(r => setTimeout(r, 500));
-        }
-      } catch { /* inbox missing or malformed — skip */ }
+  for await (const { inboxPath, msgs, unread } of iterateTeamLeadInboxes()) {
+    if (unread.length === 0) continue;
+    // Mark all as read before injecting to prevent double-delivery if the
+    // watchdog fires again before the orchestrator processes the messages.
+    await writeFile(inboxPath, JSON.stringify(msgs.map(m => ({ ...m, read: true }))));
+    for (const msg of unread) {
+      const from = msg.from || 'teammate';
+      const text = (msg.text || msg.message || '').toString();
+      // Same format the Claude Code runtime uses when InboxPoller delivers
+      // a SendMessage from a teammate to the team-lead.
+      // IMPORTANT: use ptyRef.send() not ptyRef.write(). Sending text+'\r'
+      // in a single write() call causes Ink's input handler to miss the CR
+      // for messages longer than ~50 chars (TUI renders input but never
+      // submits). send() uses a 50 ms gap between text and '\r', matching
+      // the PtySession#doSend implementation.
+      ptyRef.send(`<teammate-message teammate_id="${from}">${text}</teammate-message>`);
+      // Longer gap so the TUI fully processes each submission before the next.
+      await sleep(500);
     }
-  } catch { /* teams dir missing — no active team */ }
+  }
 }
 
 // Aborts when either the result event arrives or the session exits unexpectedly.
@@ -115,7 +117,7 @@ export async function processMessage(runtime, prompt) {
   // Claude (re)starts → session is active again.
   transitionState(runtime, 'in_progress');
   broadcast(runtime, { type: 'status', working: true });
-  const toolMap = new Map();
+  const pendingTicketWrites = new Set();
   let receivedText = false;
   let rateLimit = null;
   let resultError = false;
@@ -156,50 +158,55 @@ export async function processMessage(runtime, prompt) {
       // InboxPoller entirely and keeps the PTY (and its team context) alive.
       let watchdogTimer = null;
       let staleCount = 0; // consecutive ticks with unread messages (stall length)
+      const hooksLog = join(sessionDir, 'hooks.log');
       function scheduleWatchdog() {
         watchdogTimer = setTimeout(async () => {
           if (ptyRef.closed) return; // PTY dead — stop the watchdog
-          if (!runtime.busy && await hasUnreadInboxMessages()) {
-            staleCount++;
-            if (staleCount > 100) {
-              // Stall > 5 min — burst nudges haven't broken through (teammate
-              // AsyncLocalStorage contexts blocking every re-render).
-              //
-              // Safety check before killing: in-process teammates are children
-              // of the PTY process. Killing the PTY while a teammate (reviewer,
-              // merger) is still working would abort their work mid-flight.
-              // The merger is always the last to stop and triggers the
-              // cleanup-worktree SubagentStop hook. If that hook's EXIT line
-              // is in hooks.log, all teammates have finished — it is safe to
-              // restart the PTY. If not, keep burst-nudging and wait.
-              const hooksLog = join(sessionDir, 'hooks.log');
-              const mergerDone = await readFile(hooksLog, 'utf8')
-                .then(log => log.includes('cleanup-worktree EXIT'))
-                .catch(() => false);
-              if (mergerDone) {
-                // Kill the PTY. ptyEventsUntilResult aborts on exit so
-                // processMessage drains cleanly; the exit handler fires with
-                // runtime.busy=false and restartCount=0, triggering
-                // spawnOrResumePty() after 5 s with a fresh InboxPoller.
-                // Don't reschedule — the new PTY's attachBgListener creates a
-                // fresh watchdog with staleCount = 0.
-                ptyRef.kill();
-                return;
-              }
-              // Merger not yet done — fall through to burst nudge and keep waiting.
-            } else if (staleCount > 10) {
-              // Stall persisted > 30 s — directly inject the queued inbox messages.
-              // InboxPoller is permanently dead; nudges can't revive it reliably.
-              // Injecting <teammate-message> blocks bypasses InboxPoller and keeps
-              // the PTY (and its team/inbox context) alive.
-              await deliverUnreadInboxMessages(ptyRef);
-            } else {
-              ptyRef.nudge();
-            }
-          } else {
+          if (runtime.busy || !await hasUnreadInboxMessages()) {
             staleCount = 0; // inbox clear or session busy — reset escalation
+            scheduleWatchdog();
+            return;
           }
-          scheduleWatchdog(); // reschedule regardless — stop only when PTY closes
+
+          staleCount++;
+
+          if (staleCount > WATCHDOG_BURST_TICKS) {
+            // Stall > 5 min — burst nudges haven't broken through (teammate
+            // AsyncLocalStorage contexts blocking every re-render).
+            //
+            // Safety check before killing: in-process teammates are children
+            // of the PTY process. Killing the PTY while a teammate (reviewer,
+            // merger) is still working would abort their work mid-flight.
+            // The merger is always the last to stop and triggers the
+            // cleanup-worktree SubagentStop hook. If that hook's EXIT line
+            // is in hooks.log, all teammates have finished — it is safe to
+            // restart the PTY. If not, keep burst-nudging and wait.
+            const mergerDone = await readFile(hooksLog, 'utf8')
+              .then(log => log.includes('cleanup-worktree EXIT'))
+              .catch(() => false);
+            if (mergerDone) {
+              // Kill the PTY. ptyEventsUntilResult aborts on exit so
+              // processMessage drains cleanly; the exit handler fires with
+              // runtime.busy=false and restartCount=0, triggering
+              // spawnOrResumePty() after 5 s with a fresh InboxPoller.
+              // Don't reschedule — the new PTY's attachBgListener creates a
+              // fresh watchdog with staleCount = 0.
+              ptyRef.kill();
+              return;
+            }
+            // Merger not yet done — burst-nudge and keep waiting.
+            ptyRef.nudgeBurst();
+          } else if (staleCount > WATCHDOG_NUDGE_TICKS) {
+            // Stall persisted > 30 s — directly inject the queued inbox messages.
+            // InboxPoller is permanently dead; nudges can't revive it reliably.
+            // Injecting <teammate-message> blocks bypasses InboxPoller and keeps
+            // the PTY (and its team/inbox context) alive.
+            await deliverUnreadInboxMessages(ptyRef);
+          } else {
+            ptyRef.nudge();
+          }
+
+          scheduleWatchdog(); // reschedule — stop only when PTY closes
         }, 3000);
       }
       scheduleWatchdog();
@@ -301,23 +308,6 @@ export async function processMessage(runtime, prompt) {
             runtime.session?.recordMessage('assistant', text).catch(() => {});
           }
         }
-
-        let dispatchedThisEvent = false;
-        for (const tool of extractToolUses(event)) {
-          toolMap.set(tool.id, tool);
-          // Count orchestrator Agent/Task dispatches eagerly (the tool_use
-          // event lands before the runtime fires task_started), so the bar
-          // shows "1/3" right away for SIMPLE instead of growing 1/2 → 2/3.
-          if (AGENT_DISPATCH_TOOLS.has(tool.name) && tool.input?.subagent_type) {
-            if (runtime.stats.dispatchedSubagentTypes.length === 0) {
-              runtime.stats.flowExpected = predictedFlowExpected(tool.input.subagent_type);
-            }
-            runtime.stats.dispatchedSubagentTypes.push(tool.input.subagent_type);
-            runtime.stats.dispatchedSubagentStartedAt.push(Date.now());
-            dispatchedThisEvent = true;
-          }
-        }
-        if (dispatchedThisEvent) sendProgress(runtime);
 
         if (event.type === 'rate_limit_event' && event.rate_limit_info?.status === 'blocked') {
           rateLimit = event.rate_limit_info;
@@ -475,13 +465,11 @@ export async function processMessage(runtime, prompt) {
 
 async function snapshotClaudeSession(claudeSessionId, sessionId) {
   if (!claudeSessionId || !sessionId) return;
-  const slug = CWD.replace(/\//g, '-');
-  const projectDir = join(CLAUDE_HOME, '.claude', 'projects', slug);
-  const srcDir = join(projectDir, claudeSessionId);
+  const srcDir = join(PROJECT_DIR, claudeSessionId);
   const destDir = join(LOG_DIR, sessionId, 'claude');
 
   await mkdir(destDir, { recursive: true });
-  await copyFile(join(projectDir, `${claudeSessionId}.jsonl`), join(destDir, 'transcript.jsonl'))
+  await copyFile(join(PROJECT_DIR, `${claudeSessionId}.jsonl`), join(destDir, 'transcript.jsonl'))
     .then(() => chmod(join(destDir, 'transcript.jsonl'), 0o644))
     .catch(() => {});
   for (const subdir of ['subagents', 'tool-results']) {
@@ -495,9 +483,11 @@ async function snapshotClaudeSession(claudeSessionId, sessionId) {
 
 async function chmodDir(dir, fileMode, dirMode) {
   await chmod(dir, dirMode).catch(() => {});
-  for (const entry of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
+  const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+  await Promise.all(entries.map(entry => {
     const full = join(dir, entry.name);
-    if (entry.isDirectory()) await chmodDir(full, fileMode, dirMode);
-    else await chmod(full, fileMode).catch(() => {});
-  }
+    return entry.isDirectory()
+      ? chmodDir(full, fileMode, dirMode)
+      : chmod(full, fileMode).catch(() => {});
+  }));
 }

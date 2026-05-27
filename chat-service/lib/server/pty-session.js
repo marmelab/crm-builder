@@ -3,7 +3,7 @@ import stripAnsi from 'strip-ansi';
 import { EventEmitter } from 'node:events';
 import { access, unlink } from 'node:fs/promises';
 import { watch } from 'node:fs';
-import { CWD, CLAUDE_HOME } from './config.js';
+import { CWD, CLAUDE_HOME, PROJECT_DIR } from './config.js';
 import { getOrchestratorModel } from './system-prompt.js';
 import { buildSpawnEnv } from '../spawn-env.js';
 import { TranscriptWatcher } from './transcript-watcher.js';
@@ -23,9 +23,6 @@ const TURN_TIMEOUT_MS = 120_000;  // fallback: silence after last PTY chunk → 
                                   // for subagent responses (planner, developer team). The Stop hook sentinel
                                   // is the primary "turn done" signal; this timer is only the safety net.
 const STARTUP_TIMEOUT_MS = 12_000; // safety: Claude TUI initializes in ~1.5s; 12s is reliably safe
-// Claude project dir slug: '/app' → '-app'
-const PROJECT_SLUG = CWD.replace(/\//g, '-');
-const PROJECT_DIR = join(CLAUDE_HOME, '.claude', 'projects', PROJECT_SLUG);
 
 const OUTPUT_BUFFER_LIMIT = 2048;
 
@@ -188,10 +185,9 @@ export class PtySession extends EventEmitter {
     if (this.closed || !this.#ready) return;
     let i = 0;
     const fire = () => {
-      if (i++ < count && !this.closed) {
-        this.#pty.write(' \x7f');
-        if (i < count) setTimeout(fire, intervalMs);
-      }
+      if (this.closed) return;
+      this.#pty.write(' \x7f');
+      if (++i < count) setTimeout(fire, intervalMs);
     };
     fire();
   }
