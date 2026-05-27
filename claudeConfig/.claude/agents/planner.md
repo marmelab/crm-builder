@@ -59,9 +59,8 @@ will load the `shadcn-customization` skill to handle them correctly.
 ## Step 3 — Decompose into tickets
 
 Rules:
-- One ticket = one deliverable (one entity, one screen, one migration, one cross-cutting concern).
+- One ticket = one deliverable (one entity, one screen, one cross-cutting concern).
 - **Coarse over fine**: ≤ 3 tickets per user-visible feature. Merge data-layer tickets (type + seed + config) unless any exceeds ~150 LOC / 5 files.
-- Supabase migrations are always separate tickets from UI components.
 - Config / infrastructure changes are separate tickets.
 - Order by dependency: blocking tickets first.
 - Flag risk honestly. When unsure: `medium`.
@@ -73,7 +72,7 @@ Rules:
   "ticket_id": "TASK-001",
   "title": "Short imperative title",
   "description": "What needs to be done and why",
-  "type": "feature|fix|migration|config",
+  "type": "feature|fix|config",
   "risk_level": "low|medium|high",
   "acceptance_criteria": ["specific, testable", "..."],
   "non_functional_requirements": {
@@ -89,7 +88,6 @@ Rules:
   "parallel_safe": true,
   "branch_name": "feature/company-importance-type",
   "visual_customization": false,
-  "requires_supabase_migration": false,
   "status": "pending"
 }
 ```
@@ -102,7 +100,6 @@ Rules:
 - `package.json` / lockfiles (shared `node_modules` symlink)
 - `tsconfig.json` / `vite.config.ts` / build config
 - `.env` / `.env.*`
-- DB schema files in `supabase/migrations*/`
 - Global CSS / `tailwind.config`
 
 Normal feature tickets (type / component / config prop) → `parallel_safe: true`.
@@ -110,14 +107,6 @@ Normal feature tickets (type / component / config prop) → `parallel_safe: true
 **`branch_name`**: filesystem-safe, `feature/<short-kebab>` or `fix/<short-kebab>`. Used to create the worktree.
 
 **`visual_customization`**: set `true` when the ticket touches colors, theme, component styling, dark/light mode, or layout preferences. The developer loads `Skill({skill: "shadcn-customization"})` as its first action on such tickets.
-
-**`requires_supabase_migration`**: set `true` when the ticket adds, alters,
-or drops a database schema element — new entity, new column on an existing
-entity, dropped table, RLS policy change, index, trigger, etc. Set `false`
-for UI-only, TypeScript-only, fake-data-only, or cosmetic tickets. The
-developer reads this flag and produces the SQL file staged in
-`supabase/migrations-pending/` whenever it is true; the orchestrator
-promotes and applies it once the user agrees to deploy.
 
 ### Dependency rules
 
@@ -154,17 +143,17 @@ When `SETUP_MODE=true`:
 - Read `/app/docs/project-context.json` first — the entities, fields,
   pipeline_stages, and user_roles defined by project-manager are your spec.
 - Produce **scaffolding tickets**, in this order of priority:
-  - For each entity with `"type": "create"`: one ticket for the Supabase
-    migration (`requires_supabase_migration: true`) + one ticket for the
+  - For each entity with `"type": "create"`: one ticket producing the
     TypeScript types, components and routes.
   - For each entity with `"type": "extend"`: one ticket adding the listed
     custom fields to the existing entity (types + form inputs + list/show
-    columns + Supabase migration; `requires_supabase_migration: true`).
+    columns).
   - One ticket per integration the user requested.
   - One ticket for theme / language / dashboard preferences if non-default.
 - Use sensible `dependencies` — extend-tickets often depend on the base
-  entity already shipping with Atomic CRM (no dep needed), create-tickets'
-  UI tickets depend on their migration ticket.
+  entity already shipping with Atomic CRM (no dep needed); create-tickets
+  have no migration ticket to depend on, so wire UI deps directly between
+  feature tickets.
 - **Cleanup tickets** — read the `cleanup` section of `project-context.json`.
   For each element listed there, produce one removal ticket. Cleanup tickets
   run in Wave 1 (no dependencies) and are `parallel_safe: true` unless two
@@ -173,10 +162,11 @@ When `SETUP_MODE=true`:
   What a cleanup ticket must do:
   - Remove the entity's routes, list/show/edit components, and navigation entry.
   - Remove its TypeScript types and fake-data generators.
-  - Produce a separate migration ticket (`requires_supabase_migration: true`)
-    to drop the Supabase table, RLS, indexes, etc.
   - Remove any reference to the entity in other components (sidebar, dashboards,
     relation selectors).
+  - Do NOT produce a separate ticket to drop the database table — the
+    deploy-time migration round derives drops automatically from the removed
+    TypeScript types.
   - For feature removals (pipeline, analytics, csv_import_export): remove the
     corresponding UI sections, menu items, and related hooks/utils.
 
@@ -200,9 +190,9 @@ Produce:
 
 Every data change always produces both:
 - TypeScript types + fake-data generators (FakeRest demo).
-- When schema-shaped (new entity, new column, dropped table, RLS, index, trigger…): a SQL file in `supabase/migrations-pending/` and `requires_supabase_migration: true`. The folder is invisible to Supabase CLI — the orchestrator promotes and applies it only after the user agrees.
+- Schema-shaped changes (new entity, new column, dropped table) still produce only TypeScript types + fake-data here; the SQL migration is derived later at deploy time, not by the planner or developer.
 
-Default to one combined ticket (TS + fake data + migration) for field additions on existing entities; split into migration + UI/types for new entities.
+Default to one combined ticket (types + fake data) for field additions on existing entities; split into types + UI for new entities.
 
 ---
 
