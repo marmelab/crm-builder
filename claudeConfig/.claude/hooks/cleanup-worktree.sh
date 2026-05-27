@@ -37,6 +37,14 @@ while IFS= read -r line; do
     CURRENT_BRANCH="${line#branch refs/heads/}"
   elif [[ -z "$line" ]]; then
     if [[ "$CURRENT_PATH" == "$WORKTREE_BASE"/* ]] || [[ "$CURRENT_PATH" == "$WORKTREE_BASE" ]]; then
+      # Never clean the session integration worktree; it persists for the whole session.
+      case "$CURRENT_PATH" in
+        */_session)
+          echo "[$(date -Iseconds)] cleanup-worktree SKIP-SESSION-WORKTREE $CURRENT_PATH" >> "$LOG" 2>/dev/null || true
+          SKIPPED=$((SKIPPED + 1))
+          continue
+          ;;
+      esac
       # Only remove if the branch has developer commits AND is merged into master.
       # Two separate checks are required:
       # - A detached HEAD has no branch name to check.
@@ -75,6 +83,13 @@ done < <(git -C /app worktree list --porcelain 2>/dev/null; echo "")
 
 for branch in "${BRANCHES_TO_DELETE[@]:-}"; do
   [ -z "$branch" ] && continue
+  # Never delete session branches or the anchor ref — they must persist for the whole session.
+  case "$branch" in
+    session/*|session-base/*)
+      echo "[$(date -Iseconds)] cleanup-worktree SKIP-SESSION-BRANCH $branch" >> "$LOG" 2>/dev/null || true
+      continue
+      ;;
+  esac
   git -C /app branch -d "$branch" 2>/dev/null || git -C /app branch -D "$branch" 2>/dev/null || true
   echo "[$(date -Iseconds)] cleanup-worktree BRANCH-DELETED $branch" >> "$LOG" 2>/dev/null || true
 done
@@ -84,6 +99,13 @@ git -C /app worktree prune 2>/dev/null || true
 # Remove leftover dirs not registered as git worktrees
 REGISTERED=$(git -C /app worktree list --porcelain 2>/dev/null | grep '^worktree ' | sed 's/^worktree //')
 find "$WORKTREE_BASE" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | while read -r d; do
+  # Never remove the session integration worktree; it persists for the whole session.
+  case "$d" in
+    */_session)
+      echo "[$(date -Iseconds)] cleanup-worktree SKIP-SESSION-LEFTOVER $d" >> "$LOG" 2>/dev/null || true
+      continue
+      ;;
+  esac
   if ! echo "$REGISTERED" | grep -qF "$d"; then
     rm -rf "$d"
     echo "[$(date -Iseconds)] cleanup-worktree LEFTOVER RM $d" >> "$LOG" 2>/dev/null || true
