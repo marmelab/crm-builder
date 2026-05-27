@@ -122,16 +122,30 @@ export async function processMessage(runtime, prompt) {
             staleCount++;
             if (staleCount > 100) {
               // Stall > 5 min — burst nudges haven't broken through (teammate
-              // AsyncLocalStorage contexts blocking every re-render). Kill the
-              // PTY and let the exit handler restart it with --resume: fresh
-              // InboxPoller processes pending inbox messages within seconds.
-              // ptyEventsUntilResult aborts on PTY exit so processMessage
-              // drains cleanly; the exit handler fires with runtime.busy=false
-              // and restartCount=0, triggering spawnOrResumePty() after 5 s.
-              // Don't reschedule — the new PTY's attachBgListener creates a
-              // fresh watchdog with staleCount = 0.
-              ptyRef.kill();
-              return;
+              // AsyncLocalStorage contexts blocking every re-render).
+              //
+              // Safety check before killing: in-process teammates are children
+              // of the PTY process. Killing the PTY while a teammate (reviewer,
+              // merger) is still working would abort their work mid-flight.
+              // The merger is always the last to stop and triggers the
+              // cleanup-worktree SubagentStop hook. If that hook's EXIT line
+              // is in hooks.log, all teammates have finished — it is safe to
+              // restart the PTY. If not, keep burst-nudging and wait.
+              const hooksLog = join(sessionDir, 'hooks.log');
+              const mergerDone = await readFile(hooksLog, 'utf8')
+                .then(log => log.includes('cleanup-worktree EXIT'))
+                .catch(() => false);
+              if (mergerDone) {
+                // Kill the PTY. ptyEventsUntilResult aborts on exit so
+                // processMessage drains cleanly; the exit handler fires with
+                // runtime.busy=false and restartCount=0, triggering
+                // spawnOrResumePty() after 5 s with a fresh InboxPoller.
+                // Don't reschedule — the new PTY's attachBgListener creates a
+                // fresh watchdog with staleCount = 0.
+                ptyRef.kill();
+                return;
+              }
+              // Merger not yet done — fall through to burst nudge and keep waiting.
             } else if (staleCount > 10) {
               // Stall persisted > 30 s — switch to burst mode (5 nudges × 40 ms).
               ptyRef.nudgeBurst(5, 40);
