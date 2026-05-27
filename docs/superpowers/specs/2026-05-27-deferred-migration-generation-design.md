@@ -59,13 +59,12 @@ soup of whatever work has landed.
    main). All tickets across all waves of a request accumulate here; wave-2
    tasks fork from `session/<id>` and so naturally see wave-1's merges.
 4. **Request done (last wave merged).** Merger **promotes**: `git merge --no-ff
-   session/<id>` into `main`, and the resulting merge SHA is recorded for the
-   session (see *SHA ledger*). `/app` (on main) now reflects the whole request,
-   so the demo shows it.
+   session/<id>` into `main`. `/app` (on main) now reflects the whole request,
+   so the demo shows it. No per-promotion SHA is recorded.
 5. **Satisfaction question** (Part 2). If the user wants to adjust, the next
    request's tasks fork from `session/<id>` again (it persists and keeps
-   advancing); another promotion + SHA follows. If satisfied, the migration
-   round runs.
+   advancing); another promotion follows. If satisfied, the migration round
+   runs.
 
 `/app` stays checked out on `main` throughout — the merger keeps doing
 `git reset --hard HEAD && apply-app-variant.sh` on `/app`. "Switching back to
@@ -78,14 +77,19 @@ checkout of `/app`.
 
 - Before creating a task worktree, ensure the session branch exists:
   `git -C /app show-ref --verify --quiet refs/heads/session/<SESSION_SHORT> ||
-   git -C /app branch session/<SESSION_SHORT> main` (use the dynamically
+   git -C /app branch session/<SESSION_SHORT> <base>` (use the dynamically
   detected base, main/master).
+- **At the moment the session branch is created**, store its fork base (one
+  value): `git -C /app rev-parse <base> > /app/worktrees/<SESSION_SHORT>/.session-base`.
+  This is the stable diff baseline for migrations. It must NOT be recomputed
+  later with `git merge-base`: after the first promotion the merge-base of
+  main and the session branch collapses onto the session tip (the session
+  becomes an ancestor of main's merge commit), yielding an empty diff. The
+  stored fork base stays correct across any number of promotions.
 - Create the task worktree branched from `session/<SESSION_SHORT>` instead of
   `HEAD`. COMPLEX: `<SESSION_SHORT>/<TASK_ID>`. SIMPLE/migration:
   `simple/<SESSION_SHORT>`.
 - The existing orphan-recovery logic is preserved.
-- The old `.session-base` file is **not** needed — the session branch + its
-  fork point (`git merge-base main session/<id>`) replace it.
 
 ### 1B. `merger.md` (modify) — two stages
 
@@ -94,21 +98,17 @@ checkout of `/app`.
   the merge target is the session branch. Update ticket status as today.
 - **Stage B — promotion (end of request).** On an explicit promotion instruction
   from the orchestrator (e.g. `SendMessage(merger, "promote: session=<id>")`),
-  checkout main, `git merge --no-ff session/<id>`, report the merge SHA back.
-  SIMPLE single-shot: do Stage A then Stage B in one run, return the SHA.
+  checkout main, `git merge --no-ff session/<id>`, report done. SIMPLE
+  single-shot: do Stage A then Stage B in one run.
 - Conflict handling unchanged (abort + report). The merger still never does
-  `git add`/`git commit`.
-- **SHA ledger:** the merger reports the promotion SHA; the **orchestrator**
-  records it (the merger keeps its no-file-write constraint). See open question
-  on where (meta.json vs session-dir ledger).
+  `git add`/`git commit`, and writes no files (no SHA ledger).
 
 ### 1C. `chat-orchestrator.md` (modify) — promotion step
 
 - After a request's final wave teardown (STATE D, last wave), before POST-DEV:
-  send the merger the **promote** instruction, wait for the promotion SHA,
-  record it. Only then run the satisfaction question.
-- SIMPLE: the single-shot merger already does Stage A + B; orchestrator records
-  the returned SHA.
+  send the merger the **promote** instruction, wait for its done report. Only
+  then run the satisfaction question.
+- SIMPLE: the single-shot merger already does Stage A + B.
 
 ### 1D. `worktree-scope.md` + rules (modify)
 
@@ -223,8 +223,9 @@ satisfaction question to SIMPLE; default no.)
 ### 2C. New skill `writing-migrations`
 
 Guides `simple-developer` in migration mode:
-1. Resolve the session branch fork point (`git merge-base main session/<id>`).
-2. `git diff <fork-point>..session/<id>` → identify schema-relevant changes (TS
+1. Read the stored session fork base: `/app/worktrees/<SESSION_SHORT>/.session-base`
+   (do NOT use `git merge-base` — it breaks after the first promotion).
+2. `git diff <fork-base>..session/<id>` → identify schema-relevant changes (TS
    entity types, fake-data generators, dataProvider resource configs).
 3. For each changed entity, compare the desired schema (TS types) against the
    schema already in `supabase/migrations/` + `supabase/schemas/`; emit only the
@@ -243,7 +244,20 @@ May load `supabase` / `supabase-postgres-best-practices` for SQL correctness.
 Add a single-shot migration-review mode (mirrors the merger's SIMPLE mode):
 dispatched standalone (no team), receives the migration file paths + a
 migration-specific checklist, returns a text verdict (APPROVED / BLOCKED +
-issues). No `SendMessage`.
+issues). No `SendMessage`. **No new redundant agent** — the same
+`quality-reviewer` is reused.
+
+### 2D-bis. `member-idle-gate.sh` (modify)
+
+The gate blocks any `quality-reviewer*` until a `/tmp/notified-qr-…` flag exists
+(written by `validate-before-review` on a developer's "ready for review"). In
+the team-free migration round no such flag is written, so the reviewer would be
+blocked. Add a bypass mirroring the existing SIMPLE-merger bypass: when a
+`quality-reviewer` operates on the migration worktree
+(`/worktrees/<SESSION_SHORT>/simple`), pass. This is correct, not a hack — the
+gate exists to stop a reviewer dispatched *concurrently* with a developer from
+reviewing an empty worktree; in the sequential migration round the SQL is
+already written and merged before the reviewer runs.
 
 ### 2E. `chat-orchestrator.md` (modify) — POST-DEV
 
@@ -265,8 +279,9 @@ Supabase if needed, `supabase migration up`, reload PostgREST schema cache.
 ### 2G. `pending-deploys.mjs` (rework)
 
 Replace flag-based detection with a session-branch diff check: does
-`<fork-point>..session/<id>` touch schema-relevant paths whose delta is not yet
-in `supabase/migrations/`? Output non-empty when a deploy is worth offering.
+`<fork-base>..session/<id>` (fork base read from `.session-base`) touch
+schema-relevant paths whose delta is not yet in `supabase/migrations/`? Output
+non-empty when a deploy is worth offering.
 
 ### 2H. Cleanup
 
@@ -278,26 +293,31 @@ in `supabase/migrations/`? Output non-empty when a deploy is worth offering.
 
 ---
 
+## Resolved since first draft
+
+- **No SHA ledger.** Per-promotion merge SHAs are not recorded — the migration
+  diff uses the session branch against its stored fork base (`.session-base`),
+  so the SHAs add nothing.
+- **No new reviewer agent.** Reuse `quality-reviewer` single-shot + a targeted
+  `member-idle-gate` bypass (component 2D-bis).
+- **`.deploy-applied` removed.** Idempotency now comes from cross-checking
+  `supabase/migrations/`; the ledger is redundant and dropped.
+
 ## Open implementation details (resolve in the plan)
 
-- **SHA ledger location:** user asked for `meta.json`, but it is a chat-service
-  cache rebuilt from `log.jsonl`. Decide: chat-service folds a logged event into
-  meta.json, vs a dedicated session-dir ledger file (like `.deploy-applied`),
-  vs the orchestrator writing meta.json directly. The SHA is bookkeeping — the
-  migration diff uses the session branch, not the SHAs.
 - **Promotion trigger mechanics:** exact orchestrator↔merger handshake to
-  promote `session/<id>` → main at the right moment (after the request's last
-  wave, before the satisfaction question), and how the merger reports the SHA
-  during teardown.
-- **quality-reviewer single-shot identity** so `member-idle-gate` does not block
-  a team-less reviewer.
-- **Schema-relevant file heuristic** in `writing-migrations` / `pending-deploys`
-  (which globs under `src/` count).
-- **`.deploy-applied` fate:** with detection diff-based and idempotency from
-  cross-checking `supabase/migrations/`, decide whether the ledger is still
-  needed.
+  promote `session/<id>` → main after the request's last wave, given the merger
+  is normally being torn down at that point (STATE D).
+- **Schema-relevant file heuristic** in `writing-migrations` / `pending-deploys`:
+  pin the exact globs under `src/` that imply a schema change (entity types,
+  fake-data generators, dataProvider resource configs) against the real CRM repo
+  layout.
 - **App.tsx variant interaction:** confirm the `git reset --hard HEAD +
-  apply-app-variant.sh` dance behaves under the new promote-to-main step.
+  apply-app-variant.sh` dance behaves under the new promote-to-main step (no
+  App.tsx conflict, correct variant after promotion).
+- **`.session-base` capture point:** confirm the first `setup-worktree` of every
+  flow (COMPLEX wave, SETUP planner-driven wave, SIMPLE) creates the session
+  branch and stores the fork base before any merge.
 
 ## Non-goals
 
