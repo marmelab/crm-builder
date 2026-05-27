@@ -19,6 +19,20 @@ fi
 echo -e "${BOLD}${BLUE}╚══════════════════════════════════════════════════════╝${NC}"
 echo ""
 
+# ── First-run bootstrap ───────────────────────────────────────
+# /app is bind-mounted from ./crm-source on the host so users can browse and
+# share the CRM source. On the first run that host folder is empty, so we
+# restore the build artifacts staged at /opt/atomic-crm-source by the
+# Dockerfile (includes node_modules, .git, etc. — keeps `cp -al` worktree
+# hard-links working since everything stays on the same device).
+if [ ! -f /app/package.json ] && [ -d /opt/atomic-crm-source ]; then
+  echo -e "${BOLD}${BLUE}First run — populating /app from image (this takes ~30s)…${NC}"
+  cp -a /opt/atomic-crm-source/. /app/
+  chown -R developer:developer /app
+  echo -e "${GREEN}✓  Source ready in ./crm-source${NC}"
+  echo ""
+fi
+
 # ── Auth check — API key or OAuth token ───────────────────────
 CLAUDE_DIR="/home/developer/.claude"
 
@@ -92,10 +106,10 @@ touch /chat-service/logs/hooks.log 2>/dev/null || true
 chown developer:developer /chat-service/logs/hooks.log 2>/dev/null || true
 chmod 664 /chat-service/logs/hooks.log 2>/dev/null || true
 
-# Runtime-generated docs (reflections, learnings) — bind-mounted from host ./crm-docs.
-# On a fresh host, the directory may be empty and owned by root (if Docker runs as
-# root on Linux) or by a host UID that doesn't match developer's UID. Without this
-# chown the developer cannot write reflections and Mode 2 silently fails.
+# Runtime-generated docs (reflections, learnings) — live inside the ./crm-source
+# bind mount at /app/docs. On a fresh host, parent dirs may be missing or owned
+# by an unexpected UID after the first-run bootstrap; ensure they exist and are
+# writable by developer so Mode 2 can persist reflections.
 # Note: ticket files (TASK-XXX.json) live in /chat-service/logs/<sessionId>/ now,
 # alongside log.jsonl and meta.json — chown'd via the chat-service logs block above.
 mkdir -p /app/docs/reflections /app/docs/learnings 2>/dev/null || true
@@ -130,9 +144,9 @@ if [ -f /app/.gitignore ] && ! grep -qxF 'worktrees/' /app/.gitignore; then
 fi
 
 # ── Sync node_modules with package-lock.json ──────────────────
-# Volume crm-app:/app persists node_modules across restarts. If an agent
-# modifies package.json/package-lock.json (e.g. adds a dependency) and
-# commits, the volume keeps the old node_modules. Hash-check at boot:
+# The ./crm-source bind mount persists node_modules across restarts. If an
+# agent modifies package.json/package-lock.json (e.g. adds a dependency) and
+# commits, the host folder keeps the old node_modules. Hash-check at boot:
 # if package-lock.json changed since last npm ci, re-install.
 LOCK_HASH=$(sha256sum /app/package-lock.json 2>/dev/null | cut -d' ' -f1)
 PREV_HASH=$(cat /app/.npm-ci-hash 2>/dev/null || echo "")
