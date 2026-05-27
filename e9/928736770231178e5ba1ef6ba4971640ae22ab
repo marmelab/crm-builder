@@ -1,0 +1,21 @@
+scripts/pending-deploys.mjs
+  s_3e8f094224eb5f::t_39bd62c5a70caa 2-3,5,7-9,11-15,17-21,23-27,29-32
+chat-service/test/pending-deploys.test.js
+  s_3e8f094224eb5f::t_4d94ce390877e5 1-41
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "e9928736770231178e5ba1ef6ba4971640ae22ab",
+  "prompts": {},
+  "sessions": {
+    "s_3e8f094224eb5f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aae53a2f-811a-427c-8791-ed3cc87bdd33",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Jerome <jerome@marmelab.com>"
+    }
+  }
+}
