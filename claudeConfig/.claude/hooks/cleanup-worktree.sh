@@ -43,31 +43,44 @@ while IFS= read -r line; do
     # a second consecutive blank line is a no-op.
     if [[ -z "$CURRENT_PATH" ]]; then continue; fi
     if [[ "$CURRENT_PATH" == "$WORKTREE_BASE"/* ]] || [[ "$CURRENT_PATH" == "$WORKTREE_BASE" ]]; then
-      # Only remove if the branch is merged into master OR has no commits.
-      # Check order matters:
-      # 1. Detached HEAD — no branch name, skip.
-      # 2. Merged — remove immediately. After git merge --no-ff, all branch
-      #    commits are reachable from master, so git log master..branch is
-      #    EMPTY even though real work was done. Checking --merged first
-      #    avoids the SKIP-NO-COMMITS false-positive that caused worktrees to
-      #    survive after a successful merge.
-      # 3. Not merged + no commits ahead — freshly created branch (HEAD ==
-      #    master), skip so the developer can still use it.
-      # 4. Not merged + has commits — merger hasn't run yet, preserve.
+      # Removal conditions (check order matters):
+      # 1. Detached HEAD — no branch name → skip (mid-rebase guard).
+      # 2. Branch tip == master tip — branch has no commits of its own yet.
+      #    git branch --merged master returns it (trivially an ancestor), but
+      #    the developer just started. Skip to preserve their workspace.
+      # 3. Branch tip != master tip AND git branch --merged master lists it —
+      #    real commits were made and the merger ran git merge --no-ff. After
+      #    --no-ff, master is at a NEW merge commit so BRANCH_SHA != MASTER_SHA,
+      #    but the branch IS in master's history. Safe to remove.
+      # 4. Branch tip != master tip AND NOT merged → work in progress. Preserve.
+      #
+      # Why not "git log master..branch" (old AHEAD check)?
+      #   After git merge --no-ff, all branch commits are reachable from master,
+      #   so git log master..branch is EMPTY even though real work was done.
+      #   Checking AHEAD first caused the SKIP-NO-COMMITS false-positive that
+      #   prevented cleanup after successful merges.
+      #
+      # Why not IS_MERGED first (previous fix attempt)?
+      #   A freshly created branch (tip == master) is trivially "merged" into
+      #   master (same commit), so IS_MERGED returns true immediately, causing
+      #   premature removal before the developer makes any commits.
       if [ -z "$CURRENT_BRANCH" ]; then
         echo "[$(date -Iseconds)] cleanup-worktree SKIP-DETACHED $CURRENT_PATH (detached HEAD)" >> "$LOG" 2>/dev/null || true
         SKIPPED=$((SKIPPED + 1))
         continue
       fi
+      BRANCH_SHA=$(git -C /app rev-parse "$CURRENT_BRANCH" 2>/dev/null || true)
+      MASTER_SHA=$(git -C /app rev-parse master 2>/dev/null || true)
+      if [ "$BRANCH_SHA" = "$MASTER_SHA" ]; then
+        # Same tip as master → branch created but no commits yet → skip.
+        echo "[$(date -Iseconds)] cleanup-worktree SKIP-NO-COMMITS $CURRENT_PATH branch=$CURRENT_BRANCH" >> "$LOG" 2>/dev/null || true
+        SKIPPED=$((SKIPPED + 1))
+        continue
+      fi
       IS_MERGED=$(git -C /app branch --merged master 2>/dev/null | grep -F " $CURRENT_BRANCH" | head -1 || true)
       if [ -z "$IS_MERGED" ]; then
-        # Not yet merged — only skip if the branch has commits to preserve.
-        AHEAD=$(git -C /app log --oneline "master..$CURRENT_BRANCH" 2>/dev/null | head -1 || true)
-        if [ -z "$AHEAD" ]; then
-          echo "[$(date -Iseconds)] cleanup-worktree SKIP-NO-COMMITS $CURRENT_PATH branch=$CURRENT_BRANCH" >> "$LOG" 2>/dev/null || true
-        else
-          echo "[$(date -Iseconds)] cleanup-worktree SKIP-UNMERGED $CURRENT_PATH branch=$CURRENT_BRANCH" >> "$LOG" 2>/dev/null || true
-        fi
+        # Branch has diverged but not merged into master yet → preserve.
+        echo "[$(date -Iseconds)] cleanup-worktree SKIP-UNMERGED $CURRENT_PATH branch=$CURRENT_BRANCH" >> "$LOG" 2>/dev/null || true
         SKIPPED=$((SKIPPED + 1))
         continue
       fi
