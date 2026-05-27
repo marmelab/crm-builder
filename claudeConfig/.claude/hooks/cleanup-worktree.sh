@@ -36,6 +36,12 @@ while IFS= read -r line; do
   elif [[ "$line" == branch\ * ]]; then
     CURRENT_BRANCH="${line#branch refs/heads/}"
   elif [[ -z "$line" ]]; then
+    # Guard: git's --porcelain output already ends with a blank line, and the
+    # trailing `echo ""` in the process substitution adds a second one. Without
+    # the guard below, the last worktree entry is processed twice (REMOVED then
+    # RM-RF for the same path). Reset state variables after each blank line so
+    # a second consecutive blank line is a no-op.
+    if [[ -z "$CURRENT_PATH" ]]; then continue; fi
     if [[ "$CURRENT_PATH" == "$WORKTREE_BASE"/* ]] || [[ "$CURRENT_PATH" == "$WORKTREE_BASE" ]]; then
       # Only remove if the branch is merged into master OR has no commits.
       # Check order matters:
@@ -74,6 +80,9 @@ while IFS= read -r line; do
       fi
       REMOVED=$((REMOVED + 1))
     fi
+    # Reset per-worktree state so a second consecutive blank line is a no-op.
+    CURRENT_PATH=""
+    CURRENT_BRANCH=""
   fi
 done < <(git -C /app worktree list --porcelain 2>/dev/null; echo "")
 

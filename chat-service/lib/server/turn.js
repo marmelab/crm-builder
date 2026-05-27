@@ -120,7 +120,19 @@ export async function processMessage(runtime, prompt) {
           if (ptyRef.closed) return; // PTY dead — stop the watchdog
           if (!runtime.busy && await hasUnreadInboxMessages()) {
             staleCount++;
-            if (staleCount > 10) {
+            if (staleCount > 100) {
+              // Stall > 5 min — burst nudges haven't broken through (teammate
+              // AsyncLocalStorage contexts blocking every re-render). Kill the
+              // PTY and let the exit handler restart it with --resume: fresh
+              // InboxPoller processes pending inbox messages within seconds.
+              // ptyEventsUntilResult aborts on PTY exit so processMessage
+              // drains cleanly; the exit handler fires with runtime.busy=false
+              // and restartCount=0, triggering spawnOrResumePty() after 5 s.
+              // Don't reschedule — the new PTY's attachBgListener creates a
+              // fresh watchdog with staleCount = 0.
+              ptyRef.kill();
+              return;
+            } else if (staleCount > 10) {
               // Stall persisted > 30 s — switch to burst mode (5 nudges × 40 ms).
               ptyRef.nudgeBurst(5, 40);
             } else {
