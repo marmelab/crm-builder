@@ -1,0 +1,19 @@
+claudeConfig/.claude/skills/writing-migrations/SKILL.md
+  s_3e8f094224eb5f::t_a5eb4dfa15aa28 1-62
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "e78acf579a0130560c23cdd31c2b97ac768683b3",
+  "prompts": {},
+  "sessions": {
+    "s_3e8f094224eb5f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aae53a2f-811a-427c-8791-ed3cc87bdd33",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Jerome <jerome@marmelab.com>"
+    }
+  }
+}
