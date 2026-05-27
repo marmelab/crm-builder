@@ -1,123 +1,192 @@
-# Deferred Migration Generation — Design
+# Deferred Migration Generation (on a Session-Branch Topology) — Design
 
 Date: 2026-05-27
 Branch: fix/Supabasemode
 
 ## Problem
 
-Today the `developer` agent writes a Supabase SQL migration into
+Today the `developer` writes a Supabase SQL migration into
 `supabase/migrations-pending/` during the ticket that touches the schema
-(driven by the planner's `requires_supabase_migration: true` flag). The
-orchestrator later promotes and applies those files when the user agrees to
-deploy (POST-DEV flow).
+(driven by the planner's `requires_supabase_migration` flag). The orchestrator
+later promotes and applies those files when the user agrees to deploy.
 
 This forces migration authoring on the *first* pass of every schema-shaped
 feature. In a demo-first workflow the user iterates several times in FakeRest
-mode before settling on a design — and each retake either re-writes migrations
-or leaves stale pending files describing abandoned intentions (e.g. a
-"priority on companies" field the user later dropped in favor of something
-else). Migrations are friction on every iteration and the ticket flags drift
-out of sync with what was actually built.
+before settling on a design — each retake re-writes migrations or leaves stale
+pending files describing abandoned intentions (e.g. a "priority on companies"
+field the user later dropped). Migrations are friction on every iteration, and
+the ticket flags drift out of sync with what was actually built.
+
+Determining "what this session actually changed" is also unreliable today:
+every ticket merges straight into `main`, so on a shared `/app` the history is a
+soup of whatever work has landed.
 
 ## Goal
 
-The user iterates freely in demo mode. SQL migrations are generated **once**,
-**on demand**, only when the user decides to deploy to the real database — and
-they reflect the **actual final state** of the session's work, not the
-sequence of intentions captured in ticket flags.
+1. The user iterates freely in demo mode. SQL migrations are generated **once**,
+   **on demand**, only when the user is satisfied — and they reflect the
+   **actual final state** of the session's work.
+2. "What this session changed" is isolated **by construction**, so the migration
+   diff can never pick up another session's work.
 
-## Principle
+## Two parts
 
-TypeScript types + fake-data generators are the source of truth for the schema
-throughout the demo cycle. The `developer` never writes SQL migrations. At
-deploy time, a dedicated migration round derives the SQL from the **git diff of
-all merges performed in the session**, cross-checked against the schema already
-present in `supabase/migrations/`.
+- **Part 1 — Session-branch git topology.** A per-session integration branch
+  makes each session's contribution a clean, isolated unit. This is a core
+  change to the team workflow (affects COMPLEX, SETUP, SIMPLE).
+- **Part 2 — Deferred migration generation.** Built on Part 1: at "the user is
+  satisfied", a migration round derives SQL from the session branch.
+
+---
+
+# Part 1 — Session-branch git topology
+
+## Branches
+
+| Branch | Forked from | Purpose |
+|---|---|---|
+| `session/<SESSION_SHORT_ID>` | `main` at session start | Per-session integration accumulator. |
+| `<SESSION_SHORT_ID>/<TASK_ID>` | `session/<id>` | One ticket's work (COMPLEX). |
+| `simple/<SESSION_SHORT_ID>` | `session/<id>` | SIMPLE / migration-round work. |
+
+## Lifecycle
+
+1. **Session start (first dev dispatch).** Create `session/<id>` from `main` if
+   it does not exist.
+2. **Per task.** Worktree + task branch forked from `session/<id>`. Developer
+   commits on the task branch.
+3. **Task done.** Merger merges the task branch **into `session/<id>`** (not
+   main). All tickets across all waves of a request accumulate here; wave-2
+   tasks fork from `session/<id>` and so naturally see wave-1's merges.
+4. **Request done (last wave merged).** Merger **promotes**: `git merge --no-ff
+   session/<id>` into `main`, and the resulting merge SHA is recorded for the
+   session (see *SHA ledger*). `/app` (on main) now reflects the whole request,
+   so the demo shows it.
+5. **Satisfaction question** (Part 2). If the user wants to adjust, the next
+   request's tasks fork from `session/<id>` again (it persists and keeps
+   advancing); another promotion + SHA follows. If satisfied, the migration
+   round runs.
+
+`/app` stays checked out on `main` throughout — the merger keeps doing
+`git reset --hard HEAD && apply-app-variant.sh` on `/app`. "Switching back to
+`session/<id>`" means *new task work integrates there again*; it is not a
+checkout of `/app`.
+
+## Components (Part 1)
+
+### 1A. `setup-worktree.sh` (modify)
+
+- Before creating a task worktree, ensure the session branch exists:
+  `git -C /app show-ref --verify --quiet refs/heads/session/<SESSION_SHORT> ||
+   git -C /app branch session/<SESSION_SHORT> main` (use the dynamically
+  detected base, main/master).
+- Create the task worktree branched from `session/<SESSION_SHORT>` instead of
+  `HEAD`. COMPLEX: `<SESSION_SHORT>/<TASK_ID>`. SIMPLE/migration:
+  `simple/<SESSION_SHORT>`.
+- The existing orphan-recovery logic is preserved.
+- The old `.session-base` file is **not** needed — the session branch + its
+  fork point (`git merge-base main session/<id>`) replace it.
+
+### 1B. `merger.md` (modify) — two stages
+
+- **Stage A — task merge (per task).** Merge `<task branch>` → `session/<id>`
+  (instead of into main). COMPLEX: loop over developer messages as today, but
+  the merge target is the session branch. Update ticket status as today.
+- **Stage B — promotion (end of request).** On an explicit promotion instruction
+  from the orchestrator (e.g. `SendMessage(merger, "promote: session=<id>")`),
+  checkout main, `git merge --no-ff session/<id>`, report the merge SHA back.
+  SIMPLE single-shot: do Stage A then Stage B in one run, return the SHA.
+- Conflict handling unchanged (abort + report). The merger still never does
+  `git add`/`git commit`.
+- **SHA ledger:** the merger reports the promotion SHA; the **orchestrator**
+  records it (the merger keeps its no-file-write constraint). See open question
+  on where (meta.json vs session-dir ledger).
+
+### 1C. `chat-orchestrator.md` (modify) — promotion step
+
+- After a request's final wave teardown (STATE D, last wave), before POST-DEV:
+  send the merger the **promote** instruction, wait for the promotion SHA,
+  record it. Only then run the satisfaction question.
+- SIMPLE: the single-shot merger already does Stage A + B; orchestrator records
+  the returned SHA.
+
+### 1D. `worktree-scope.md` + rules (modify)
+
+- Document the new fork source (`session/<id>`) and that task branches are
+  forked from the session branch, merged back into it, and the session branch is
+  promoted to main once per request.
+
+### 1E. Session branch teardown
+
+- `session/<id>` persists for the session's lifetime (it is the accumulator).
+  Cleaned up when the session is torn down; a leftover branch is harmless and
+  handled by orphan-recovery on the next session with the same short id.
+
+---
+
+# Part 2 — Deferred migration generation
 
 ## Decisions (settled with the maintainer)
 
 1. **Scope** — the `developer` never writes migrations, in demo *or* full mode.
-   Migrations are produced only in the deploy-time migration round.
-2. **Producer** — the migration round reuses the existing `simple-developer`
-   agent in a dedicated "migration mode" (driven by a new skill), then passes
-   through `quality-reviewer` (aware it is reviewing SQL), then `merger`. The
-   `simple-developer` SubagentStop test hooks must run after it stops.
-3. **Source of truth** — `git diff` of all merges in the session, *not* the
-   ticket flags (which go stale across retakes).
-4. **Baseline** — diff against the session start. The session baseline commit
-   is recorded automatically at the first dev dispatch; the round diffs
-   `<baseline>..HEAD`. Idempotency across repeated deploys in one session comes
-   from cross-checking the schema already present in `supabase/migrations/` —
-   anything already deployed is not re-emitted; the round may legitimately
-   produce zero migrations.
+2. **Producer** — at deploy time, the `simple-developer` agent runs a dedicated
+   "migration mode" (new skill), then `quality-reviewer` (aware it reviews SQL),
+   then `merger`. The `simple-developer` SubagentStop test hooks run after it
+   stops.
+3. **Source of truth** — the **session branch** (`session/<id>`), not ticket
+   flags. The diff against its fork point gives this session's net work,
+   isolated by construction.
+4. **Idempotency** — the migration writer cross-checks the schema already in
+   `supabase/migrations/`; anything already deployed is not re-emitted. The
+   round may legitimately produce zero migrations.
 5. **Staging folder** — `supabase/migrations-pending/` is removed. The round
    writes straight to `supabase/migrations/`; `apply-migrations.sh` is
    simplified (no `git mv` promotion, just apply).
-6. **Deploy detection** — `pending-deploys` switches to a git-diff check (does
-   the session's merged work touch schema-relevant files not yet covered by
-   `supabase/migrations/`?). The `requires_supabase_migration` ticket flag is
-   **removed entirely** from the ticket schema, planner, developer, and scripts
-   (no inert metadata kept).
-7. **End-of-dev message** — the old technical offer ("these changes affect how
-   your data is stored, want to deploy?") is removed. At the end of every dev
-   cycle the orchestrator asks an **open, non-technical satisfaction question**
-   (e.g. "Here are your changes — does everything look the way you want, or
-   should I adjust something?"). On an affirmative reply, a second non-technical
-   message signals that the work is being saved ("Saving your changes — this can
-   take a moment"), and the migration round runs behind it. The words
-   "database", "migration", "deploy", "Supabase" are never shown to the user.
-8. **Concurrency boundary** — the clean isolation boundary is the **container**.
-   One container = one `/app` volume = one git history = one Vite. Parallel work
-   is run as separate containers (the altports pattern), each with an independent
-   baseline, so `git diff <baseline>..HEAD` never sees another container's
-   merges. Multiple chat sessions inside a *single* container share main by
-   design (shared app, shared App.tsx variant) and are therefore not isolated —
-   this is out of scope and not a supported parallel model.
+6. **`requires_supabase_migration`** — removed entirely (planner, developer,
+   rules, scripts, CLAUDE.md). No inert metadata kept.
+7. **End-of-dev message** — the technical deploy offer is gone. At the end of
+   every COMPLEX/SETUP request the orchestrator asks an **open, non-technical
+   satisfaction question** ("Here are your changes — does everything look the
+   way you want, or should I adjust something?"). On an affirmative reply a
+   second non-technical message signals saving ("Saving your changes — this can
+   take a moment") and the migration round runs behind it. The words database,
+   migration, deploy, Supabase are never shown.
+8. **Concurrency** — isolation is now by construction (Part 1), correct even for
+   concurrent sessions in the same container.
 
-## Flow
+## Flow (Part 2)
 
 ```
-Regular dev waves (COMPLEX / SETUP)
-   developer / simple-developer produce ONLY TypeScript types + fake-data.
-   No SQL migration is ever written here.
+Request's final wave promoted to main (Part 1); demo reflects it.
         │
         ▼
-STATE PD-ASK  → open, non-technical satisfaction question, always asked at
-                end of dev:
-                "Here are your changes — does everything look the way you
-                 want, or should I adjust something?"
+STATE PD-ASK  → open, non-technical satisfaction question (always).
         │
-        ├─ user wants to adjust / new request → re-enter CLASSIFICATION
-        │                                        (new wave), then ask again
+        ├─ adjust / new request → re-enter CLASSIFICATION (new request,
+        │                          accumulates on session/<id>), then ask again
         │
-        └─ user is satisfied
+        └─ satisfied
                 │
                 ▼
-        detection: pending-deploys — does the session diff touch
-        schema-relevant files not yet covered by supabase/migrations/ ?
+        detection: pending-deploys — does session/<id> carry schema-relevant
+        changes not yet covered by supabase/migrations/ ?
                 │
                 ├─ no  → "Great, everything's set." → DONE
                 │
-                └─ yes → non-technical "Saving your changes — this can take a
-                         moment." then:
+                └─ yes → "Saving your changes — this can take a moment." then:
         ▼
-╔════════════════════ MIGRATION ROUND (new) ════════════════════╗
+╔════════════════════ MIGRATION ROUND ══════════════════════════╗
 ║ 1. simple-developer (migration mode, skill: writing-migrations) ║
-║      - reads the session baseline                               ║
-║      - git diff <baseline>..HEAD                                ║
-║      - identifies net schema-relevant changes                   ║
-║      - cross-references existing supabase/migrations + schemas  ║
-║      - writes SQL to supabase/migrations/ in its worktree       ║
-║      - commits, stops                                           ║
+║      worktree from session/<id>                                 ║
+║      - diff session/<id> against its fork point (schema files)  ║
+║      - compare desired schema (TS types) vs supabase/migrations ║
+║      - write incremental SQL to supabase/migrations/, commit    ║
 ║      → SubagentStop hooks run (typecheck/prettier/unit/e2e)     ║
 ║ 2. quality-reviewer (migration mode, single-shot)               ║
-║      - reviews SQL: idempotency, correct column types &         ║
-║        constraints, FKs, RLS, view-recreation rule, no data     ║
-║        loss, reversibility                                      ║
-║      - returns verdict text                                     ║
-║      - BLOCKED → back to step 1 with the issues                 ║
-║      - APPROVED → step 3                                        ║
-║ 3. merger (SIMPLE mode) → git merge --no-ff into main           ║
+║      reviews SQL: idempotency, types/constraints, FK, RLS,      ║
+║      view-recreation rule, no data loss, reversibility          ║
+║      BLOCKED → back to 1 ; APPROVED → 3                         ║
+║ 3. merger → task branch → session/<id> → promote to main        ║
 ╚════════════════════════════════════════════════════════════════╝
         │
         ▼
@@ -128,148 +197,113 @@ demo mode → PD-LIVE-ASK ("Want to see your real data in the app now?")
 full mode → PD-DONE ("Your changes are saved.")
 ```
 
-SIMPLE (single cosmetic) keeps its current terminal report — it cannot touch
-the schema, so there is nothing to persist. (Open: whether to also append the
-satisfaction question there; default is no.)
+Migration round is orchestrator-sequenced and team-free (mirrors SIMPLE with a
+review step). It can produce zero files even after a non-empty `pending-deploys`
+(a change the schema already covers) → skip apply, go to "everything's set". All
+POST-DEV strings stay non-technical. SIMPLE (single cosmetic) keeps its current
+terminal report — it cannot touch the schema. (Open: whether to also append the
+satisfaction question to SIMPLE; default no.)
 
-The migration round is **orchestrator-sequenced and team-free**, mirroring the
-SIMPLE flow (S-DEV → … → S-MERGE) with a review step inserted. No `TeamCreate`,
-no inter-agent `SendMessage`; the orchestrator reads each agent's output and
-dispatches the next.
+## Components (Part 2)
 
-## Components
-
-### A. `developer.md` (modify)
+### 2A. `developer.md` (modify)
 
 - Remove the *Supabase-migration flag* section and all
-  `supabase/migrations-pending/` writing.
-- Remove the `requires_supabase_migration` "contract" language.
-- Keep the *View update rule* knowledge in the new migration skill, not here.
-- The developer's data deliverable is now: TypeScript types + fake-data
-  generators only.
+  `supabase/migrations-pending/` writing. Remove `requires_supabase_migration`.
+- The *view-update rule* knowledge moves into the migration skill.
+- Data deliverable is now: TypeScript types + fake-data generators only.
 
-### B. `planner.md` (modify)
+### 2B. `planner.md` (modify)
 
-- Drop the rule "Supabase migrations are always separate tickets".
-- **Remove `requires_supabase_migration` entirely** from the ticket format,
-  field semantics, and the "what every data-shaped ticket must produce"
-  section. Schema-shaped changes fold into the feature ticket (types +
-  fake-data). No migration tickets, no migration flag.
+- Remove `requires_supabase_migration` from the ticket format, field semantics,
+  and "what every data-shaped ticket must produce". Drop the rule "Supabase
+  migrations are always separate tickets". Schema-shaped changes fold into the
+  feature ticket (types + fake-data).
 
-### C. New skill `writing-migrations`
+### 2C. New skill `writing-migrations`
 
 Guides `simple-developer` in migration mode:
-1. Locate the session baseline (see Baseline capture).
-2. `git diff <baseline>..HEAD` and identify schema-relevant changes (TS entity
-   types, fake-data generators, dataProvider resource configs).
-3. For each changed entity, compare the desired schema (from TS types) against
-   the schema already in `supabase/migrations/` + `supabase/schemas/`; emit
-   only the incremental delta.
+1. Resolve the session branch fork point (`git merge-base main session/<id>`).
+2. `git diff <fork-point>..session/<id>` → identify schema-relevant changes (TS
+   entity types, fake-data generators, dataProvider resource configs).
+3. For each changed entity, compare the desired schema (TS types) against the
+   schema already in `supabase/migrations/` + `supabase/schemas/`; emit only the
+   incremental delta.
 4. Write idempotent, correctly-typed SQL to `supabase/migrations/` with the
    timestamped naming convention.
 5. Apply the **view-recreation rule** (new/removed column → `CREATE OR REPLACE
-   VIEW` with the column appended at the absolute end of the SELECT list;
-   PostgreSQL rejects ordinal shifts, error 42P16).
-6. Produce zero files when the net diff has no schema impact (no-op is valid).
+   VIEW`, column appended at the absolute end of the SELECT list; PostgreSQL
+   rejects ordinal shifts, error 42P16).
+6. Zero files when the net diff has no schema impact (no-op is valid).
 
-Consider loading the `supabase` / `supabase-postgres-best-practices` skills for
-SQL correctness.
+May load `supabase` / `supabase-postgres-best-practices` for SQL correctness.
 
-### D. Baseline capture — `setup-worktree.sh` (modify)
-
-On the first dev dispatch of a session, record the base commit:
-
-```
-BASE_FILE="/app/worktrees/${SESSION_SHORT}/.session-base"
-[ -f "$BASE_FILE" ] || git -C /app rev-parse HEAD > "$BASE_FILE"
-```
-
-Written before any merge happens, so it captures main's HEAD at session start.
-Subsequent dispatches (including the migration round's) leave it untouched.
-
-### E. Migration round worktree
-
-The migration writer runs as the `simple-developer` agent and reuses the
-SIMPLE worktree/branch (`/app/worktrees/<SESSION_SHORT>/simple`,
-`simple/<SESSION_SHORT>`). The orchestrator runs flows sequentially, so there
-is no concurrency with a real SIMPLE change; setup-worktree's existing
-orphan-recovery handles any leftover branch. The `simple-developer` SubagentStop
-matcher therefore fires unchanged.
-
-### F. `quality-reviewer.md` (modify)
+### 2D. `quality-reviewer.md` (modify)
 
 Add a single-shot migration-review mode (mirrors the merger's SIMPLE mode):
-dispatched standalone (no team), receives the migration file paths and a
+dispatched standalone (no team), receives the migration file paths + a
 migration-specific checklist, returns a text verdict (APPROVED / BLOCKED +
 issues). No `SendMessage`.
 
-### G. `chat-orchestrator.md` (modify)
+### 2E. `chat-orchestrator.md` (modify) — POST-DEV
 
-Rework POST-DEV around the open satisfaction question:
-- **STATE PD-ASK** — no longer gated on a pending-migration detection. At the
-  end of every COMPLEX/SETUP dev cycle, ask the open, non-technical satisfaction
-  question. No technical words.
-- **STATE PD-RESPOND**:
-  - Adjustment / new request → re-enter CLASSIFICATION (new wave); POST-DEV
-    asks the satisfaction question again afterward.
-  - Affirmative → run `pending-deploys`. Empty → acknowledge ("everything's
-    set") and DONE. Non-empty → emit the non-technical "saving your changes"
-    message and enter the migration round.
-  - Ambiguous → re-ask the open question.
-- **Migration round states** (only when there is something to persist):
-  - PD-MIG-DEV — dispatch simple-developer (migration mode).
-  - PD-MIG-REVIEW — dispatch quality-reviewer (migration mode); loop to
-    PD-MIG-DEV on BLOCKED.
-  - PD-MIG-MERGE — dispatch merger (SIMPLE mode).
-- **STATE PD-DEPLOY** — the (simplified) apply step, then PD-LIVE-ASK (demo) /
-  PD-DONE (full).
+- STATE PD-ASK: open satisfaction question at end of every COMPLEX/SETUP
+  request (no longer gated on a pending-migration detection).
+- STATE PD-RESPOND: adjust → re-classify; affirmative → run `pending-deploys`,
+  empty → acknowledge + DONE, non-empty → "saving" message + migration round;
+  ambiguous → re-ask.
+- Migration round states PD-MIG-DEV → PD-MIG-REVIEW (loop on BLOCKED) →
+  PD-MIG-MERGE (task→session→promote), then PD-DEPLOY (apply), then PD-LIVE-ASK
+  (demo) / PD-DONE (full).
 
-The migration round derives content from the diff, so it can legitimately
-produce zero files even after a non-empty `pending-deploys` (e.g. a change the
-schema already covers). In that case skip the apply and go to "everything's
-set". All POST-DEV user-facing strings stay non-technical.
+### 2F. `apply-migrations.sh` (simplify)
 
-### H. `apply-migrations.sh` (simplify)
+Drop the promotion phase (`git mv` from migrations-pending). The migration file
+is already in `supabase/migrations/` on main after the merge. Keep: start
+Supabase if needed, `supabase migration up`, reload PostgREST schema cache.
 
-Remove the promotion phase (`git mv` from migrations-pending). The migration
-file is already in `supabase/migrations/` on main after the merge. Keep only:
-start Supabase if needed, `supabase migration up`, reload PostgREST schema
-cache.
+### 2G. `pending-deploys.mjs` (rework)
 
-### I. `pending-deploys.mjs` (rework)
+Replace flag-based detection with a session-branch diff check: does
+`<fork-point>..session/<id>` touch schema-relevant paths whose delta is not yet
+in `supabase/migrations/`? Output non-empty when a deploy is worth offering.
 
-Replace the flag-based detection with a git-diff check: using the session
-baseline, determine whether the merged work touches schema-relevant paths whose
-delta is not yet represented in `supabase/migrations/`. Output non-empty when a
-deploy is worth offering.
+### 2H. Cleanup
 
-### J. Cleanup
+- Remove `supabase/migrations-pending/` references (agents, rules, scripts,
+  CLAUDE.md).
+- Remove every `requires_supabase_migration` reference.
+- Update CLAUDE.md (runtime/topology section, gotchas) and rule files
+  (worktree-scope, validation-commands) for the new topology and wording.
 
-- Remove `supabase/migrations-pending/` references across agents, rules,
-  scripts, CLAUDE.md.
-- Remove every `requires_supabase_migration` reference (planner, developer,
-  worktree-scope rule, pending-deploys, CLAUDE.md).
-- Update CLAUDE.md and any rule files (e.g. worktree-scope, validation-commands)
-  that mention the old migration-writing behavior or the old deploy-offer
-  wording.
+---
 
 ## Open implementation details (resolve in the plan)
 
-- Exact dispatch identity for the quality-reviewer single-shot so that
-  `member-idle-gate` does not block a team-less reviewer.
-- The precise heuristic in `writing-migrations` / `pending-deploys` for
-  "schema-relevant files" (which globs under `src/` count).
-- Whether `.session-base` should also be captured for the SETUP path (planner
-  dispatch) — confirm the first `setup-worktree` of a SETUP session fires before
-  any merge.
-- `.deploy-applied` ledger: with detection now diff-based and idempotency from
+- **SHA ledger location:** user asked for `meta.json`, but it is a chat-service
+  cache rebuilt from `log.jsonl`. Decide: chat-service folds a logged event into
+  meta.json, vs a dedicated session-dir ledger file (like `.deploy-applied`),
+  vs the orchestrator writing meta.json directly. The SHA is bookkeeping — the
+  migration diff uses the session branch, not the SHAs.
+- **Promotion trigger mechanics:** exact orchestrator↔merger handshake to
+  promote `session/<id>` → main at the right moment (after the request's last
+  wave, before the satisfaction question), and how the merger reports the SHA
+  during teardown.
+- **quality-reviewer single-shot identity** so `member-idle-gate` does not block
+  a team-less reviewer.
+- **Schema-relevant file heuristic** in `writing-migrations` / `pending-deploys`
+  (which globs under `src/` count).
+- **`.deploy-applied` fate:** with detection diff-based and idempotency from
   cross-checking `supabase/migrations/`, decide whether the ledger is still
-  needed or can be dropped.
+  needed.
+- **App.tsx variant interaction:** confirm the `git reset --hard HEAD +
+  apply-app-variant.sh` dance behaves under the new promote-to-main step.
 
 ## Non-goals
 
 - No change to the demo (FakeRest) runtime behavior.
-- No change to how COMPLEX waves implement features (only the removal of
-  migration authoring from them).
-- No automatic deploy — the user still explicitly opts in.
+- No change to how features are implemented inside a ticket (only migration
+  authoring is removed and the merge target changes).
+- No automatic deploy — the user still explicitly opts in via the satisfaction
+  question.
 ```
