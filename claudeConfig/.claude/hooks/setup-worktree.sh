@@ -31,13 +31,23 @@ if [ -z "$SESSION_SHORT" ]; then
 fi
 
 STDIN=$(cat)
-# agent_type in SubagentStart stdin contains the full agent name (e.g. developer-TASK-001)
 AGENT_TYPE=$(node -e 'try{const i=JSON.parse(process.argv[1]||"{}");process.stdout.write(i.agent_type||"")}catch{process.stdout.write("")}' "$STDIN" 2>/dev/null || echo "")
-TASK_ID=$(echo "$AGENT_TYPE" | grep -oE 'TASK-[0-9]+' || echo "")
+
+# Primary: extract TASK_ID from the prompt field (new no-team dispatch: "TASK_ID: TASK-XXX")
+TASK_ID=$(node -e 'try{const i=JSON.parse(process.argv[1]||"{}");const m=(i.prompt||"").match(/TASK_ID:\s*(TASK-\d+)/);process.stdout.write(m?m[1]:"")}catch{process.stdout.write("")}' "$STDIN" 2>/dev/null || echo "")
+
+# Fallback: old team dispatch had agent_type=developer-TASK-XXX
+if [ -z "$TASK_ID" ]; then
+  TASK_ID=$(echo "$AGENT_TYPE" | grep -oE 'TASK-[0-9]+' || echo "")
+fi
+
+# Derive WORKTREE_PATH and BRANCH_NAME: prefer values from prompt if present
+WORKTREE_PATH=$(node -e 'try{const i=JSON.parse(process.argv[1]||"{}");const m=(i.prompt||"").match(/WORKTREE_PATH:\s*(\S+)/);process.stdout.write(m?m[1]:"")}catch{process.stdout.write("")}' "$STDIN" 2>/dev/null || echo "")
+BRANCH_NAME=$(node -e 'try{const i=JSON.parse(process.argv[1]||"{}");const m=(i.prompt||"").match(/BRANCH_NAME:\s*(\S+)/);process.stdout.write(m?m[1]:"")}catch{process.stdout.write("")}' "$STDIN" 2>/dev/null || echo "")
 
 if [ -n "$TASK_ID" ]; then
-  WORKTREE_PATH="/app/worktrees/${SESSION_SHORT}/${TASK_ID}"
-  BRANCH_NAME="${SESSION_SHORT}/${TASK_ID}"
+  [ -z "$WORKTREE_PATH" ] && WORKTREE_PATH="/app/worktrees/${SESSION_SHORT}/${TASK_ID}"
+  [ -z "$BRANCH_NAME" ] && BRANCH_NAME="${SESSION_SHORT}/${TASK_ID}"
 elif [ "$AGENT_TYPE" = "simple-developer" ]; then
   WORKTREE_PATH="/app/worktrees/${SESSION_SHORT}/simple"
   BRANCH_NAME="simple/${SESSION_SHORT}"
