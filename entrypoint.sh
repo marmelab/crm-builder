@@ -365,11 +365,11 @@ fi
 
 # ── URL summary ───────────────────────────────────────────────
 echo ""
-echo -e "  ${BLUE}🌐  CRM              →  http://localhost:5173${NC}"
+echo -e "  ${BLUE}🌐  CRM              →  http://localhost:${PORT_CRM:-5173}${NC}"
 if [ "$MODE" = "full" ]; then
 echo -e "  ${BLUE}🗄️   Supabase         →  http://localhost:54323${NC}"
 fi
-echo -e "  ${BLUE}💬  Chat assistant   →  http://localhost:8080${NC}"
+echo -e "  ${BLUE}💬  Chat assistant   →  http://localhost:${PORT_CHAT:-8080}${NC}"
 echo ""
 echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo -e "${YELLOW}  For an interactive Claude session, from your host:   ${NC}"
