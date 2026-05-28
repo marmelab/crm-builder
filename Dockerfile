@@ -62,6 +62,7 @@ RUN wget -q https://github.com/marmelab/atomic-crm/archive/refs/heads/main.zip \
 
 WORKDIR ${APP_DIR}
 RUN npm install
+RUN npm install playwright@^1.60 @playwright/test@^1.60
 # Pre-bundle Vite dependencies so the first dev-server start is instant
 RUN npx vite optimize 2>/dev/null || true
 
