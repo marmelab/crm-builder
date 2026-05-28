@@ -423,11 +423,16 @@ For each of the N tickets, in ONE assistant message:
 ```
 Agent({
   subagent_type: "developer",
+  name: "developer-TASK-XXX",
   description: "Implement TASK-XXX",
   prompt: "ROLE: developer\nTASK_ID: TASK-XXX\nTICKET_FILE: <absolute path to ticket json>\nWORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/TASK-XXX\nBRANCH_NAME: <SESSION_SHORT_ID>/<branch_name>",
   run_in_background: true
 })
 ```
+
+Substitute the actual ticket id (e.g. `TASK-003`) for `TASK-XXX` in both the `name` and the prompt. **The `name:` field is required**: the `setup-worktree` SubagentStart hook reads the agent name from stdin (`agent_type`) and greps it for `TASK-[0-9]+` to derive the worktree path and branch. Without `name`, `agent_type` is just `developer`, the hook silently exits, and the developer fails on its first `cd` into the missing worktree.
+
+The same naming convention (`<subagent_type>-<TASK_ID>`) is used for every subsequent dispatch in this state (reviewers, merger) — both to keep the hook contract working and to make background-agent activity easy to read in logs.
 
 After the N developer dispatches, emit one short user-facing status line (in the user's language), e.g. *"Working on it..."*, and end the turn.
 
@@ -463,14 +468,20 @@ Otherwise, end the turn silently (with a single space if your client needs at le
 
 | Trigger | Mental state update | Next dispatch |
 |---|---|---|
-| developer of T returns `DONE` | `T.stage = REVIEW`; `T.dev_output = <line>` | `Agent({subagent_type: "quality-reviewer", description: "Quality review T", prompt: "ROLE: quality-reviewer\nTASK_ID: T\nTICKET_FILE: <absolute path>\nWORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/T", run_in_background: true})` AND `Agent({subagent_type: "test-validator", description: "Test validation T", prompt: "ROLE: test-validator\nTASK_ID: T\nTICKET_FILE: <absolute path>\nWORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/T", run_in_background: true})` — both in the same message |
+| developer of T returns `DONE` | `T.stage = REVIEW`; `T.dev_output = <line>` | `Agent({subagent_type: "quality-reviewer", name: "quality-reviewer-T", description: "Quality review T", prompt: "ROLE: quality-reviewer\nTASK_ID: T\nTICKET_FILE: <absolute path>\nWORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/T", run_in_background: true})` AND `Agent({subagent_type: "test-validator", name: "test-validator-T", description: "Test validation T", prompt: "ROLE: test-validator\nTASK_ID: T\nTICKET_FILE: <absolute path>\nWORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/T", run_in_background: true})` — both in the same message |
 | developer of T returns `FAILED` | `T.stage = FAILED` | none |
 | 1 reviewer of T returns a verdict | store in `T.reviews.{quality|test}` | wait for the other reviewer |
-| both reviewers of T = `APPROVED` | `T.stage = MERGE` | `Agent({subagent_type: "merger", description: "Merge T", prompt: "ROLE: merger\nTASK_ID: T\nBRANCH_NAME: <SESSION_SHORT_ID>/<branch>\nWORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/T\nTICKETS_DIR: <absolute path>", run_in_background: true})` |
-| at least 1 reviewer of T = `REJECTED` and `T.retries < MAX_RETRIES` | `T.stage = DEV`; `T.retries += 1`; clear `T.reviews` | re-dispatch developer with the same prompt PLUS `RETRY_FEEDBACK=<for each reviewer that returned REJECTED, prefix with 'quality:' or 'test:' and include its REJECTED body verbatim; omit APPROVED reviewers entirely. Separate the two prefixed blocks with a blank line when both are present.>` |
-| at least 1 reviewer of T = `REJECTED` and `T.retries == MAX_RETRIES` | `T.stage = FAILED` | none |
+| both reviewers of T = `APPROVED` | `T.stage = MERGE` | `Agent({subagent_type: "merger", name: "merger-T", description: "Merge T", prompt: "ROLE: merger\nTASK_ID: T\nBRANCH_NAME: <SESSION_SHORT_ID>/<branch>\nWORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/T\nTICKETS_DIR: <absolute path>", run_in_background: true})` |
+| at least 1 reviewer of T = `REJECTED`, then increment `T.retries`: if `T.retries <= MAX_RETRIES` | `T.stage = DEV`; clear `T.reviews` | re-dispatch developer with `name: "developer-T"`, the same prompt PLUS `RETRY_FEEDBACK=<for each reviewer that returned REJECTED, prefix with 'quality:' or 'test:' and include its REJECTED body verbatim; omit APPROVED reviewers entirely. Separate the two prefixed blocks with a blank line when both are present.>` |
+| at least 1 reviewer of T = `REJECTED`, then increment `T.retries`: if `T.retries > MAX_RETRIES` | `T.stage = FAILED` | none |
 | merger of T returns `DONE` | `T.stage = DONE` | none |
 | merger of T returns `FAILED` | `T.stage = FAILED` | none |
+
+> In the rows above, `T` is the ticket id (e.g. `TASK-003`) for that ticket — substitute it everywhere it appears, both in the `name` field and in the prompt body.
+>
+> **`<branch>` in the merger row** is the `branch=` value parsed from `T.dev_output` (the developer's `DONE: branch=... commit=... files=[...]` line stored when the developer returned `DONE`). Do not re-derive it from the ticket file — the developer may have used a different branch name than the planner suggested.
+>
+> **Retry counter ordering** — the predicate on the REJECTED rows is checked *after* incrementing `T.retries`. With `MAX_RETRIES = 2`, this gives up to 3 developer attempts total (initial + 2 retries) before `T.stage = FAILED`.
 
 > If both reviewers of the same ticket return verdicts in the same background turn, apply the single-verdict transitions first (storing each verdict in `T.reviews`), then evaluate the combined-verdict transitions on the updated state.
 

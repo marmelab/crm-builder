@@ -6,7 +6,7 @@ paths: []
 
 All agents are spawned one-shot by the chat orchestrator. Each agent's last line of output is parsed by regex against an output contract. Anything else in the body is informational and ignored by the orchestrator's parser.
 
-All agents read their ticket from `${TICKETS_DIR}/TASK-XXX.json` before starting (for the COMPLEX flow). `TICKETS_DIR` is an absolute path passed in every dispatch prompt — it points to the per-session folder where ticket files live alongside the conversation's `log.jsonl` and `meta.json`.
+The developer, quality-reviewer, and test-validator read their ticket from `${TICKET_FILE}` (an absolute path passed in the spawn prompt). The merger additionally receives `${TICKETS_DIR}` (the per-session directory holding all ticket JSON files) so it can update the ticket's `status` field after a successful merge.
 
 ## Reviewer agents (quality-reviewer, test-validator)
 
