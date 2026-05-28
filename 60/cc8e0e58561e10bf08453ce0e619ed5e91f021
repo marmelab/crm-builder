@@ -1,0 +1,25 @@
+claudeConfig/.claude/rules/worktree-scope.md
+  s_70801cc66276f4::t_2636d6467b7f55 28
+claudeConfig/.claude/agents/test-validator.md
+  s_70801cc66276f4::t_45d2ec0858e921 98,101-103
+CLAUDE.md
+  s_70801cc66276f4::t_976ade6a77d58d 94
+  s_70801cc66276f4::t_6ead8d16553223 67-69
+  s_70801cc66276f4::t_d240b9a9e326f7 43
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "60cc8e0e58561e10bf08453ce0e619ed5e91f021",
+  "prompts": {},
+  "sessions": {
+    "s_70801cc66276f4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "349d4049-5900-41a2-b797-072e63c6cf19",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Jerome <jerome@marmelab.com>"
+    }
+  }
+}
