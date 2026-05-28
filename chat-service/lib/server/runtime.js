@@ -68,16 +68,10 @@ export function createRuntime(session) {
       // is locked on the FIRST dispatch from its subagent_type so SIMPLE/
       // MEMORY flows show a stable total upfront. `dispatchedSubagentTypes`
       // keeps subagent_type in dispatch order — length is the dispatched
-      // count; per-position role drives the remaining time in ticket-progress.js.
+      // count; per-position role drives the remaining time in progress-bar.ts.
       agentsCompleted: 0,
       flowExpected: 0,
       dispatchedSubagentTypes: [],
-      // Parallel to dispatchedSubagentTypes — epoch ms at dispatch time.
-      // Drives the per-step time-based fill animation on the client (so a
-      // step's bar advances over its predicted duration even between
-      // progress events). Also used for the orchestrator: turnStartedAt.
-      dispatchedSubagentStartedAt: [],
-      turnStartedAt: 0,
     },
   };
 }

@@ -131,7 +131,6 @@ const connection = initConnection({
 });
 
 function clearMessageNodes() {
-  messages.querySelectorAll('.msg-working').forEach(cancelMaskAnims);
   messages.querySelectorAll('.msg, .msg-choices, .msg-working').forEach((n) => n.remove());
 }
 
@@ -274,55 +273,17 @@ function updateWorkingProgress() {
 // developer at 500s) visually dwarfs a quick one (merger at 30s). When the
 // server omits steps (legacy / edge), fall back to N equal segments so the
 // label/remaining-time still match the bar.
-// Kickoff: reveals KICKOFF_FRACTION of the bar over KICKOFF_MS at the start
-// of an in_progress step so it feels "alive" rather than imperceptibly slow
-// (the developer role would otherwise creep at ~0.2% per second). The slower
-// linear remainder takes over for the rest of the step. Skipped when the step
-// is short enough that the kickoff would dominate (≤ KICKOFF_MIN_DURATION_MS).
-const KICKOFF_MS = 400;
-const KICKOFF_FRACTION = 0.08;
-const KICKOFF_MIN_DURATION_MS = KICKOFF_MS * 4;
-
-// Catch-up (in_progress → done): square-root-scaled so a short hop wraps up
-// quickly and a long hop has time to breathe (both used to be 400ms — long
-// hops felt frantic, short ones sluggish).
-//   distance 0.05 → ~330ms   distance 0.50 → ~560ms   distance 0.95 → ~690ms
-const STEP_DONE_CATCHUP_MIN_MS = 220;
-const STEP_DONE_CATCHUP_SCALE_MS = 480;
-
-// Cold-start intro (in_progress with elapsed > 0 on first paint): animate
-// scaleX(1) → expected-position over this duration instead of snapping the
-// WAAPI playhead. Threshold skips intro for near-zero elapsed where the
-// regular kickoff already covers the visual.
-const COLD_START_INTRO_MS = 600;
-const COLD_START_THRESHOLD_MS = 50;
-
-// Fresh-done cascade (done step on first paint, no prior in_progress on the
-// client): animate scaleX(1) → scaleX(0), cascaded via startDelayMs so
-// consecutive done steps fill left → right like a wave instead of snapping
-// in unison.
-const FRESH_DONE_MS = 180;
-
-// Shared easing for the eased mask transitions. Linear is reserved for the
-// in_progress drain so the timeline maps to wall-clock elapsed.
-const EASE_IN_OUT = 'cubic-bezier(0.45, 0.05, 0.55, 0.95)';
-
 function renderProgressSegments(bar) {
   const steps = progressSteps.length
     ? progressSteps
     : fallbackEqualSteps(progressTotal, progressDone);
 
   if (bar.children.length !== steps.length) {
-    cancelMaskAnims(bar);
     bar.replaceChildren(...steps.map(makeStepEl));
   }
 
-  // Domino handoff: updateStepEl returns the delay (ms) the next step should
-  // wait before starting its own animation, so wave-fill and catch-up settle
-  // left → right instead of all firing at once. Returning null breaks the chain.
-  let nextStartDelayMs = 0;
   steps.forEach((step, i) => {
-    nextStartDelayMs = updateStepEl(bar.children[i], step, nextStartDelayMs) ?? 0;
+    updateStepEl(bar.children[i], step);
   });
 }
 
@@ -335,128 +296,15 @@ function makeStepEl() {
   return seg;
 }
 
-// Cancel any in-flight mask animations under `root` before its segments are
-// detached. Detached WAAPI animations with `fill: 'forwards'` have historically
-// been kept alive by Chrome — explicit cancel avoids accumulating refs across
-// turns.
-function cancelMaskAnims(root) {
-  root.querySelectorAll('.msg-working-progress-step').forEach((seg) => {
-    if (seg._anim) { seg._anim.cancel(); seg._anim = null; }
-  });
-}
-
-// Returns the delay (ms) the next step should wait before starting its own
-// animation (domino handoff), or null when the current step's transition
-// doesn't chain (pending, no-status-change, or fresh in_progress kickoff —
-// the kickoff is its own intro and the bar is empty to its right).
-function updateStepEl(seg, step, startDelayMs = 0) {
+// Step-driven only: status maps to a class, CSS handles the mask transition.
+// pending/in_progress → mask fully covers the segment (scaleX(1) by default);
+// done → mask collapses (scaleX(0) via `.is-done` rule). No wall-clock fill.
+function updateStepEl(seg, step) {
   seg.style.flexGrow = String(Math.max(1, step.durationMs));
   seg.title = `${step.role} · ${Math.round(step.durationMs / 1000)}s`;
-
-  // Short-circuit on no-status-change so the running WAAPI animation keeps
-  // its current time (no flicker, no reset). Status is the only thing that
-  // drives the mask animation.
-  const prevStatus = seg.dataset.status;
-  if (prevStatus === step.status) return null;
+  if (seg.dataset.status === step.status) return;
   seg.dataset.status = step.status;
   seg.className = `msg-working-progress-step is-${step.status}`;
-
-  const mask = seg.firstElementChild;
-  const existing = seg._anim;
-
-  if (step.status === 'pending') {
-    if (existing) { existing.cancel(); seg._anim = null; }
-    return null;
-  }
-
-  if (step.status === 'in_progress') {
-    if (existing) existing.cancel();
-    const useKickoff = step.durationMs > KICKOFF_MIN_DURATION_MS;
-    const keyframes = useKickoff
-      ? [
-          { transform: 'scaleX(1)', offset: 0 },
-          { transform: `scaleX(${1 - KICKOFF_FRACTION})`, offset: KICKOFF_MS / step.durationMs },
-          { transform: 'scaleX(0)', offset: 1 },
-        ]
-      : [{ transform: 'scaleX(1)' }, { transform: 'scaleX(0)' }];
-
-    const elapsed = typeof step.startedAt === 'number'
-      ? Math.max(0, Date.now() - step.startedAt)
-      : 0;
-
-    // Already-elapsed step on first paint: ease into the expected position
-    // then hand off to the linear timeline at elapsed + intro. Snapping the
-    // playhead via `currentTime = elapsed` made the first 0% → X% read as
-    // abrupt; every later transition uses the smooth catch-up handoff.
-    if (elapsed > COLD_START_THRESHOLD_MS) {
-      const target = computeScaleAtElapsed(elapsed, step.durationMs, useKickoff);
-      const intro = mask.animate(
-        [{ transform: 'scaleX(1)' }, { transform: `scaleX(${target})` }],
-        { duration: COLD_START_INTRO_MS, fill: 'forwards', easing: EASE_IN_OUT, delay: startDelayMs },
-      );
-      intro.onfinish = () => {
-        const anim = mask.animate(keyframes, {
-          duration: step.durationMs, fill: 'forwards', easing: 'linear',
-        });
-        anim.currentTime = Math.min(elapsed + COLD_START_INTRO_MS, step.durationMs);
-        seg._anim = anim;
-      };
-      seg._anim = intro;
-      return null;
-    }
-
-    seg._anim = mask.animate(keyframes, {
-      duration: step.durationMs, fill: 'forwards', easing: 'linear', delay: startDelayMs,
-    });
-    return null;
-  }
-
-  // step.status === 'done'
-  if (prevStatus !== 'in_progress') {
-    // Fresh paint of an already-done step (first `progress` event arrived
-    // after some steps completed, or on reconnect). Animate scaleX(1) → 0
-    // with a cascading delay so multiple done steps fill like a wave instead
-    // of snapping in unison — the animation overrides the CSS `.is-done`
-    // rule via WAAPI composite order.
-    if (existing) existing.cancel();
-    seg._anim = mask.animate(
-      [{ transform: 'scaleX(1)' }, { transform: 'scaleX(0)' }],
-      { duration: FRESH_DONE_MS, fill: 'forwards', easing: EASE_IN_OUT, delay: startDelayMs },
-    );
-    return startDelayMs + FRESH_DONE_MS;
-  }
-  // in_progress → done: catch up to scaleX(0) from wherever the linear
-  // animation left off. Duration scales with the remaining distance so big
-  // and small hops feel similarly paced.
-  const remainingScale = readScaleX(getComputedStyle(mask).transform);
-  const catchupMs = Math.round(
-    STEP_DONE_CATCHUP_MIN_MS
-    + STEP_DONE_CATCHUP_SCALE_MS * Math.sqrt(Math.max(0, Math.min(1, remainingScale))),
-  );
-  if (existing) existing.cancel();
-  // Explicit `scaleX(N)` (not the raw matrix string) — some browsers
-  // handle matrix→scaleX interpolation oddly.
-  seg._anim = mask.animate(
-    [{ transform: `scaleX(${remainingScale})` }, { transform: 'scaleX(0)' }],
-    { duration: catchupMs, fill: 'forwards', easing: EASE_IN_OUT, delay: startDelayMs },
-  );
-  return startDelayMs + catchupMs;
-}
-
-function readScaleX(transformValue) {
-  if (!transformValue || transformValue === 'none') return 1;
-  try { return new DOMMatrix(transformValue).a; }
-  catch { return 1; }
-}
-
-// Mirrors the WAAPI keyframes used by the in_progress animation: returns the
-// scaleX the mask would have at `elapsed` ms along the timeline. Kept in
-// sync with the keyframes block in updateStepEl — change one, change the other.
-function computeScaleAtElapsed(elapsed, durationMs, useKickoff) {
-  const t = Math.max(0, Math.min(elapsed, durationMs));
-  if (!useKickoff) return 1 - t / durationMs;
-  if (t < KICKOFF_MS) return 1 - KICKOFF_FRACTION * (t / KICKOFF_MS);
-  return (1 - KICKOFF_FRACTION) * (1 - (t - KICKOFF_MS) / (durationMs - KICKOFF_MS));
 }
 
 function fallbackEqualSteps(total, done) {
@@ -484,7 +332,6 @@ function renderWorkingUi() {
     updateWorkingProgress();
     messages.scrollTop = messages.scrollHeight;
   } else if (!working && existing) {
-    cancelMaskAnims(existing);
     existing.remove();
     // Reveal the latest narration that the bubble had been mirroring — once
     // the turn is over, it becomes the user-visible "result" of the turn.
