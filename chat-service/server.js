@@ -4,12 +4,15 @@ import { fileURLToPath } from 'url';
 import { WebSocketServer } from 'ws';
 
 import { PORT, MODE_DEMO, MODE_FULL } from './lib/server/config.js';
-import { loadSystemPrompt, applySystemPrompt } from './lib/server/system-prompt.js';
+import {
+  loadSystemPrompt, applySystemPrompt,
+  loadDocumentatorPrompt, applyDocumentatorPrompt,
+} from './lib/server/system-prompt.js';
 import { openSession, deleteSession } from './lib/server/session-store.js';
 import { createRequestHandler, switchMode } from './lib/server/http-routes.js';
 import { runtimes, wsToRuntime, runtimeForWs, createRuntime, safeSend } from './lib/server/runtime.js';
 import { sendToWs, broadcast } from './lib/server/ws-bus.js';
-import { sendProgress } from './lib/server/ticket-progress.js';
+import { updateProgressBar } from './lib/server/progress-bar.ts';
 import { regenerateTitleWithHaiku, extractText, extractToolUses } from './lib/server/claude-spawn.js';
 import { processMessage } from './lib/server/turn.js';
 import { endsWithQuestion } from './lib/server/session-store.js';
@@ -96,12 +99,7 @@ wss.on('connection', async (ws, req) => {
     working: runtime.busy,
     isNew: session.isNew,
   });
-  // Send the current progress snapshot so a (re)joining tab paints the
-  // counter immediately instead of waiting for the next agent event. Direct
-  // per-ws send bypasses the broadcast dedup cache — without that, a refresh
-  // during a stable phase (no state change since the last broadcast) would
-  // leave the new tab stuck at 0%.
-  sendProgress(runtime, ws);
+  updateProgressBar(runtime, ws);
   // Repaint the cumulative tokens/cost ticker on (re)connect — runtime.stats
   // is seeded from the log digest, but resetChatUi just cleared the DOM.
   // Skip when there's nothing to show (fresh session) to avoid a "0 tokens
@@ -220,12 +218,22 @@ wss.on('connection', async (ws, req) => {
 });
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  loadSystemPrompt().then((parsed) => {
-    applySystemPrompt(parsed);
-    const t = parsed.tools?.length ? parsed.tools.join(',') : 'default';
-    console.log(parsed.content ? `Orchestrator loaded (model: ${parsed.model || 'default'}, tools: ${t}).` : 'No orchestrator prompt, using default.');
-  });
-  httpServer.listen(PORT, '0.0.0.0', () => {
-    console.log(`Chat service listening on port ${PORT}`);
+  // Await both prompt loads before accepting connections — otherwise a turn
+  // can complete in the window between listen() and the .then callback and
+  // spawn the documentator with an empty prompt.
+  Promise.all([
+    loadSystemPrompt().then((parsed) => {
+      applySystemPrompt(parsed);
+      const t = parsed.tools?.length ? parsed.tools.join(',') : 'default';
+      console.log(parsed.content ? `Orchestrator loaded (model: ${parsed.model || 'default'}, tools: ${t}).` : 'No orchestrator prompt, using default.');
+    }),
+    loadDocumentatorPrompt().then((parsed) => {
+      applyDocumentatorPrompt(parsed);
+      console.log(parsed.content ? `Documentator loaded (model: ${parsed.model || 'default'}).` : 'No documentator prompt, post-turn synthesis disabled.');
+    }),
+  ]).then(() => {
+    httpServer.listen(PORT, '0.0.0.0', () => {
+      console.log(`Chat service listening on port ${PORT}`);
+    });
   });
 }

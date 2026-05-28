@@ -73,12 +73,21 @@ fi
 
 TEAMS_DIR="${HOME:-/home/developer}/.claude/teams"
 
-# Resolve the team. SendMessage's tool_input has no team_name, so locate the
-# team owned by this session via leadSessionId in each team's config.json.
-# This also makes the hook robust to session-scoped team names (tickets-<short>).
+# Resolve the team. SendMessage's tool_input has no team_name. Resolution order:
+#   1. CHAT_SESSION_DIR → tickets-<SESSION_SHORT>. Available to every agent in
+#      the chat-service (env-inherited), so a developer/reviewer's shutdown_request
+#      resolves to the same team as the orchestrator's.
+#   2. leadSessionId in config.json — covers the orchestrator when CHAT_SESSION_DIR
+#      isn't propagated (e.g. ad-hoc claude REPL).
+# Skipping both and exiting 0 fails open for non-lead senders, which is exactly
+# the gate's mandate to catch (header: "block ANY SendMessage(shutdown_request)").
 if [ -z "$TEAM" ] || [ -n "${TEAM//[A-Za-z0-9_-]/}" ]; then
   TEAM=""
-  if [ -n "$SESSION_ID" ] && [ -d "$TEAMS_DIR" ]; then
+  SESSION_SHORT=$(basename "${CHAT_SESSION_DIR:-}" 2>/dev/null | cut -d'-' -f1)
+  if [ -n "$SESSION_SHORT" ] && [ -d "$TEAMS_DIR/tickets-$SESSION_SHORT" ]; then
+    TEAM="tickets-$SESSION_SHORT"
+  fi
+  if [ -z "$TEAM" ] && [ -n "$SESSION_ID" ] && [ -d "$TEAMS_DIR" ]; then
     while IFS= read -r cfg; do
       [ -z "$cfg" ] && continue
       LEAD_ID=$(node -e '

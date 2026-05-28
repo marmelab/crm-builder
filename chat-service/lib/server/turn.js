@@ -4,13 +4,16 @@ import { join } from 'node:path';
 import { LOG_DIR, claudeProjectDir, claudeSessionDir } from './config.js';
 import { broadcast, sendStats } from './ws-bus.js';
 import { runtimes, transitionState } from './runtime.js';
-import { sendProgress, predictedFlowExpected } from './ticket-progress.js';
 import { spawnClaude, extractText, extractToolUses, friendlyError } from './claude-spawn.js';
 import { endsWithQuestion } from './session-store.js';
 import { startSubagentTailer, stopSubagentTailer } from './subagent-tail.js';
 import {
   emptyBreakdown, addBreakdown, breakdownFromModelUsage, costFromBreakdown,
 } from '../stats/io.js';
+import { updateProgressBar, predictedFlowExpected } from './progress-bar.ts';
+import {
+  sessionHasMergedTickets, scheduleDocumentatorRun, clearDocumentatorTimer,
+} from './documentator-spawn.js';
 
 const AGENT_DISPATCH_TOOLS = new Set(['Agent', 'Task']);
 
@@ -27,6 +30,12 @@ function emitDispatchPromptEvent(runtime, tool) {
 export async function processMessage(runtime, prompt) {
   if (!runtime) return;
 
+  // The user is back — cancel any pending documentator run scheduled at the
+  // tail of the previous turn. Keyed on sessionId (not runtime) so it survives
+  // runtime release/recreate between turns. We'll re-arm it when this turn
+  // completes.
+  if (runtime.session?.id) clearDocumentatorTimer(runtime.session.id);
+
   // Reset per-turn agent step counters so the progress bar reflects only
   // work initiated by *this* prompt. Send the initial 0/1 (orchestrator
   // alone, not yet done) immediately so the bar mounts with the bubble.
@@ -35,11 +44,8 @@ export async function processMessage(runtime, prompt) {
     agentsCompleted: 0,
     flowExpected: 0,
     dispatchedSubagentTypes: [],
-    dispatchedSubagentStartedAt: [],
-    turnStartedAt: Date.now(),
-    lastProgressSent: null,
   };
-  sendProgress(runtime);
+  updateProgressBar(runtime);
 
   // Claude (re)starts → session is active again.
   transitionState(runtime, 'in_progress');
@@ -96,7 +102,12 @@ export async function processMessage(runtime, prompt) {
 
         let dispatchedThisEvent = false;
         for (const tool of extractToolUses(event)) {
+          // stream-json can emit the same tool_use across two assistant events
+          // (initial + post-stream). Use toolMap as the dedup gate so we count
+          // and broadcast each dispatch exactly once.
+          const alreadySeen = toolMap.has(tool.id);
           toolMap.set(tool.id, tool);
+          if (alreadySeen) continue;
           // Count orchestrator Agent/Task dispatches eagerly (the tool_use
           // event lands before the runtime fires task_started), so the bar
           // shows "1/3" right away for SIMPLE instead of growing 1/2 → 2/3.
@@ -105,7 +116,6 @@ export async function processMessage(runtime, prompt) {
               runtime.stats.flowExpected = predictedFlowExpected(tool.input.subagent_type);
             }
             runtime.stats.dispatchedSubagentTypes.push(tool.input.subagent_type);
-            runtime.stats.dispatchedSubagentStartedAt.push(Date.now());
             dispatchedThisEvent = true;
             // Mirror orchestrator → agent dispatches into the debug pane so
             // the prompt sits next to the agent's tailed reply. Subagent-
@@ -115,7 +125,9 @@ export async function processMessage(runtime, prompt) {
             }
           }
         }
-        if (dispatchedThisEvent) sendProgress(runtime);
+        if (dispatchedThisEvent) {
+          updateProgressBar(runtime);
+        }
 
         if (event.type === 'rate_limit_event' && event.rate_limit_info?.status === 'blocked') {
           rateLimit = event.rate_limit_info;
@@ -144,7 +156,7 @@ export async function processMessage(runtime, prompt) {
             runtime.stats.activeAgents = runtime.stats.activeAgentIds.size;
             runtime.stats.agentsCompleted++;
             sendStats(runtime);
-            sendProgress(runtime);
+            updateProgressBar(runtime);
           }
         }
 
@@ -267,6 +279,19 @@ export async function processMessage(runtime, prompt) {
       const asksQuestion = !wasStopped && !turnErrored && endsWithQuestion(lastAssistantText);
       const nextState = wasStopped ? 'cancelled' : asksQuestion ? 'waiting' : 'completed';
       await transitionState(runtime, nextState);
+      // Schedule the documentator (Mode 2) once the turn lands on 'completed'
+      // and at least one ticket has been merged in this session. Debounced so
+      // a follow-up user message within DOCUMENTATOR_DEBOUNCE_MS cancels it
+      // (processMessage clears the timer at the top of the next turn). Timer
+      // state is keyed on sessionId in documentator-spawn.js so it survives
+      // runtime release between turns.
+      if (nextState === 'completed' && !turnErrored) {
+        const sessionId = runtime.session?.id;
+        const sessionDir = sessionId ? `${LOG_DIR}/${sessionId}` : null;
+        if (sessionDir && await sessionHasMergedTickets(sessionDir)) {
+          scheduleDocumentatorRun(sessionId, runtimes);
+        }
+      }
       // If no client is currently viewing this session, release the runtime
       // now that the turn is done. A later reconnect will re-open it.
       if (runtime.clients.size === 0) {

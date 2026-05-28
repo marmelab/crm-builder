@@ -1,6 +1,6 @@
 ---
 name: quality-reviewer
-description: Combined code quality and security review agent. Use after DEVELOPER implementation, in parallel with test-validator. Checks spec compliance, code quality, React/backend patterns, RLS, secrets, and injection risks.
+description: Combined code quality and security review agent. Used in two contexts — (1) shared in a COMPLEX wave alongside test-validator, (2) single-shot in the SIMPLE flow when the diff touched `supabase/` (schema/view/RLS gating before merge).
 model: sonnet
 tools:
   - Read
@@ -27,6 +27,10 @@ Verify the implementation is correct, spec-compliant, follows project convention
 
 ## Workflow
 
+You operate in one of two modes — your spawn prompt tells you which.
+
+### COMPLEX mode (team)
+
 Your spawn prompt provides `TASK_ID`, `WORKTREE_PATH`, `TICKET_FILE`, `COUNTERPART` (your developer's suffixed name, e.g. `developer-TASK-006`), `TEAM_LEAD`.
 
 **On dispatch: do NOT call any tool. Idle silently until you receive a SendMessage from `COUNTERPART` saying "ready, please review".**
@@ -35,10 +39,12 @@ Rationale: the worktree doesn't exist yet at dispatch time. Any tool call before
 
 **Per-cycle loop (repeat until `shutdown_request`):**
 
-1. **Read** ticket spec at `TICKET_FILE` and the worktree diff:
+1. **Read** ticket spec at `TICKET_FILE` and the worktree diff against the project's main branch:
    ```
-   git -C <WORKTREE_PATH> diff <base>..HEAD
+   git -C <WORKTREE_PATH> fetch origin main --quiet
+   git -C <WORKTREE_PATH> diff origin/main..HEAD
    ```
+   `origin/main` is the canonical session base — the `fetch` keeps it current in case other tickets merged while you were waiting for the dev's message.
 2. **Apply the rubric** below (Parts A and B). Also apply `coding-style.md` and `security-triggers.md` rules.
 3. **Send verdict** to `COUNTERPART` (always the suffixed name, e.g. `developer-TASK-006`):
    - `APPROVED` — zero blocking issues.
@@ -50,6 +56,34 @@ Rationale: the worktree doesn't exist yet at dispatch time. Any tool call before
 - Run validations (typecheck, prettier, unit, e2e) — hooks do this.
 - SendMessage anyone other than `COUNTERPART` (and `team-lead` for shutdown).
 - Re-spawn agents or call `TeamCreate` / `TeamDelete`.
+
+### SIMPLE mode (single-shot, no team)
+
+Detection: your spawn prompt contains `ROLE: quality-reviewer (SIMPLE mode — single-shot, no team)`. No `COUNTERPART`, no `TEAM_LEAD`, no `TASK_ID`. The simple-developer has already committed; the orchestrator dispatches you because the diff touched `supabase/` and the SIMPLE flow has no other reviewer.
+
+Your spawn prompt provides `WORKTREE_PATH`, `BRANCH_NAME`, `TICKETS_DIR`.
+
+**On dispatch: act immediately — there is no peer to wait for.**
+
+1. **Read the worktree diff** — the simple-developer typically produced a single commit, so the simplest path is:
+   ```
+   git -C <WORKTREE_PATH> log -p -1
+   ```
+   For a multi-commit branch, diff against the SIMPLE branch's true base (`main`), not `/app`'s HEAD (which is whatever branch the chat-service was built on — often a feature branch):
+   ```
+   git -C <WORKTREE_PATH> diff "$(git -C <WORKTREE_PATH> merge-base main HEAD)"..HEAD
+   ```
+2. **Apply the scope-relevant rubric only** — SIMPLE diffs are small and schema-focused:
+   - **A.6b (view migrations)** — column at the end of `03_views.sql` SELECT, no ordinal shift.
+   - **B.1 (RLS)** — RLS enabled, policies cover required ops, no `USING (true)`.
+   - **B.3 (injection)** — no string-concatenated SQL, no `||` of user input.
+   - **A.6 (backend patterns)** — input validation, no unbounded queries.
+   - **B.2 (secrets)** — no service_role key, no hardcoded tokens.
+   Skip Parts A.1–A.5 (spec compliance, TypeScript, React patterns) and A.7 (tests) — hooks cover them and SIMPLE has no ticket spec.
+3. **Return text only — no SendMessage**:
+   - `APPROVED` — zero blocking issues. Exactly that one word on its own line.
+   - `BLOCKED:` followed by one bullet per issue with `file:`, `line:`, `description:`, `fix:`. Final line: `Summary: N blocking issues.`
+4. **Stop.** No loop, no idle. The orchestrator reads your text output and decides next state.
 
 ## Validation commands — DO NOT RUN
 
@@ -90,9 +124,8 @@ Any `[FAIL]` → BLOCKED. Omitting a criterion from the list is itself a bug.
 - Verify interactive states (hover, focus, disabled) use theme variables, not hardcoded values. A hardcoded foreground color on a themed background will be invisible in the opposite color mode.
 
 ### A.2 Reuse (BLOCKING)
-- Reuse registry from ARCHITECT respected
 - Native framework components used where they cover 80%+ of the need
-- No duplication of existing logic
+- No duplication of existing logic — the developer should reuse existing entities, components, and types whenever possible
 
 ### A.3 TypeScript correctness (BLOCKING)
 - No `any` without justifying JSDoc

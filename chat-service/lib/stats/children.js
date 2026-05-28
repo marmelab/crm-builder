@@ -27,6 +27,7 @@ export async function populateChildrenAndCounts(events, phases, orchestrator, su
   const allToolCalls = [];
   const lastToolResultTsByPhase = new Map();
   const thinkingBufferByPhase = new Map();
+  const lastAgentTextByPhase = new Map();
 
   for (const rec of events) {
     if (!isDebugRawAssistant(rec)) continue;
@@ -45,12 +46,17 @@ export async function populateChildrenAndCounts(events, phases, orchestrator, su
         // Also surface the prose as a discrete child so the chronology can
         // browse the full agent log — not just tool calls. The thinking buffer
         // continues to feed stream_gap previews for wall-clock gap context.
-        if (b.text.trim()) {
+        // Suppress consecutive duplicates per phase — the COMPLEX flow's
+        // STATE C wake-up emits the same "Working on it..." line on every
+        // tick (mirrors the live-stream dedup in turn.js).
+        const trimmed = b.text.trim();
+        if (trimmed && lastAgentTextByPhase.get(owner.phaseId) !== trimmed) {
           owner.children.push({
             kind: 'agent_text',
             ts: rec.ts,
             text: b.text,
           });
+          lastAgentTextByPhase.set(owner.phaseId, trimmed);
         }
       }
     }

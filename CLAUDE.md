@@ -39,13 +39,12 @@ Tests: `cd chat-service && npm test` — uses glob `'test/**/*.test.js'` (direct
 |---|---|---|
 | chat-orchestrator | sonnet | User-facing, routes, narrates. SIMPLE flow dispatches simple-developer + merger directly (no team). |
 | planner | sonnet | Decomposes → tickets JSON with waves + file hints. |
-| architect | opus | Spec gatekeeper + plan approver. |
-| developer | opus | Implements + commits in worktree. |
-| simple-developer | sonnet | 1-file cosmetic changes only. No team, no review — SubagentStop hooks validate. |
+| developer | opus | Implements + commits in worktree. Also writes ADRs in `adr/` when the change introduces a structural decision. |
+| simple-developer | sonnet | 1-file cosmetic OR 1 single-field change on an existing entity (schema + view + type + form + show) OR 1 list filter reusing existing components (no new custom React component). No team, no review, never writes ADRs — SubagentStop hooks validate. POST-DEV runs if a migration was written. |
 | quality-reviewer | sonnet | Semantic code + security review only. Never re-runs validation. |
 | test-validator | haiku | Integration wiring + e2e presence. |
 | merger | haiku | `git merge --no-ff` only. **Never `git add`/`git commit`**. |
-| documentator | sonnet | Writes rules/skills to `~/.claude/local/` on explicit user request only. |
+| documentator | sonnet | Mode 1 — captures rules/skills to `~/.claude/local/` on explicit user request. Mode 2 — auto-runs at the end of every COMPLEX session, appends business knowledge to `/app/MEMORY.md` from the diff vs `origin/main`. |
 | devops | sonnet | One-time bootstrap (fork, Supabase, env, deploy). |
 
 Team layout (`agent-team` skill): one `TeamCreate` per wave, `3×N + 1` members in one dispatch (developer + 2 reviewers per ticket + one shared merger). Constraint: one team per lead, no nested teams. Single merger eliminates `.git/index.lock` contention.
@@ -81,7 +80,7 @@ Hot-reload bind-mounts (dev only, remove before release): `claudeConfig/.claude`
 - **Ports hardcoded**: 5173 / 8080 / 54321 / 54323. Don't parametrise.
 - **No secrets in git**. `ANTHROPIC_API_KEY` in `.env` (gitignored).
 - **Chat-service imports**: `node:` prefix for `lib/*.js`; bare in `server.js` — don't harmonise.
-- **Opus only for architect + developer**. Everything else sonnet or haiku.
+- **Opus only for developer**. Everything else sonnet or haiku.
 - **Debug UI**: `JSON.stringify(event, null, 2)` in a `<details>`, not fancy parsers.
 
 ## Gotchas
