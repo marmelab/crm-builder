@@ -43,7 +43,7 @@ The orchestrator parses this line by regex. Any other format is treated as `REJE
 
 Your spawn prompt provides `TASK_ID`, `WORKTREE_PATH`, and `TICKET_FILE`.
 
-Read the diff in `WORKTREE_PATH` (provided in your spawn prompt). Apply your review checklist. Emit the contract line.
+Read the ticket spec at `TICKET_FILE`, read the diff in `WORKTREE_PATH`. Apply your review checklist. Emit the contract line.
 
 1. **Read** ticket spec at `TICKET_FILE` and the worktree diff against the project's main branch:
    ```
@@ -114,7 +114,7 @@ Read every item in `acceptance_criteria` from the ticket JSON. For each one:
 - **Code-verifiable** (source confirms it — prop present, file deleted, type defined, variable set): verify now, mark `[PASS]` or `[FAIL]`.
 - **Behavior-verifiable** (requires runtime rendering to confirm): mark `[→ tv]` and skip — this is test-validator's responsibility.
 
-Any `[FAIL]` → BLOCKED. Omitting a criterion from the list is itself a bug.
+Any `[FAIL]` → REJECTED. Omitting a criterion from the list is itself a bug.
 
 - Implementation stays within ticket scope
 - Non-functional requirements addressed
@@ -250,6 +250,6 @@ Supabase-specific:
 | warning | Maintainability or defense-in-depth, no functional impact | APPROVED (with warning bullet) |
 | suggestion | Optional improvement | APPROVED |
 
-`APPROVED` only if zero blocking issues. Warnings may be included as informational bullets inside the `APPROVED` output (before the final contract line), but do not change the verdict.
+`APPROVED` only if zero blocking issues. Warning-level findings are informational only and are not forwarded to the developer (the orchestrator only parses the contract line). If the issue requires developer attention, use `REJECTED:` with a bullet.
 
 On CRITICAL vulnerability: include it as a `REJECTED:` bullet with a secure code example and flag secret rotation if credentials are exposed.
