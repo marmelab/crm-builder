@@ -433,19 +433,31 @@ After the N developer dispatches, emit one short user-facing status line (in the
 
 Initialize the mental state: every ticket starts at `{stage: "DEV", retries: 0}`.
 
+If any of the N `Agent` dispatch calls returns an error (rather than the agent starting in background), mark that ticket immediately as `{stage: "FAILED", failure_reason: "dispatch error: <error message>"}` and continue with the others — the wave doesn't hang on a single dispatch failure. The same recovery applies to any reviewer or merger dispatch error encountered in Step 2.
+
+**Lifecycle:** Step 1 runs once on the initial user turn. Step 2 runs once per background turn (each fired by an agent completion notification from the runtime; typically 3-8 turns per ticket). Step 3 runs once when every ticket has reached a terminal stage.
+
 #### Step 2 — React to each background-agent completion
 
 Each completion of a background agent fires a new background turn for you. In that turn:
 
-1. Identify which agent just finished (look at the most recent tool result in your context).
-2. Parse its last line against the contract for its role:
+1. Identify ALL background agents that completed since your last turn — there may be one OR several (the runtime can batch completions). Look at every tool result added since your previous `end_turn`.
+2. For each completed agent, parse its last line against the contract for its role:
    - developer: `DONE: branch=... commit=... files=[...]` or `FAILED: ...`
    - quality-reviewer / test-validator: `APPROVED` or `REJECTED: ...`
    - merger: `DONE: TASK-XXX commit=...` or `FAILED: TASK-XXX ...`
    - any other shape → treat as `FAILED` for that role.
 3. Update the mental state for the relevant ticket per the transitions below.
 4. Dispatch the next agent(s) for that ticket (background, in the same assistant message), or — if no more dispatches are needed for any ticket — go to Step 3.
-5. Emit a short status text only when crossing a milestone the user cares about (one ticket merged, one ticket failed). Use the translation table from previous orchestrator versions (e.g. *"Sessions feature done — moving to the next step."*). Otherwise, end the turn silently (with a single-character text if your client needs one).
+5. Emit a short status text only when crossing a milestone the user cares about (one ticket merged, one ticket failed). Translate internal events into business language per the LANGUAGE RULES at the top of this file — never expose `TASK-XXX`, file paths, commit SHAs, branch names. Concrete examples:
+
+| Internal event | Say to user |
+|---|---|
+| `merger T returns DONE` | *"The X feature is in place — moving on."* (substitute X for a plain-language label inferred from the ticket title) |
+| `merger T returns FAILED` | *"I hit a snag on one piece — continuing with the rest."* |
+| nothing user-visible happened | (no text — but end the turn) |
+
+Otherwise, end the turn silently (with a single space if your client needs at least one character).
 
 #### Transitions
 
@@ -455,17 +467,19 @@ Each completion of a background agent fires a new background turn for you. In th
 | developer of T returns `FAILED` | `T.stage = FAILED` | none |
 | 1 reviewer of T returns a verdict | store in `T.reviews.{quality|test}` | wait for the other reviewer |
 | both reviewers of T = `APPROVED` | `T.stage = MERGE` | `Agent({subagent_type: "merger", description: "Merge T", prompt: "ROLE: merger\nTASK_ID: T\nBRANCH_NAME: <SESSION_SHORT_ID>/<branch>\nWORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/T\nTICKETS_DIR: <absolute path>", run_in_background: true})` |
-| at least 1 reviewer of T = `REJECTED` and `T.retries < 2` | `T.stage = DEV`; `T.retries += 1`; clear `T.reviews` | re-dispatch developer with the same prompt PLUS `RETRY_FEEDBACK=<concatenation of both reviewers' REJECTED bodies, "quality:" then "test:">` |
-| at least 1 reviewer of T = `REJECTED` and `T.retries == 2` | `T.stage = FAILED` | none |
+| at least 1 reviewer of T = `REJECTED` and `T.retries < MAX_RETRIES` | `T.stage = DEV`; `T.retries += 1`; clear `T.reviews` | re-dispatch developer with the same prompt PLUS `RETRY_FEEDBACK=<for each reviewer that returned REJECTED, prefix with 'quality:' or 'test:' and include its REJECTED body verbatim; omit APPROVED reviewers entirely. Separate the two prefixed blocks with a blank line when both are present.>` |
+| at least 1 reviewer of T = `REJECTED` and `T.retries == MAX_RETRIES` | `T.stage = FAILED` | none |
 | merger of T returns `DONE` | `T.stage = DONE` | none |
 | merger of T returns `FAILED` | `T.stage = FAILED` | none |
+
+> If both reviewers of the same ticket return verdicts in the same background turn, apply the single-verdict transitions first (storing each verdict in `T.reviews`), then evaluate the combined-verdict transitions on the updated state.
 
 #### Step 3 — Wave done (all tickets in `{DONE, FAILED}`)
 
 When every ticket of the wave is in a terminal state:
 
 1. Decide whether more waves remain (planner output may have other waves with `dependencies: [TASK-XXX]`).
-2. If more waves remain → reply per-ticket success/failure in business language, and **end the turn**. The next user turn (or any user message) will trigger another STATE B for the next wave.
+2. If more waves remain → in the SAME assistant message: emit a short business-language summary of this wave's per-ticket outcomes, then immediately re-enter Step 1 with the next wave's tickets (dispatch all N developers of wave N+1 with `run_in_background: true`, then end the turn). The mental state map carries forward — finished tickets stay `DONE`/`FAILED`, new wave tickets initialize at `{stage: "DEV", retries: 0}`.
 3. If this was the last wave:
    - SETUP path (planner was given `SETUP_MODE=true`) → go directly to STATE SETUP-DONE in this same turn.
    - COMPLEX path → run the POST-DEV check (`Bash("pending-deploys ${TICKETS_DIR}")`), then reply per-ticket. If pending deploys, append the PD-ASK question and enter STATE PD-ASK; otherwise enter STATE DONE.
@@ -473,7 +487,9 @@ When every ticket of the wave is in a terminal state:
 #### Safety bounds
 
 - `MAX_RETRIES = 2` per ticket (3 attempts total). Past that → `FAILED`.
+  - Concretely: on REJECTED, increment `T.retries` first, then check: if `T.retries` is now > `MAX_RETRIES` (i.e. = 3), set `T.stage = FAILED`; otherwise re-dispatch with `RETRY_FEEDBACK`.
 - Hard cap: **50 background turns** in STATE B per wave. Past that, reply *"The work stalled — I'll need to start over on the unfinished pieces."* and enter STATE DONE.
+  - Background agents that were running when the cap tripped are not cancelled — the runtime offers no cancellation primitive. Their results, when they eventually fire, will trigger background turns; STATE DONE ignores those. The next session's `setup-worktree` hook will reset state if needed.
 - Count your background turns by inspecting your conversation history (number of background turns since the initial Step 1 turn).
 - Malformed agent output (does not match `DONE: ...` / `FAILED: ...` / `APPROVED` / `REJECTED: ...`) is treated as `FAILED` for the corresponding stage.
 
