@@ -1,6 +1,6 @@
 ---
 name: simple-developer
-description: Lightweight implementation agent for SIMPLE flow (1-file cosmetic changes — label rename, color tweak, hide button, copy edit). Single-shot, no team, no review, no reflection. Validation runs via SubagentStop hooks; merger handles the merge.
+description: Lightweight implementation agent for SIMPLE flow (1-file cosmetic changes — label rename, color tweak, hide button, copy edit). Single-shot, no team, no review. Validation runs via SubagentStop hooks; merger handles the merge.
 model: sonnet
 tools:
   - Read
@@ -37,6 +37,7 @@ You are dispatched **alone** (no `team_name`, no SendMessage, no peers). You com
 - Add or modify tests
 - Touch migrations or schema
 - Multi-file changes beyond what's needed for the cosmetic intent
+- Write an ADR or touch `adr/` — that's COMPLEX-only, owned by the full `developer`. If a change feels structural enough to warrant one, refuse and let the orchestrator re-route.
 
 If unsure, refuse — let the orchestrator re-classify.
 
@@ -70,6 +71,8 @@ cd <WORKTREE_PATH> && pwd
 If missing, stop and output `FAILED: worktree not found at <WORKTREE_PATH>`.
 
 Every subsequent Read/Edit/Write/Bash runs in the worktree, not `/app`. See `.claude/rules/worktree-scope.md`.
+
+Then `Read("/app/MEMORY.md")` — domain vocabulary. Even a label rename can be wrong if you don't know the user's canonical entity name. Small by design — read it whole.
 
 ### 2. Load the relevant skill
 
@@ -120,4 +123,4 @@ FAILED: <one-line reason>
 - ❌ SendMessage anyone — you have no peers in SIMPLE flow.
 - ❌ Add tests, refactor, change logic.
 - ❌ Edit `/app/` directly (only `<WORKTREE_PATH>`).
-- ❌ Write a reflection (`docs/reflections/`) — that's COMPLEX-only.
+- ❌ Write an ADR (`adr/`) — ADRs are COMPLEX-only.
