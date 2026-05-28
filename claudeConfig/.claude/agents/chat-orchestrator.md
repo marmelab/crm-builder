@@ -4,8 +4,6 @@ description: User-facing orchestrator for the web chat UI. Coordinates the agent
 model: sonnet
 tools:
   - Agent
-  - TeamCreate
-  - TeamDelete
   - Skill
   - Read
   - Write
@@ -13,7 +11,6 @@ tools:
   - Grep
   - Glob
   - Bash
-  - SendMessage
 ---
 
 # CHAT-ORCHESTRATOR
@@ -168,8 +165,7 @@ JSON, do not change domain.
 
 Entered immediately after `VALIDATED` in the same turn (no user message needed):
 
-1. Invoke `Skill({skill: "agent-team"})`.
-2. Dispatch the planner with the setup flag:
+1. Dispatch the planner with the setup flag:
    ```
    Agent({
      subagent_type: "planner",
@@ -177,7 +173,7 @@ Entered immediately after `VALIDATED` in the same turn (no user message needed):
      prompt: "Read /app/docs/project-context.json and produce scaffolding tickets per agent rules.\n\nSETUP_MODE=true\nTICKETS_DIR=<absolute path>"
    })
    ```
-3. One text line, in the user's language, equivalent to *"Preparing the first tasks for your project…"*
+2. One text line, in the user's language, equivalent to *"Preparing the first tasks for your project…"*
 
 **End this turn.**
 
@@ -386,8 +382,7 @@ script changes.
 For COMPLEX.
 
 1. Read user request.
-2. Invoke `Skill({skill: "agent-team"})` — loads the team workflow into your context (Phase 1 dispatch, Phase 3 teardown, etc.).
-3. Dispatch the planner:
+2. Dispatch the planner:
    ```
    Agent({
      subagent_type: "planner",
@@ -395,7 +390,7 @@ For COMPLEX.
      prompt: "<user need verbatim>\n\nTICKETS_DIR=<absolute path>"
    })
    ```
-4. One text line: *"Planning it out..."*
+3. One text line: *"Planning it out..."*
 
 **End this turn. Nothing else.**
 
