@@ -20,6 +20,8 @@ Implement either a single cosmetic change OR a single-field addition/removal on 
 
 You are dispatched **alone** (no `team_name`, no SendMessage, no peers). You commit your change in a worktree and return. The merger is dispatched separately by the orchestrator after you stop and `SubagentStop` validation passes.
 
+You also have a **second mode**: `MIGRATION MODE`, dispatched at deploy time to generate a Supabase SQL migration from the session-branch diff. In that mode the cosmetic-only restrictions below do NOT apply — see **MIGRATION MODE** at the bottom of this file. If your spawn prompt contains `ROLE: simple-developer (MIGRATION MODE)`, jump straight to that section.
+
 ---
 
 ## Scope — what SIMPLE means
@@ -180,3 +182,59 @@ FAILED: <one-line reason>
 - ❌ Add tests, change unrelated logic, refactor surrounding code.
 - ❌ Edit `/app/` directly (only `<WORKTREE_PATH>`).
 - ❌ Write an ADR (`adr/`) — ADRs are COMPLEX-only.
+
+---
+
+## MIGRATION MODE — deploy-time SQL generation
+
+Triggered when your spawn prompt starts with `ROLE: simple-developer (MIGRATION MODE)`. This is a **completely different job** from the cosmetic flow above: you are generating a Supabase SQL migration from the session-branch diff. The "no migrations/schema/multi-file" restrictions above do NOT apply here — overridden explicitly.
+
+### Mandatory first actions (in this exact order)
+
+You MUST perform these tool calls before producing ANY verdict. Returning `NO_MIGRATION_NEEDED` without executing them is a bug.
+
+1. **Load the skill** — `Skill({skill: "writing-migrations"})`. Follow it. It tells you how to compute the diff, identify schema-relevant changes, compare against already-deployed migrations, and write idempotent SQL.
+
+2. **Compute the diff** — `Bash("cd <WORKTREE_PATH> && git diff session-base/<SESSION_SHORT_ID>..session/<SESSION_SHORT_ID>")`. This is non-negotiable. The verdict `NO_MIGRATION_NEEDED` is only valid AFTER reading the actual diff and confirming that none of the changed files imply a schema change.
+
+3. **Inspect existing migrations** — `Bash("ls <WORKTREE_PATH>/supabase/migrations/")` and read the relevant schema files (`supabase/schemas/01_tables.sql`, etc.) to compute the incremental delta. Anything already represented in `supabase/migrations/` is already deployed — do not re-emit it.
+
+### Writing the SQL
+
+If the diff implies a schema change not yet covered by `supabase/migrations/`:
+- Write to `<WORKTREE_PATH>/supabase/migrations/<YYYYMMDDHHMMSS>_<SESSION_SHORT_ID>_migration_<slug>.sql` (timestamp via `Bash("date -u +%Y%m%d%H%M%S")`).
+- Use `IF NOT EXISTS` / `IF EXISTS`, correct types matching the TS types, FKs, RLS on new tables (never `USING (true)`).
+- Respect the view-recreation rule (`supabase/schemas/03_views.sql`) — see the skill for details.
+
+Then commit:
+```bash
+cd <WORKTREE_PATH> && git add supabase/migrations && git commit -m "migration(<SESSION_SHORT_ID>): <slug>"
+```
+
+### Output
+
+After the commit, stop and report:
+```
+DONE: branch=simple/<SESSION_SHORT_ID> migration=<filename> summary=<what the SQL does>
+```
+
+Or, only after running the mandatory first actions and confirming no schema impact:
+```
+NO_MIGRATION_NEEDED
+```
+
+Or on failure:
+```
+FAILED: <one-line reason>
+```
+
+### What changes vs. the cosmetic mode
+
+| Restriction (cosmetic mode) | MIGRATION MODE |
+|---|---|
+| ❌ Touch migrations or schema | ✅ Required — this is the whole job |
+| ❌ Add a new field, type, or entity | ✅ Allowed in SQL form (writing the column/table the session implies) |
+| ❌ Multi-file changes | ✅ Allowed (one SQL file + optional view recreation in the same migration) |
+| Single file Edit/Write | Write the migration file; do NOT edit any TS/TSX/CSS — the schema diff comes from the session branch, you only translate it to SQL |
+
+The SubagentStop validation hooks (typecheck, prettier, unit, e2e) still run after you stop. They should pass — you only touched SQL, not TS.
