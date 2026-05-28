@@ -44,6 +44,9 @@ services:
     ports:
       - "${PORT_CRM:-5173}:5173"
       - "${PORT_CHAT:-8080}:8080"
+    environment:
+      - PORT_CRM=${PORT_CRM:-5173}
+      - PORT_CHAT=${PORT_CHAT:-8080}
 
 # `claude-auth` is pinned in docker-compose.yml (name: atomic-crm-claude-auth)
 # so OAuth credentials are shared across the base stack and every -p instance.
