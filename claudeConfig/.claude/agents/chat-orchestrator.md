@@ -47,8 +47,8 @@ Check in this order — first match wins:
 | **SETUP** | The first user turn contains `<intent>setup</intent>` (the chat UI's "Define your business" button), OR a clear natural-language signal in any language meaning "set up my CRM" / "start from scratch" / "define my business". | STATE SETUP-INTERVIEW → STATE SETUP-PLAN → then STATE B → C → D → (POST-DEV) |
 | **MODE-SWITCH** | User asks to switch data mode: "use real data", "connect my database", "switch to demo", "use sample data", etc. — no code change, system operation only. | STATE MS-RUN → STATE MS-DONE |
 | **MEMORY** | user asks to remember a way of doing something or document a recurring friction (*"remember this"*, *"document this behavior"*, *"turn this into a rule"*) — no code change | STATE M-DOC → STATE M-DONE (documentator only, no team) |
-| **SIMPLE** | 1 cosmetic change, single file, no logic, no tests (label rename, color change, hide button, copy edit) | STATE S-DEV → STATE S-MERGE → STATE S-DONE (no POST-DEV — single-file cosmetic cannot touch the schema) |
-| **COMPLEX** | everything else (multi-file, data flow, tests, ambiguous, multiple changes) — **default** | STATE A → B → C → D → (POST-DEV) |
+| **SIMPLE** | 1 cosmetic file OR 1 small field on an existing entity (schema + view + type + form + show, with or without i18n labels) OR 1 list filter reusing existing components. No import, no relations, no tests, no new custom component. | STATE S-DEV → (STATE S-REVIEW if the diff touches `supabase/`) → STATE S-MERGE → STATE S-DONE → (POST-DEV if a migration was written) |
+| **COMPLEX** | everything else (2+ fields, cross-entity, import/export, new entity, relations, new custom component, ambiguous) — **default** | STATE A → B → C → D → (POST-DEV) |
 
 When the user message is a **reply to a pending PD-ASK or PD-LIVE-ASK**
 question (e.g. *"yes"*, *"oui"*, *"vas-y"*, *"deploy"*, *"non"*, *"not now"*),
@@ -56,7 +56,27 @@ do NOT reclassify it as a new request — interpret it inside the matching
 POST-DEV state (STATE PD-RESPOND / STATE PD-LIVE-RESPOND). The CLASSIFICATION
 table only applies to the start of a fresh request.
 
-When in doubt between SIMPLE and COMPLEX: **COMPLEX**. False positives are cheap; missed reviews are not. MEMORY only applies when the user explicitly asks to capture a pattern — not for code changes.
+When in doubt between SIMPLE and COMPLEX:
+- 1 cosmetic file OR 1 small field on one existing entity (schema → form, optionally with i18n labels) OR 1 list filter reusing existing components → **SIMPLE**.
+- 2+ fields, cross-entity, import/export, new entity, relations, new custom React component, ambiguous → **COMPLEX**.
+
+False positives toward COMPLEX are cheap; missed reviews are not. MEMORY only applies when the user explicitly asks to capture a pattern — not for code changes.
+
+**SIMPLE examples:**
+- "Rename the Login button to 'Sign in'"
+- "Add a 'birthday' field to contacts" → migration + view + type + ContactInputs + ContactShow
+- "Add a localized 'priority' field to deals" → migration + view + type + DealInputs + DealShow + i18n labels in `englishCrmMessages.ts` / `frenchCrmMessages.ts`
+- "Remove the 'fax' field on companies"
+- "Hide the export button"
+- "Add a 'this month' filter to the contacts list" → one `<ToggleFilterButton>` in `ContactListFilter.tsx`
+- "Filter deals by amount above 10k" → one toggle in `DealListFilter.tsx`
+
+**NOT SIMPLE (push to COMPLEX):**
+- "Add an 'industry' field importable from CSV" → import
+- "Add a 'manager' relation to contacts" → cross-entity
+- "Add a tags field with its own table" → new entity
+- "Add two fields: birthday and gender" → multiple fields
+- "Add a date-range filter with a calendar picker" → requires a new custom component
 
 When the NL signal for SETUP is ambiguous (e.g. user typed *"new project"*
 without the explicit button click), **do not** enter SETUP-INTERVIEW
@@ -90,8 +110,9 @@ SETUP:       STATE SETUP-INTERVIEW (turn N..N+K)
                                      →  (POST-DEV check — see below)
 MODE-SWITCH: STATE MS-RUN (turn N)   →  STATE MS-DONE (turn N+1)
 MEMORY:      STATE M-DOC (turn N)    →  STATE M-DONE (turn N+1)
-SIMPLE:      STATE S-DEV (turn N)    →  STATE S-MERGE (turn N+1)
-                                      →  STATE S-DONE (turn N+2)   [no POST-DEV]
+SIMPLE:      STATE S-DEV (turn N)    →  (STATE S-REVIEW if diff touched supabase/)
+                                      →  STATE S-MERGE
+                                      →  STATE S-DONE   [POST-DEV if a migration was written]
 COMPLEX:     STATE A (turn N)        →  STATE B (turn N+1)
                                       →  STATE C (turns N+2..N+M)
                                       →  STATE D (turn N+M+1)
@@ -258,7 +279,7 @@ For SIMPLE only. No team, no planner, no skill on the orchestrator's side.
    Agent({
      subagent_type: "simple-developer",
      description: "SIMPLE: <one-line summary>",
-     prompt: "ROLE: simple-developer\nCHANGE_REQUEST: <user's request, verbatim>\nWORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/simple\nBRANCH_NAME: simple/<SESSION_SHORT_ID>"
+     prompt: "ROLE: simple-developer\nCHANGE_REQUEST: <user's request, verbatim>\nWORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/simple\nBRANCH_NAME: simple/<SESSION_SHORT_ID>\nTICKETS_DIR: <absolute per-session path>"
    })
    ```
    The worktree and branch are fixed per session — the `setup-worktree` hook creates them automatically before the agent starts.
@@ -266,16 +287,43 @@ For SIMPLE only. No team, no planner, no skill on the orchestrator's side.
 
 **End this turn.** The simple-developer runs setup + edit + commit, then stops. SubagentStop hooks (typecheck, prettier, unit tests, e2e — wired with matcher `simple-developer`) run automatically; failures come back as stderr that the agent fixes on its own internal turns. When the agent's stop is finally accepted, control returns to you.
 
-→ Enter STATE S-MERGE on next turn.
+→ On next turn: inspect the worktree directly — do NOT substring-match the dev's free-text `files=[...]` (paths like `SupabaseStatus.tsx` would false-trigger; omissions would false-skip):
+   ```
+   Bash("cd /app/worktrees/<SESSION_SHORT_ID>/simple && git diff --name-only $(git merge-base main HEAD)..HEAD | grep -E '^supabase/' || true")
+   ```
+   - Non-empty output (one or more paths starting with `supabase/`) → enter STATE S-REVIEW.
+   - Empty output → enter STATE S-MERGE.
+
+---
+
+### STATE S-REVIEW — SIMPLE dispatch quality-reviewer (conditional, next turn)
+
+Only entered when the simple-developer's diff touched `supabase/` (raw SQL, migration, view, RLS). The hooks cannot judge schema-shape or injection risk; this single-shot reviewer pass closes that gap before the merge.
+
+1. If dev returned `FAILED: <reason>` → skip review, go to STATE S-DONE with failure.
+2. Dispatch ONE `quality-reviewer` agent (no `team_name`, no peers):
+   ```
+   Agent({
+     subagent_type: "quality-reviewer",
+     description: "SIMPLE review: <one-line summary>",
+     prompt: "ROLE: quality-reviewer (SIMPLE mode — single-shot, no team)\nWORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/simple\nBRANCH_NAME: simple/<SESSION_SHORT_ID>\nTICKETS_DIR: <absolute per-session path>\n\nFollow the SIMPLE workflow in your agent file. Apply Part A.6b (view migrations), Part B.1 (RLS), Part B.3 (injection in raw SQL). Return text only: \"APPROVED\" or \"BLOCKED:\\n- ...\". No SendMessage."
+   })
+   ```
+3. One text line: *"Double-checking the database change..."*
+
+**End this turn.** The reviewer reads the worktree diff and returns text.
+
+→ Enter STATE S-MERGE on next turn if `APPROVED`. If `BLOCKED:` reply to the user with a plain-language version of the issues (no file paths, no SQL) and enter STATE DONE — do NOT merge.
 
 ---
 
 ### STATE S-MERGE — SIMPLE dispatch merger (next turn)
 
-The dev's final response is in your context.
+The dev's (or reviewer's) final response is in your context.
 
 1. If dev returned `FAILED: <reason>` → skip merge, go to STATE S-DONE with failure.
-2. If dev returned `DONE: branch=<X>...` → dispatch merger (no `team_name`, no SendMessage):
+2. If reviewer returned `BLOCKED:` → already handled in STATE S-REVIEW (you should not be here).
+3. If dev returned `DONE: branch=<X>...` and (review skipped OR review `APPROVED`) → dispatch merger (no `team_name`, no SendMessage):
    ```
    Agent({
      subagent_type: "merger",
@@ -283,7 +331,7 @@ The dev's final response is in your context.
      prompt: "<SIMPLE merger protocol — see below>"
    })
    ```
-3. One text line: *"Wrapping up..."*
+4. One text line: *"Wrapping up..."*
 
 **End this turn.**
 
@@ -296,22 +344,38 @@ ROLE: merger (SIMPLE mode — single-shot, no team)
 BRANCH_NAME: simple/<SESSION_SHORT_ID>
 WORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/simple
 
-Follow the WORKFLOW in your agent file (merger.md). Use the SIMPLE-mode columns (no ticket status update, return text output).
+Follow the WORKFLOW in your agent file (merger.md). Use the SIMPLE-mode columns
+(return text output; update the ticket status if a `TASK-SIMPLE-*.json` pseudo-ticket
+exists in `${TICKETS_DIR}`, otherwise skip the ticket-update step).
+TICKETS_DIR: <absolute per-session path>
 Output: "DONE: commit=<short sha>. files=[<paths>]" OR "FAILED: <reason>"
 ```
 
 ---
 
-### STATE S-DONE — SIMPLE report (next turn)
+### STATE S-DONE — SIMPLE report + POST-DEV check (next turn)
 
 The merger's final response (or dev's failure) is in your context.
 
-Reply to user in plain language:
-- `DONE` → e.g. *"Label updated. Take a look in the demo."*
-- `FAILED` (from dev or merger) → *"Something didn't work. Want me to try a different approach?"*
+1. If dev or merger returned `FAILED` → reply to user in plain language
+   (*"Something didn't work. Want me to try a different approach?"*) and enter STATE DONE.
+2. On `DONE` → run POST-DEV detection:
+   ```
+   Bash("pending-deploys ${TICKETS_DIR}")
+   ```
+   This picks up any `TASK-SIMPLE-<suffix>.json` the dev wrote when the change
+   touched a migration.
+3. Build the reply in user's language, plain words — e.g. *"Done — take a look in the demo."*
+4. Branch on the detection output:
+   - Empty → send the reply, enter STATE DONE.
+   - Non-empty (one or more pending pseudo-ticket ids) → append the PD-ASK question
+     to the reply and enter STATE PD-ASK. Keep the pending ticket ids in your
+     context for STATE PD-DEPLOY.
 
-SIMPLE is single-file, no-logic, no-tests by definition — it cannot touch
-the database schema. The POST-DEV deploy check is skipped for this flow.
+From PD-ASK onward, the existing POST-DEV state machine (PD-RESPOND → PD-DEPLOY →
+PD-LIVE-ASK → PD-LIVE-SWITCH → PD-DONE) runs unchanged. `apply-migrations.sh`
+already accepts `TASK-*` ids, so `TASK-SIMPLE-<suffix>` flows through without
+script changes.
 
 **End.**
 
@@ -467,10 +531,12 @@ Any further incoming messages (late `shutdown_approved`, residual agent notifica
 ## POST-DEV — Supabase deployment offer
 
 This sub-flow runs at the end of any flow that produced merged tickets,
-i.e. STATE D (COMPLEX) and STATE SETUP-DONE (SETUP). It does NOT run for:
-- SIMPLE (single-file cosmetic, can't touch the schema)
+i.e. STATE D (COMPLEX), STATE SETUP-DONE (SETUP), and STATE S-DONE (SIMPLE,
+conditional on the dev writing a `TASK-SIMPLE-*.json` pseudo-ticket because
+the change touched `supabase/migrations-pending/`). It does NOT run for:
 - MEMORY (no code change)
 - MODE-SWITCH (no code change)
+- SIMPLE cosmetic-only changes (no migration → no pseudo-ticket → detection returns empty)
 - failed dev waves where no ticket reached `status: merged`.
 
 ### Detection (one Bash call inside STATE D / STATE SETUP-DONE)

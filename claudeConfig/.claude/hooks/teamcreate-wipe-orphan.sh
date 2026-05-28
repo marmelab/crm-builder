@@ -73,7 +73,11 @@ try {
 } catch { process.stdout.write(""); }
 ' "$CONFIG" 2>/dev/null || echo "")
 
-if [ -z "$LEAD_OF_TEAM" ] || [ "$LEAD_OF_TEAM" = "$SESSION_ID" ]; then
+# Empty leadSessionId is exactly the orphan/corrupt case (partial config write,
+# older CLI build). Treat the same as a different-session lead — wipe so the
+# next TeamCreate can claim the name. Only skip wipe when the team is owned by
+# THIS session (live → graceful shutdown owned by teamdelete-gate).
+if [ "$LEAD_OF_TEAM" = "$SESSION_ID" ]; then
   exit 0
 fi
 

@@ -29,7 +29,11 @@ try {
 } catch {}
 
 const pending = [];
-for (const f of readdirSync(dir).filter((x) => /^TASK-\d+\.json$/.test(x))) {
+// Accept the two canonical ticket shapes only: COMPLEX (`TASK-<digits>`) and
+// SIMPLE pseudo-tickets (`TASK-SIMPLE-<6 hex>`). A looser pattern would match
+// hand-edited or malformed files in TICKETS_DIR.
+const TICKET_FILE_RE = /^TASK-(\d+|SIMPLE-[A-Za-z0-9]+)\.json$/;
+for (const f of readdirSync(dir).filter((x) => TICKET_FILE_RE.test(x))) {
   try {
     const j = JSON.parse(readFileSync(join(dir, f), 'utf8'));
     if (j.status === 'merged'

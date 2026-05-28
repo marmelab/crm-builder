@@ -36,6 +36,7 @@ export function createRuntime(session) {
     subagentTailerStop: null,
     subagentSeenUuids: new Set(),
     subagentFileOffsets: new Map(),
+    subagentFileMtimes: new Map(),
     subagentAgentTypeCache: new Map(),
     stats: {
       // tokensUsed = legacy headline (input + cache_creation + output). Kept as
