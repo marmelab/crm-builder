@@ -1,17 +1,28 @@
 import { createInterface } from 'node:readline';
 import { cp, copyFile, mkdir, chmod, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { LOG_DIR, CLAUDE_HOME, CWD } from './config.js';
+import { LOG_DIR, claudeProjectDir, claudeSessionDir } from './config.js';
 import { broadcast, sendStats } from './ws-bus.js';
 import { runtimes, transitionState } from './runtime.js';
 import { sendProgress, predictedFlowExpected } from './ticket-progress.js';
 import { spawnClaude, extractText, extractToolUses, friendlyError } from './claude-spawn.js';
 import { endsWithQuestion } from './session-store.js';
+import { startSubagentTailer, stopSubagentTailer } from './subagent-tail.js';
 import {
   emptyBreakdown, addBreakdown, breakdownFromModelUsage, costFromBreakdown,
 } from '../stats/io.js';
 
 const AGENT_DISPATCH_TOOLS = new Set(['Agent', 'Task']);
+
+function emitDispatchPromptEvent(runtime, tool) {
+  const target = tool.input.name || tool.input.subagent_type;
+  broadcast(runtime, {
+    type: 'debug',
+    tool: 'agent_output',
+    input: { agent: `→ ${target}`, text: tool.input.prompt },
+    agent: 'orchestrator',
+  });
+}
 
 export async function processMessage(runtime, prompt) {
   if (!runtime) return;
@@ -58,6 +69,9 @@ export async function processMessage(runtime, prompt) {
         if (event.session_id) {
           runtime.claudeSessionId = event.session_id;
           runtime.session?.setClaudeSessionId(event.session_id).catch(() => {});
+          // Main stream only carries subagent tool_uses — their text and
+          // SendMessage content live in per-subagent transcripts on disk.
+          startSubagentTailer(runtime).catch((e) => console.error('[subagent-tail]', e));
         }
 
         // Always send raw event to debug
@@ -93,6 +107,12 @@ export async function processMessage(runtime, prompt) {
             runtime.stats.dispatchedSubagentTypes.push(tool.input.subagent_type);
             runtime.stats.dispatchedSubagentStartedAt.push(Date.now());
             dispatchedThisEvent = true;
+            // Mirror orchestrator → agent dispatches into the debug pane so
+            // the prompt sits next to the agent's tailed reply. Subagent-
+            // emitted dispatches (rare) are skipped to avoid double-attribution.
+            if (event.parent_tool_use_id == null && tool.input?.prompt) {
+              emitDispatchPromptEvent(runtime, tool);
+            }
           }
         }
         if (dispatchedThisEvent) sendProgress(runtime);
@@ -186,6 +206,9 @@ export async function processMessage(runtime, prompt) {
       await runtime.session?.recordMessage('assistant', errText).catch(() => {});
     }
   } finally {
+    // Awaited so the trailing scan (which catches subagent writes between the
+    // last poll tick and the CLI exit) finishes before the turn settles.
+    await stopSubagentTailer(runtime).catch(() => {});
     // Commit this spawn's cumulative cost and tokens into the runtime totals,
     // reset for next spawn (each new spawn starts fresh at 0).
     runtime.stats.costUsd += runtime.stats.costUsdCurrentSpawn;
@@ -255,9 +278,8 @@ export async function processMessage(runtime, prompt) {
 
 async function snapshotClaudeSession(claudeSessionId, sessionId) {
   if (!claudeSessionId || !sessionId) return;
-  const slug = CWD.replace(/\//g, '-');
-  const projectDir = join(CLAUDE_HOME, '.claude', 'projects', slug);
-  const srcDir = join(projectDir, claudeSessionId);
+  const projectDir = claudeProjectDir();
+  const srcDir = claudeSessionDir(claudeSessionId);
   const destDir = join(LOG_DIR, sessionId, 'claude');
 
   await mkdir(destDir, { recursive: true });

@@ -8,7 +8,7 @@
 
 import { readFile, readdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { CLAUDE_HOME, CWD } from './server/config.js';
+import { claudeSubagentsDir } from './server/config.js';
 
 import { readJsonl, msBetween, computeSummary } from './stats/io.js';
 import { extractTeams } from './stats/teams.js';
@@ -57,8 +57,7 @@ export async function aggregateSession({ sessionLogPath, hooksLogPath, sessionId
     const claudeSessionId = meta.claudeSessionId ?? null;
     if (claudeSessionId) {
       const localDir = join(dirname(sessionLogPath), 'claude', 'subagents');
-      const slug = CWD.replace(/\//g, '-');
-      const remoteDir = join(CLAUDE_HOME, '.claude', 'projects', slug, claudeSessionId, 'subagents');
+      const remoteDir = claudeSubagentsDir(claudeSessionId);
       // Prefer local snapshot; fall back to live ~/.claude path.
       subagentsDir = await readdir(localDir).then(() => localDir).catch(() => remoteDir);
     }

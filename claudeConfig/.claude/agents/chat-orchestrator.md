@@ -346,7 +346,7 @@ The planner's output is now in your context. Parse it: pick the **first wave** (
 
 **ONE assistant message. Do exactly this and nothing else:**
 
-1. `TeamCreate({team_name: "tickets"})`
+1. `TeamCreate({team_name: "tickets-<SESSION_SHORT_ID>"})`
 2. Per-ticket `Agent` dispatches — for each of the N tickets in the wave (max 5), dispatch 3 members:
    - `developer-TASK-XXX`
    - `quality-reviewer-TASK-XXX`
@@ -395,7 +395,7 @@ Translate every internal event into a business milestone. Never expose what happ
 
 ### Resume trigger — user sends "resume" / "continue" (or equivalent) in STATE C
 
-Agents may have died mid-work due to a rate limit. The `tickets` team still exists
+Agents may have died mid-work due to a rate limit. The `tickets-<SESSION_SHORT_ID>` team still exists
 (TeamDelete was never called). Re-use it — no TeamCreate needed.
 
 **ONE assistant message:**
@@ -405,13 +405,13 @@ Agents may have died mid-work due to a rate limit. The `tickets` team still exis
 2. Skip tickets with `status: "merged"` — already done.
 3. For each non-merged ticket, re-dispatch the full trio into the **existing** team:
    ```
-   Agent({subagent_type: "developer",         name: "developer-TASK-XXX",        team_name: "tickets", model: "opus",   description: "Resume TASK-XXX", prompt: "<same spawn prompt as original + RESUME note>"})
-   Agent({subagent_type: "quality-reviewer",  name: "quality-reviewer-TASK-XXX", team_name: "tickets", model: "sonnet", description: "Resume review TASK-XXX", prompt: "<same spawn prompt>"})
-   Agent({subagent_type: "test-validator",    name: "test-validator-TASK-XXX",   team_name: "tickets", model: "sonnet", description: "Resume validation TASK-XXX", prompt: "<same spawn prompt>"})
+   Agent({subagent_type: "developer",         name: "developer-TASK-XXX",        team_name: "tickets-<SESSION_SHORT_ID>", model: "opus",   description: "Resume TASK-XXX", prompt: "<same spawn prompt as original + RESUME note>"})
+   Agent({subagent_type: "quality-reviewer",  name: "quality-reviewer-TASK-XXX", team_name: "tickets-<SESSION_SHORT_ID>", model: "sonnet", description: "Resume review TASK-XXX", prompt: "<same spawn prompt>"})
+   Agent({subagent_type: "test-validator",    name: "test-validator-TASK-XXX",   team_name: "tickets-<SESSION_SHORT_ID>", model: "sonnet", description: "Resume validation TASK-XXX", prompt: "<same spawn prompt>"})
    ```
 4. If any tickets are non-merged, also re-dispatch the shared merger:
    ```
-   Agent({subagent_type: "merger", name: "merger", team_name: "tickets", model: "haiku", description: "Resume wave merges", prompt: "<same spawn prompt>"})
+   Agent({subagent_type: "merger", name: "merger", team_name: "tickets-<SESSION_SHORT_ID>", model: "haiku", description: "Resume wave merges", prompt: "<same spawn prompt>"})
    ```
 5. Re-send `GO` to each new developer. Add to the GO message:
    `RESUME: check the worktree for existing commits and continue from the latest committed state.`

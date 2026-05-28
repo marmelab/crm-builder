@@ -50,7 +50,8 @@ try {
     tool: i.tool_name || "",
     to: ti.to || "",
     msg: msg,
-    teamName: ti.team_name || "tickets"
+    teamName: ti.team_name || "",
+    sessionId: i.session_id || ""
   }));
 } catch { process.stdout.write("{}"); }
 ' "$INPUT" 2>/dev/null || echo "{}")
@@ -59,6 +60,7 @@ TOOL=$(echo "$PARSED" | node -e 'process.stdout.write(JSON.parse(require("fs").r
 TO=$(echo "$PARSED" | node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(0)).to || "")')
 MSG=$(echo "$PARSED" | node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(0)).msg || "")')
 TEAM=$(echo "$PARSED" | node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(0)).teamName || "")')
+SESSION_ID=$(echo "$PARSED" | node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(0)).sessionId || "")')
 
 if [ "$TOOL" != "SendMessage" ]; then
   exit 0
@@ -69,14 +71,36 @@ if ! echo "$MSG" | grep -q "shutdown_request"; then
   exit 0
 fi
 
-# Sanitize team name for path (alphanumeric/dash/underscore only).
-case "$TEAM" in
-  *[!A-Za-z0-9_-]*|"")
-    TEAM="tickets"
-    ;;
-esac
+TEAMS_DIR="${HOME:-/home/developer}/.claude/teams"
 
-INBOX="${HOME:-/home/developer}/.claude/teams/$TEAM/inboxes/team-lead.json"
+# Resolve the team. SendMessage's tool_input has no team_name, so locate the
+# team owned by this session via leadSessionId in each team's config.json.
+# This also makes the hook robust to session-scoped team names (tickets-<short>).
+if [ -z "$TEAM" ] || [ -n "${TEAM//[A-Za-z0-9_-]/}" ]; then
+  TEAM=""
+  if [ -n "$SESSION_ID" ] && [ -d "$TEAMS_DIR" ]; then
+    while IFS= read -r cfg; do
+      [ -z "$cfg" ] && continue
+      LEAD_ID=$(node -e '
+try {
+  const cfg = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+  process.stdout.write(cfg.leadSessionId || "");
+} catch { process.stdout.write(""); }
+' "$cfg" 2>/dev/null || echo "")
+      if [ "$LEAD_ID" = "$SESSION_ID" ]; then
+        TEAM=$(basename "$(dirname "$cfg")")
+        break
+      fi
+    done < <(find "$TEAMS_DIR" -mindepth 2 -maxdepth 2 -name config.json 2>/dev/null)
+  fi
+fi
+
+if [ -z "$TEAM" ]; then
+  # No team for this session — nothing to gate against.
+  exit 0
+fi
+
+INBOX="$TEAMS_DIR/$TEAM/inboxes/team-lead.json"
 
 block_with_reason() {
   local reason="$1"
