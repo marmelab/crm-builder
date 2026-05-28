@@ -6,6 +6,11 @@
 test.md
 chat-service/tests/results/run-*.json
 
+# Devcontainer config (per-user)
+/.devcontainer/devcontainer.json
+/.devcontainer/devcontainer-lock.json
+/.devcontainer/post-create.sh
+
 # Personal Claude seed for the devcontainer (per-user data)
 /.devcontainer/claude-seed/settings.json
 /.devcontainer/claude-seed/memory/
