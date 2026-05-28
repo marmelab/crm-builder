@@ -16,7 +16,7 @@ tools:
 
 Verify the implementation works to the extent the local environment allows. Authoritative validation runs in CI on the PR (`make start-supabase-e2e`); your job is the local pre-filter. Run in parallel with quality-reviewer.
 
-- Read ticket: `${TICKETS_DIR}/TASK-XXX.json` (absolute path passed in spawn prompt).
+- Read ticket: `${TICKET_FILE}` (absolute path passed in spawn prompt).
 - Output format: `.claude/rules/agent-output-format.md`.
 - Worktree scope: code lives in `/app/worktrees/<SESSION_SHORT_ID>/TASK-XXX/`, NOT `/app/src/`. Read `.claude/rules/worktree-scope.md` first. Reading `/app/src/...` shows pre-ticket state → false REJECTED.
 - Available skills — call `Skill({skill: "e2e-conventions"})` when checking e2e test presence and shape.

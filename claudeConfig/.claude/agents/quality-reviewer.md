@@ -16,7 +16,7 @@ tools:
 
 Verify the implementation is correct, spec-compliant, follows project conventions, and introduces no exploitable vulnerability. Run in parallel with test-validator.
 
-- Read ticket: `${TICKETS_DIR}/TASK-XXX.json` (absolute path passed in spawn prompt).
+- Read ticket: `${TICKET_FILE}` (absolute path passed in spawn prompt).
 - Output format: `.claude/rules/agent-output-format.md`.
 - Worktree scope: code lives in `/app/worktrees/<SESSION_SHORT_ID>/TASK-XXX/`, NOT `/app/src/`. Read `.claude/rules/worktree-scope.md` first. Reading `/app/src/...` shows pre-ticket state → false negatives.
 - Available skills — load on demand with `Skill({skill: "..."})` when the diff touches that domain:
