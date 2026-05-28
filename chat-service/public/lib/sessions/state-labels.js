@@ -3,4 +3,6 @@ export const STATE_LABELS = {
   completed: 'Completed',
   cancelled: 'Cancelled',
   waiting: 'Waiting',
+  rate_limited: 'Limit reached',
+  error: 'Error',
 };

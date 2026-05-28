@@ -26,7 +26,7 @@ export const MIME_TYPES = {
   '.svg':  'image/svg+xml',
 };
 
-export const ALLOWED_STATES = new Set(['in_progress', 'completed', 'cancelled', 'waiting']);
+export const ALLOWED_STATES = new Set(['in_progress', 'completed', 'cancelled', 'waiting', 'rate_limited', 'error']);
 
 export const MODE_DEMO = 'demo';
 export const MODE_FULL = 'full';
