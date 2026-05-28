@@ -1,6 +1,4 @@
-import {
-  el, formatTokens, tokenBreakdownText, setupCostTip,
-} from './lib/dom.js';
+import { el, formatTokens } from './lib/dom.js';
 import { renderStatsPanel, initStatsRefresh } from './lib/stats/index.js';
 import { initConnection, initDisplay, initHistory, openConfirmModal, initRecentPopup } from './lib/sessions/index.js';
 import { renderInlineMarkdown } from './lib/markdown.js';
@@ -640,37 +638,7 @@ function handleWsMessage(event) {
     const agents = msg.activeAgents || 0;
     const agentsPart = agents > 0 ? `🤖 ${agents} · ` : '';
     const total = (typeof msg.tokensTotal === 'number') ? msg.tokensTotal : msg.tokensUsed;
-    // CSS-styled hover tooltips: tokens host shows the 4-way breakdown,
-    // cost host shows the per-model table. Both flip UPWARD (`.tk-tip-above`)
-    // because the ticker sits at the bottom of the chat panel.
-    stats.replaceChildren();
-    stats.removeAttribute('title');
-    if (agentsPart) stats.appendChild(document.createTextNode(agentsPart));
-
-    // Tooltips on the ticker need both modifiers: `tk-tip-above` because the
-    // ticker sits at the bottom of the chat widget, and `tk-tip-anchor-right`
-    // because the ticker text is right-aligned so the host is near the right
-    // edge — extending leftward keeps the tooltip on-screen.
-    const tipCls = 'tk-tip tk-tip-above tk-tip-anchor-right';
-
-    const hasTokenTip = !!msg.tokensBreakdown;
-    const tokensHost = el('span', { className: hasTokenTip ? 'tk-host' : null }, `${formatTokens(total)} tokens`);
-    if (hasTokenTip) {
-      const tip = el('span', { className: tipCls });
-      tip.textContent = tokenBreakdownText(msg.tokensBreakdown, { totalLabel: 'total' });
-      tokensHost.appendChild(tip);
-    }
-    stats.appendChild(tokensHost);
-    stats.appendChild(document.createTextNode(' · '));
-
-    const hasCostTip = msg.tokensByModel && msg.tokensByModel.length > 0;
-    const costHost = el('span', { className: hasCostTip ? 'tk-host tk-cost-host' : null }, `$${msg.costUsd.toFixed(2)}`);
-    if (hasCostTip) {
-      const tip = el('span', { className: tipCls });
-      setupCostTip(tip, msg.tokensByModel, msg.costUsd);
-      costHost.appendChild(tip);
-    }
-    stats.appendChild(costHost);
+    stats.textContent = `${agentsPart}${formatTokens(total)} tokens · $${msg.costUsd.toFixed(2)}`;
 
     if (statsMode) statsRefresh.schedule();
     return;
