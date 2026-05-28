@@ -78,7 +78,10 @@ function emitFromBlock(runtime, agentName, block) {
     broadcast(runtime, {
       type: "debug",
       tool: "SendMessage",
-      input: { to: block.input?.to, content: block.input?.content },
+      input: {
+        to: block.input?.to,
+        content: block.input?.message ?? block.input?.content,
+      },
       agent: agentName,
     });
   }
@@ -134,14 +137,39 @@ async function scanDir(runtime, baseDir, { emit }) {
 export async function startSubagentTailer(runtime) {
   if (!runtime || runtime.subagentTailerStop) return;
   if (!runtime.claudeSessionId) return;
+
+  // Claim the stop slot synchronously, before any await. turn.js fires
+  // startSubagentTailer un-awaited on every event carrying a session_id, AND
+  // calls stopSubagentTailer in its finally block once the spawn exits — so
+  // two races both have to be handled here:
+  //   (a) concurrent starts: the early-return on subagentTailerStop must
+  //       reject the second caller before it can also create a setInterval.
+  //   (b) stop arriving during startup: stopSubagentTailer must find a real
+  //       callback (not null) so it can signal the in-flight start to abort.
+  // Both are satisfied by assigning subagentTailerStop before the dry-pass
+  // await, with a shared `stopped` flag the dry pass checks afterward.
   const baseDir = claudeSubagentsDir(runtime.claudeSessionId);
+  let stopped = false;
+  let scanning = false;
+  let interval = null;
+
+  runtime.subagentTailerStop = async () => {
+    stopped = true;
+    if (interval) {
+      clearInterval(interval);
+      // Final scan to catch subagent writes between the last interval tick and
+      // the CLI exit — bounded to newly-appended bytes by the offset map.
+      // Skipped when stop fires before startup completes (no interval to flush).
+      await scanDir(runtime, baseDir, { emit: true });
+    }
+    runtime.subagentTailerStop = null;
+  };
 
   if (runtime.subagentSeenUuids.size === 0) {
     await scanDir(runtime, baseDir, { emit: false });
   }
+  if (stopped) return;
 
-  let stopped = false;
-  let scanning = false;
   const tick = async () => {
     if (stopped || scanning) return;
     scanning = true;
@@ -151,17 +179,8 @@ export async function startSubagentTailer(runtime) {
       scanning = false;
     }
   };
-  const interval = setInterval(tick, POLL_INTERVAL_MS);
+  interval = setInterval(tick, POLL_INTERVAL_MS);
   tick();
-
-  runtime.subagentTailerStop = async () => {
-    stopped = true;
-    clearInterval(interval);
-    // Final scan to catch subagent writes between the last interval tick and
-    // the CLI exit — bounded to newly-appended bytes by the offset map.
-    await scanDir(runtime, baseDir, { emit: true });
-    runtime.subagentTailerStop = null;
-  };
 }
 
 export async function stopSubagentTailer(runtime) {
