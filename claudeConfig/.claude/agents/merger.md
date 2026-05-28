@@ -67,13 +67,18 @@ The orchestrator parses this line by regex. Any other format is treated as `FAIL
 
 4. **Update ticket status** (skip when `TASK_ID` is `SIMPLE` or `TICKETS_DIR` is absent)
    ```bash
-   cd /tmp && python3 -c "
+   if [ -n "${TICKETS_DIR:-}" ] && [ "${TASK_ID}" != "SIMPLE" ]; then
+     python3 -c "
    import json, sys
    path = '${TICKETS_DIR}/${TASK_ID}.json'
-   with open(path) as f: data = json.load(f)
-   data['status'] = 'merged'
-   with open(path, 'w') as f: json.dump(data, f, indent=2)
-   "
+   try:
+       with open(path) as f: data = json.load(f)
+       data['status'] = 'merged'
+       with open(path, 'w') as f: json.dump(data, f, indent=2)
+   except Exception as e:
+       print('ticket-status update failed (non-fatal):', e, file=sys.stderr)
+   " || true
+   fi
    ```
 
 5. **Capture short SHA and emit contract line**
@@ -82,7 +87,7 @@ The orchestrator parses this line by regex. Any other format is treated as `FAIL
    ```
    Emit as final output: `DONE: <TASK_ID> commit=<short_sha>`
 
-6. **On any failure of steps 1–4**:
+6. **On any failure of steps 1–5**:
    Emit as final output: `FAILED: <TASK_ID> <one-line reason>`
 
 ### NEVER
