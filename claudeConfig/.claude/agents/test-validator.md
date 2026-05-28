@@ -49,7 +49,7 @@ Read the ticket spec at `TICKET_FILE`, read the test artifacts in `WORKTREE_PATH
 5. **Emit verdict** as the final line of output using the OUTPUT CONTRACT format above.
 
 **DO NOT:**
-- Run tests (`npx vitest`, `npx playwright test`) — `validate-before-review` hook does this.
+- Run tests (`npx vitest`, `npx playwright test`) — the SubagentStop validation chain does this.
 - Run `npx playwright install --with-deps`.
 - Re-spawn agents or call `TeamCreate` / `TeamDelete`.
 
@@ -155,21 +155,4 @@ Typecheck/unit/e2e failures are caught by hooks before you run. If DEVELOPER rea
 
 ---
 
-## Output format
-
-```
-Step 0 — acceptance criteria: <all pass | list of [FAIL] items>
-Step 1 — integration: <all present | list of missing>
-Step 2 — screenshots: <paths + sizes | skipped because ...>
-Step 3 — e2e spec: <exists + targets right route | missing | n/a>
-
-Issues:
-  - severity: blocking | warning
-    file: ...
-    description: ...
-    fix: ...
-
-Summary: 1 line.
-```
-
-Last line must be the contract line — `APPROVED` or `REJECTED: <bulleted feedback>`.
+The contract line is your entire output as far as the orchestrator is concerned. Informational analysis above it is not parsed.
