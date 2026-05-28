@@ -518,8 +518,13 @@ export function createRequestHandler({ publicDir }) {
       return;
     }
     try {
-      const data = await readFile(filePath);
+      let data = await readFile(filePath);
       const mime = MIME_TYPES[extname(filePath)] || 'text/plain';
+      if (urlPath === '/index.html' && process.env.PORT_CRM) {
+        data = Buffer.from(
+          data.toString().replace('localhost:5173', `localhost:${process.env.PORT_CRM}`)
+        );
+      }
       res.writeHead(200, { 'Content-Type': mime });
       res.end(data);
     } catch {
