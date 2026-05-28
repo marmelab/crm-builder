@@ -331,6 +331,25 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
   font-size: 10px; font-weight: 600; opacity: .9;
   text-transform: uppercase; letter-spacing: .03em;
 }
+.queued-cancel {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, .55);
+  color: #fff;
+  font: 16px/1 system-ui, sans-serif;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity .15s ease, background .15s ease, transform .15s ease;
+}
+.msg-queued:hover .queued-cancel,
+.queued-cancel:focus-visible { opacity: 1; }
+.queued-cancel:hover { background: #dc2626; transform: scale(1.08); }
 .msg-time {
   position: absolute;
   bottom: 6px;
