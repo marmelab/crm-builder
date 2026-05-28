@@ -26,15 +26,6 @@
     "hooks": {
         "PreToolUse": [
             {
-                "matcher": "Bash|Read|Grep|Glob|SendMessage",
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": "/home/developer/.claude/hooks/member-idle-gate.sh"
-                    }
-                ]
-            },
-            {
                 "matcher": "Bash",
                 "hooks": [
                     {
@@ -71,54 +62,6 @@
                         "command": "/home/developer/.claude/hooks/restrict-documentator-write.sh"
                     }
                 ]
-            },
-            {
-                "matcher": "SendMessage",
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": "/home/developer/.claude/hooks/block-premature-shutdowns.sh"
-                    },
-                    {
-                        "type": "command",
-                        "command": "/home/developer/.claude/hooks/validate-before-review.sh",
-                        "timeout": 180,
-                        "statusMessage": "Validating before review/merge..."
-                    }
-                ]
-            },
-            {
-                "matcher": "TeamDelete",
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": "/home/developer/.claude/hooks/teamdelete-gate.sh",
-                        "timeout": 5,
-                        "statusMessage": "Checking team teardown state..."
-                    }
-                ]
-            },
-            {
-                "matcher": "TeamCreate",
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": "/home/developer/.claude/hooks/teamcreate-wipe-orphan.sh",
-                        "timeout": 5
-                    }
-                ]
-            }
-        ],
-        "PostToolUse": [
-            {
-                "matcher": "TeamDelete",
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": "/home/developer/.claude/hooks/teamdelete-cleanup.sh",
-                        "timeout": 5
-                    }
-                ]
             }
         ],
         "SubagentStart": [
@@ -147,7 +90,7 @@
                 ]
             },
             {
-                "matcher": "simple-developer",
+                "matcher": "simple-developer|developer",
                 "hooks": [
                     {
                         "type": "command",
