@@ -1,0 +1,21 @@
+docker-compose.multi.yml
+  s_4d0b91aa4e1f3f::t_284dacb4adefb5 49
+entrypoint.sh
+  s_4d0b91aa4e1f3f::t_c22cde058e34ae 318,322
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "1ca1d35e6494835524b22d3a0098fd76570dd09f",
+  "prompts": {},
+  "sessions": {
+    "s_4d0b91aa4e1f3f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ef059950-9b18-42a9-83dd-7e9bf830a1b6",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Jerome <jerome@marmelab.com>"
+    }
+  }
+}
