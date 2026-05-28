@@ -99,6 +99,22 @@ LEAD_INBOX="$TEAM_DIR/inboxes/team-lead.json"
 if [ ! -f "$CONFIG" ]; then exit 0; fi
 TEAM=$(basename "$TEAM_DIR")
 
+# Orphan bypass: if the team was created by a different session (lead crashed,
+# user STOPped, container restarted, etc.), graceful shutdown is impossible —
+# the prior members are dead processes that will never ack a shutdown_request.
+# Allow the deletion so the next wave can claim a clean `tickets` team.
+LEAD_OF_TEAM=$(node -e '
+try {
+  const cfg = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+  process.stdout.write(cfg.leadSessionId || "");
+} catch { process.stdout.write(""); }
+' "$CONFIG" 2>/dev/null || echo "")
+
+if [ -n "$LEAD_OF_TEAM" ] && [ -n "$SESSION_ID" ] && [ "$LEAD_OF_TEAM" != "$SESSION_ID" ]; then
+  hook_log "teamdelete-gate ALLOW orphan team=$TEAM leadSession=$LEAD_OF_TEAM current=$SESSION_ID"
+  exit 0
+fi
+
 # Non-lead members (one name per line)
 MEMBERS=$(node -e '
 try {
