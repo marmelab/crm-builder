@@ -1,0 +1,20 @@
+claudeConfig/.claude/agents/simple-developer.md
+  s_70801cc66276f4::t_c43ca55f7f8a3a 23-24
+  s_70801cc66276f4::t_3bef1254dfa773 126-181
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "5eee0eaeffc34b5b94586d61739e093a85a1754a",
+  "prompts": {},
+  "sessions": {
+    "s_70801cc66276f4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "349d4049-5900-41a2-b797-072e63c6cf19",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Jerome <jerome@marmelab.com>"
+    }
+  }
+}
