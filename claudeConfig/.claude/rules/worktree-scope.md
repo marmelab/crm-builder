@@ -27,7 +27,7 @@ Each session owns an integration branch `session/<SESSION_SHORT_ID>` (forked fro
 | Path prefix | Read | Write/Edit | Bash cwd |
 |---|---|---|---|
 | `<WORKTREE_PATH>/**` (i.e. `/app/worktrees/<SESSION_SHORT_ID>/TASK-XXX/`) | ✅ | ✅ | ✅ |
-| `${TICKETS_DIR}/TASK-XXX.json` (per-session folder, e.g. `/chat-service/logs/<uuid>/TASK-XXX.json`) | ✅ (ticket source of truth) | ⚠️ merger writes the `status` field; developer may flip `requires_supabase_migration` if the planner was wrong — no other writes | — |
+| `${TICKETS_DIR}/TASK-XXX.json` (per-session folder, e.g. `/chat-service/logs/<uuid>/TASK-XXX.json`) | ✅ (ticket source of truth) | ⚠️ merger writes the `status` field — no other writes | — |
 | `/app/adr/**` | ✅ (learn from past structural decisions) | ❌ (developer writes ADRs inside the worktree at `<WORKTREE_PATH>/adr/`; the merger ships them to `/app/adr/`) | — |
 | `/home/developer/.claude/**` | ✅ (skills, rules) | ❌ | — |
 
