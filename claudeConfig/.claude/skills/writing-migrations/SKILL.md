@@ -46,12 +46,50 @@ enabled + policies, never `USING (true)`).
 
 ## 5. View-recreation rule (BLOCKING correctness)
 
-When a migration adds or removes a column, check `supabase/schemas/03_views.sql`
-for any view selecting from that table. Recreate it with `CREATE OR REPLACE
-VIEW`, the new column appended at the **absolute end** of the SELECT list —
-after all existing columns including computed AS aliases. PostgreSQL rejects any
-ordinal shift (error 42P16). PostgREST queries the view, not the table — a
-missing update makes the column invisible to the app.
+When a migration adds a column on a table referenced by a view in
+`supabase/schemas/03_views.sql`, recreate the view with **`CREATE OR REPLACE
+VIEW`** and place the new column as the **very last item** in the SELECT
+list — after every existing column AND after every existing computed `AS`
+alias (e.g. `count(...) as nb_deals`).
+
+PostgreSQL forbids any ordinal shift in an existing view's SELECT list
+(error 42P16). "Between the raw columns and the computed aggregates" is
+**still a shift** — the aggregate's position increases by one. There are no
+exceptions. The mechanical rule is: positions 1..N of the new view must be
+identical to positions 1..N of the old view; the new column is position N+1.
+
+Why not `DROP VIEW … CASCADE; CREATE VIEW …`? It silently drops dependent
+views/materialized views/rules, loses any explicit `REVOKE`s on the view
+(re-granted by default privileges at the next deploy without warning), and
+reads as a destructive operation in audit. Reserve it for cases `CREATE OR
+REPLACE` genuinely can't handle (column **removal** or **rename**). If you
+use it, enumerate dropped dependents in a SQL comment and re-create them in
+the same migration.
+
+PostgREST queries the view, not the table — a missing update makes the
+column invisible to the app. The view's column order doesn't matter to API
+consumers (they address by name), so "append at end" has no API cost.
+
+Example — adding `importance` to `companies_summary` (the view ends with
+`count(...) as nb_deals, count(...) as nb_contacts`):
+
+```sql
+create or replace view public.companies_summary with (security_invoker = on) as
+select
+    c.id, c.created_at, c.name, …, c.logo,
+    count(distinct d.id) as nb_deals,
+    count(distinct co.id) as nb_contacts,
+    c.importance                              -- LAST, after every existing item
+from public.companies c
+    left join public.deals d on c.id = d.company_id
+    left join public.contacts co on c.id = co.company_id
+group by c.id;
+```
+
+Then update `supabase/schemas/03_views.sql` to the **same order** — the
+declarative schema must mirror the deployed view, including the chronological
+"append at end" placement of newer columns. Don't reorder the schema file to
+look prettier — schema drift breaks future `supabase db diff` generations.
 
 ## 6. Commit and hand off
 

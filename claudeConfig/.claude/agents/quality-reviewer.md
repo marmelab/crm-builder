@@ -38,8 +38,11 @@ Migration checklist (BLOCKING):
 - Idempotent (`IF [NOT] EXISTS`), no destructive change without intent.
 - Column types/constraints/FKs match the TS types the migration is derived from.
 - RLS enabled + real policies on every new table (never `USING (true)`).
-- View-recreation rule respected (`03_views.sql`, new column at absolute end,
-  error 42P16 avoided).
+- View-recreation rule respected: `CREATE OR REPLACE VIEW` with the new column
+  as the LAST item in the SELECT list (after every existing column AND every
+  existing computed `AS` alias). `DROP VIEW … CASCADE; CREATE VIEW …` only
+  for column removal/rename, with dropped dependents re-created in the same
+  migration. Column order in `03_views.sql` must mirror the deployed view.
 - No data loss on existing tables; reversible where feasible.
 
 Files to review are listed in the spawn prompt. Read them in
@@ -182,9 +185,10 @@ Any `[FAIL]` → BLOCKED. Omitting a criterion from the list is itself a bug.
 When the diff includes a migration that adds or removes a column:
 
 - Check `supabase/schemas/03_views.sql` for any view selecting from that table. Missing update → BLOCKING (PostgREST queries the view, not the table — column invisible to the app).
-- New columns must be at the **absolute end** of the SELECT list — after all existing columns, including computed AS aliases. PostgreSQL rejects any ordinal shift (error 42P16).
-- `03_views.sql` must stay in sync with the migration (same column order, same aliases).
-- `DROP VIEW … CREATE VIEW` instead of `CREATE OR REPLACE VIEW` → verify dependent objects (RLS policies, PostgREST config) are also recreated.
+- Column **addition** MUST use `CREATE OR REPLACE VIEW` with the new column as the LAST item of the SELECT list — after every existing column AND every existing computed `AS` alias. Mechanically: positions 1..N of the new view must equal positions 1..N of the old view; the new column is position N+1. Any other placement = BLOCKING (PostgreSQL error 42P16 — "between raw columns and aggregates" is still an ordinal shift of the aggregate).
+- Column **removal or rename** MUST use `DROP VIEW IF EXISTS public.<name> CASCADE; CREATE VIEW public.<name> WITH (security_invoker = on) AS …`. The migration must list dropped dependents in a SQL comment and re-create them.
+- Column **addition** with `DROP VIEW … CASCADE` = BLOCKING (silently drops dependent views/mat-views/rules, silently nukes explicit REVOKEs at the next deploy via default privileges). CASCADE is reserved for removal/rename.
+- `03_views.sql` must mirror the deployed view's column order (append-at-end for additions). Reordering for aesthetics = BLOCKING (breaks future `supabase db diff`).
 
 ### A.7 Tests (BLOCKING)
 - Complex business logic → unit test required
