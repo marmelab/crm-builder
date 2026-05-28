@@ -10,6 +10,40 @@ import { buildSpawnEnv } from '../spawn-env.js';
 // trigger a synthesis pass.
 export const DOCUMENTATOR_DEBOUNCE_MS = 30_000;
 
+// Hard ceiling for a single documentator spawn. A hung `claude -p` (network
+// stall, prompt-cache miss with no progress) would otherwise leak the child
+// process indefinitely.
+export const DOCUMENTATOR_TIMEOUT_MS = 5 * 60_000;
+
+// Session-keyed timer map. Storing the timer on the runtime breaks when the
+// runtime is released between turns (clients.size===0 → runtime deleted),
+// because a reconnecting client gets a fresh runtime whose null timer cannot
+// cancel the orphan. Keying on sessionId survives runtime lifecycle.
+const sessionTimers = new Map();
+
+export function clearDocumentatorTimer(sessionId) {
+  const t = sessionTimers.get(sessionId);
+  if (t) {
+    clearTimeout(t);
+    sessionTimers.delete(sessionId);
+  }
+}
+
+export function scheduleDocumentatorRun(sessionId, runtimes) {
+  clearDocumentatorTimer(sessionId);
+  const t = setTimeout(() => {
+    sessionTimers.delete(sessionId);
+    // A new turn may have started in the meantime — skip if so; that turn
+    // will re-schedule us once it finishes.
+    const current = runtimes.get(sessionId);
+    if (current?.busy) return;
+    spawnDocumentator(sessionId).catch((err) => {
+      console.error('[documentator]', err?.message || err);
+    });
+  }, DOCUMENTATOR_DEBOUNCE_MS);
+  sessionTimers.set(sessionId, t);
+}
+
 // Returns true if at least one TASK-*.json file in the session dir has
 // status === "merged". The documentator's Mode 2 only has anything to do when
 // real work was merged on this branch — pure question/answer turns produce
@@ -76,9 +110,29 @@ export async function spawnDocumentator(sessionId) {
   let stderrBuf = '';
   proc.stdout.on('data', (d) => { appendFile(logPath, d).catch(() => {}); });
   proc.stderr.on('data', (d) => { stderrBuf += d.toString(); });
-  proc.once('error', (err) => { stderrBuf += `\n${err?.message || err}`; });
+  // 'error' resolves the race separately — spawn ENOENT does NOT always emit
+  // a subsequent 'close', so awaiting 'close' alone can hang forever.
+  const spawnError = new Promise((resolve) => proc.once('error', resolve));
+  const closePromise = new Promise((resolve) => proc.once('close', resolve));
+  const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve('TIMEOUT'), DOCUMENTATOR_TIMEOUT_MS));
 
-  const exitCode = await new Promise((resolve) => proc.once('close', resolve));
+  const outcome = await Promise.race([
+    closePromise.then((code) => ({ kind: 'close', code })),
+    spawnError.then((err) => ({ kind: 'error', err })),
+    timeoutPromise.then(() => ({ kind: 'timeout' })),
+  ]);
+
+  let exitCode;
+  if (outcome.kind === 'close') {
+    exitCode = outcome.code;
+  } else if (outcome.kind === 'error') {
+    stderrBuf += `\n${outcome.err?.message || outcome.err}`;
+    exitCode = -1;
+  } else {
+    stderrBuf += `\nTimed out after ${DOCUMENTATOR_TIMEOUT_MS}ms`;
+    try { proc.kill('SIGKILL'); } catch {}
+    exitCode = -1;
+  }
   if (exitCode !== 0 && stderrBuf) {
     await appendFile(logPath, `\nSTDERR:\n${stderrBuf}\n`).catch(() => {});
   }

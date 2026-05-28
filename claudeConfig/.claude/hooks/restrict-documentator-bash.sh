@@ -49,7 +49,9 @@ WHITELIST=(
   '^ls( |$)'
   '^wc -l( |$)'
   '^git -C /app add MEMORY\.md *$'
+  # commit: accept user.name/user.email in either order
   "^git -C /app -c user\\.name=['\"]?Documentator['\"]? -c user\\.email=['\"]?documentator@atomic-crm\\.local['\"]? commit -m "
+  "^git -C /app -c user\\.email=['\"]?documentator@atomic-crm\\.local['\"]? -c user\\.name=['\"]?Documentator['\"]? commit -m "
 )
 
 for pattern in "${WHITELIST[@]}"; do

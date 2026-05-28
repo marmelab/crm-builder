@@ -46,6 +46,15 @@ for WT in $WORKTREES; do
     continue
   fi
 
+  # Skip if every changed path is under adr/. ADRs are .md docs and don't
+  # affect typecheck; running npm run typecheck on a doc-only commit wastes
+  # ~10-20s per ADR. Mirrors the previous reflection-only skip.
+  DIFF_ALL=$( { git diff --name-only "$BASE..HEAD" 2>/dev/null; git status --porcelain | awk '{print $NF}'; } | sort -u | grep -v '^$' )
+  if [ -n "$DIFF_ALL" ] && [ -z "$(echo "$DIFF_ALL" | grep -v '^adr/')" ]; then
+    echo "[$(date -Iseconds)] typecheck SKIP wt=$WT (adr-only)" >> "$LOG"
+    continue
+  fi
+
   OUTPUT=$(npm run typecheck 2>&1)
   EXIT_CODE=$?
   if [ $EXIT_CODE -ne 0 ]; then

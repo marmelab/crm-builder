@@ -182,16 +182,22 @@ wss.on('connection', async (ws, req) => {
 });
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  loadSystemPrompt().then((parsed) => {
-    applySystemPrompt(parsed);
-    const t = parsed.tools?.length ? parsed.tools.join(',') : 'default';
-    console.log(parsed.content ? `Orchestrator loaded (model: ${parsed.model || 'default'}, tools: ${t}).` : 'No orchestrator prompt, using default.');
-  });
-  loadDocumentatorPrompt().then((parsed) => {
-    applyDocumentatorPrompt(parsed);
-    console.log(parsed.content ? `Documentator loaded (model: ${parsed.model || 'default'}).` : 'No documentator prompt, post-turn synthesis disabled.');
-  });
-  httpServer.listen(PORT, '0.0.0.0', () => {
-    console.log(`Chat service listening on port ${PORT}`);
+  // Await both prompt loads before accepting connections — otherwise a turn
+  // can complete in the window between listen() and the .then callback and
+  // spawn the documentator with an empty prompt.
+  Promise.all([
+    loadSystemPrompt().then((parsed) => {
+      applySystemPrompt(parsed);
+      const t = parsed.tools?.length ? parsed.tools.join(',') : 'default';
+      console.log(parsed.content ? `Orchestrator loaded (model: ${parsed.model || 'default'}, tools: ${t}).` : 'No orchestrator prompt, using default.');
+    }),
+    loadDocumentatorPrompt().then((parsed) => {
+      applyDocumentatorPrompt(parsed);
+      console.log(parsed.content ? `Documentator loaded (model: ${parsed.model || 'default'}).` : 'No documentator prompt, post-turn synthesis disabled.');
+    }),
+  ]).then(() => {
+    httpServer.listen(PORT, '0.0.0.0', () => {
+      console.log(`Chat service listening on port ${PORT}`);
+    });
   });
 }

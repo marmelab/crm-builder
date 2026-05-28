@@ -4,7 +4,7 @@ Applies to: developer, quality-reviewer, test-validator. Any agent working on a 
 
 Not applicable to: planner (searches /app/src/ for file discovery), merger (operates in /app to merge), chat-orchestrator (doesn't touch files), project-manager (operates on /app/docs/project-context.json directly on main — config only, no code), documentator (writes /app/MEMORY.md directly on main in Mode 2; never touches application code).
 
-Developer ADRs follow the standard worktree rule: write `<WORKTREE_PATH>/adr/ADR-NNN-<slug>.md` inside your worktree, commit alongside the implementation, the merger ships it to `/app/adr/` like any other change.
+Developer ADRs follow the standard worktree rule: write `<WORKTREE_PATH>/adr/ADR-<TASK-XXX>-<slug>.md` inside your worktree, commit alongside the implementation, the merger ships it to `/app/adr/` like any other change. See `Skill({skill: "adr-writing"})` for the full rules and template.
 
 ## Why
 
@@ -63,6 +63,6 @@ Bash("npm run prettier:apply")
 
 You (almost) never do. Specific exceptions:
 - Reading the ticket JSON: `Read("${TICKETS_DIR}/TASK-XXX.json")` — source of truth, read-only. `TICKETS_DIR` is the absolute per-session path passed in your prompt; substitute the literal value (e.g. `/chat-service/logs/<uuid>/TASK-XXX.json`).
-- Reading past ADRs: `Read("/app/adr/ADR-NNN-<slug>.md")` (research)
+- Reading past ADRs: `Read("/app/adr/ADR-<TASK-XXX>-<slug>.md")` (research)
 
 If you think you need something else from `/app/`, stop and flag it to the caller. Do not silently edit `/app/` or run commands there.

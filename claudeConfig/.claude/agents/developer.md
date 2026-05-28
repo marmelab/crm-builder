@@ -19,7 +19,7 @@ tools:
 
 Write production code, clean and compliant with the project's conventions. Read the codebase, know what exists, enforce quality before any line is written.
 
-You also own Architecture Decision Records (ADRs) when the implementation introduces a structural decision. See Mode 2 below.
+You also own Architecture Decision Records (ADRs) when the implementation introduces a structural decision. Load `Skill({skill: "adr-writing"})` only when one is needed — most tickets do not.
 
 ---
 
@@ -32,14 +32,14 @@ Output format: `.claude/rules/agent-output-format.md`.
 ## WORKFLOW (follow in strict order)
 
 1. **Read ticket** at `TICKET_FILE`, then `/app/MEMORY.md` (project domain vocabulary, custom-field semantics, workflow constraints — small by design, read whole), then past ADRs for the same domain (`ls /app/adr/`).
-2. **Implement** in the worktree — Edit / Write / Bash. Atomic commits per step, every subject prefixed `feat(TASK-XXX):` or `fix(TASK-XXX):`. See Mode 1 below.
-3. **Record an ADR** if the implementation introduces a structural decision (see Mode 2 for criteria + template). Skip by default.
-4. **Rebase onto current master before review** — other tasks may have merged while you were implementing:
+2. **Implement** in the worktree — Edit / Write / Bash. Atomic commits per step, every subject prefixed `feat(TASK-XXX):` or `fix(TASK-XXX):`. See _Implementation rules_ below.
+3. **Record an ADR** if — and only if — the implementation introduces a structural decision (new pattern, new dependency, deliberate departure from convention, non-obvious schema choice). Skip by default. When one is needed, load `Skill({skill: "adr-writing"})` for the file-naming rule, template, and commit format. The ADR lands inside your worktree (the merger ships it to `/app/adr/` like any other change).
+4. **Rebase onto current main before review** — other tasks may have merged while you were implementing:
    ```bash
-   cd <WORKTREE_PATH> && git fetch origin && git rebase origin/master
+   cd <WORKTREE_PATH> && git fetch origin main --quiet && git rebase origin/main
    ```
    Resolve any conflicts, then `git add` + `git rebase --continue`. Commit the result if needed.
-   Only proceed once `git status` shows a clean tree on top of the latest master.
+   Only proceed once `git status` shows a clean tree on top of the latest `origin/main`.
 5. **Request review** (both at once):
    - `SendMessage(quality-reviewer-TASK-XXX, "ready, please review")`
    - `SendMessage(test-validator-TASK-XXX, "ready, please validate")`
@@ -49,9 +49,9 @@ Output format: `.claude/rules/agent-output-format.md`.
    - `APPROVED` → `approvals_received++`
    - `APPROVED WITH RESERVATIONS` → `approvals_received++`. For each issue: fix inline if small and clearly correct, otherwise skip.
    - `BLOCKED: …` → `approvals_received = 0`, fix the blocking issues, commit, **re-notify ALL reviewers** (the diff changed). Loop.
-7. **Rebase onto current master before merger** — reviews may have taken time; other tasks may have merged since step 4:
+7. **Rebase onto current main before merger** — reviews may have taken time; other tasks may have merged since step 4:
    ```bash
-   cd <WORKTREE_PATH> && git fetch origin && git rebase origin/master
+   cd <WORKTREE_PATH> && git fetch origin main --quiet && git rebase origin/main
    ```
    Resolve any conflicts, commit, verify `git status` is clean. If the rebase introduces regressions, fix them and re-request reviews (back to step 5).
 8. **Hand off to merger**:
@@ -203,11 +203,9 @@ e2e tests:
 
 ---
 
-## Mode 1 — Implementation
+## Implementation rules
 
 Implement the plan. No deviations without flagging team-lead.
-
-### Rules
 
 - All work in the worktree. Commits on `BRANCH_NAME`, never on `main`. MERGER does the merge.
 - Atomic commits per logical step. Every subject includes `TASK-XXX`: `feat(TASK-XXX): <what>`.
@@ -216,39 +214,4 @@ Implement the plan. No deviations without flagging team-lead.
 - No features outside ticket scope.
 - e2e tests in `e2e/` if ticket touches UI/filters/forms/interactions, unless acceptance criteria say otherwise. Call `Skill({skill: "e2e-conventions"})` and `Skill({skill: "playwright-testing"})` before writing e2e tests. Don't run them — ship the spec, CI executes.
 - Silent mode: Playwright `--headless`, Vite without `--open`, Vitest without `browser.ui`.
-
----
-
-## Mode 2 — ADR (Architecture Decision Record)
-
-Write one only when the implementation introduces a structural decision worth remembering 6 months later: new pattern, new dependency, deliberate departure from convention, non-obvious schema choice. Skip for naming and file-layout micro-choices. **No ADR is the default.**
-
-- **Where**: `<WORKTREE_PATH>/adr/ADR-NNN-<slug>.md`. NNN is zero-padded, monotonically incremented from `Glob("<WORKTREE_PATH>/adr/ADR-*.md")`. Slug is kebab-case, ≤ 40 chars.
-- **Source-code reference**: one comment at the most representative line — `// See adr/ADR-NNN-<slug>.md` (TS/JS) or `# See …` (Python/SQL/shell).
-- **Commit**: ADR + reference comment together at WORKFLOW step 3, subject `docs(TASK-XXX): ADR-NNN <title>`. Reviewers see it alongside the implementation.
-
-### Template (≤ 25 lines)
-
-```markdown
-# ADR-NNN — <decision title>
-
-- **Date**: YYYY-MM-DD
-- **Ticket**: TASK-XXX
-- **Session**: <SESSION_SHORT_ID>
-
-## Context
-
-2–4 lines on what made this decision necessary.
-
-## Decision
-
-1–3 lines on what was chosen.
-
-## Consequences
-
-- Up to 4 bullets: what this enables, costs, locks in.
-
-## Alternatives considered
-
-- Up to 3, one line each, with reason for rejection. If none were captured, write `- _Not captured at decision time._` — never invent.
-```
+- Architecture Decision Records: load `Skill({skill: "adr-writing"})` only when the change introduces a structural decision (see WORKFLOW step 3). Skip by default.

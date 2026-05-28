@@ -38,6 +38,13 @@ for WT in $WORKTREES; do
     continue
   fi
 
+  # Skip ADR-only diffs (.md docs, no test impact).
+  DIFF_ALL=$( { git diff --name-only "$BASE..HEAD" 2>/dev/null; git status --porcelain | awk '{print $NF}'; } | sort -u | grep -v '^$' )
+  if [ -n "$DIFF_ALL" ] && [ -z "$(echo "$DIFF_ALL" | grep -v '^adr/')" ]; then
+    echo "[$(date -Iseconds)] unit-app SKIP wt=$WT (adr-only)" >> "$LOG"
+    continue
+  fi
+
   # Call vitest directly with `run` subcommand (not `npm run test:unit:app`)
   # because the package.json script invokes `vitest --config ...` without `run`,
   # which puts vitest into watch mode. In a non-TTY agent context, watch mode

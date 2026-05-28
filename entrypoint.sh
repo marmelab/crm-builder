@@ -245,15 +245,21 @@ if [ -d /app/.git ]; then
     if [ -z "$BRANCH" ]; then
       exit 0
     fi
+    # Distinguish initial seed (untracked) from later changes so the commit
+    # message is accurate. Later changes are usually the user editing on the
+    # host between restarts — not a re-seed.
     if git ls-files --error-unmatch MEMORY.md >/dev/null 2>&1; then
       if git diff --quiet HEAD -- MEMORY.md 2>/dev/null; then
         exit 0  # tracked and clean
       fi
+      MSG="chore: update MEMORY.md"
+    else
+      MSG="chore: seed MEMORY.md"
     fi
     git add MEMORY.md
     git -c user.name="Atomic CRM Builder" \
         -c user.email="builder@atomic-crm.local" \
-        commit -m "chore: seed MEMORY.md" --quiet
+        commit -m "$MSG" --quiet
   ' || echo -e "${YELLOW}Could not commit MEMORY.md (non-fatal)${NC}"
 fi
 

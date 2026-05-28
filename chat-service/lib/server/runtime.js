@@ -37,10 +37,6 @@ export function createRuntime(session) {
     subagentSeenUuids: new Set(),
     subagentFileOffsets: new Map(),
     subagentAgentTypeCache: new Map(),
-    // Debounce timer for the post-turn documentator (Mode 2) run. Set when an
-    // orchestrator turn completes with merged tickets in the session; cleared
-    // when a new user turn starts. See documentator-spawn.js.
-    documentatorTimer: null,
     stats: {
       // tokensUsed = legacy headline (input + cache_creation + output). Kept as
       // a derived number so older consumers keep working. The authoritative
