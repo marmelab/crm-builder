@@ -32,26 +32,14 @@ Output format: `.claude/rules/agent-output-format.md`.
 
 Your very last line of output MUST be exactly one of:
 
-- `DONE: branch=<branch_name> commit=<short_sha> files=[<comma-separated paths>]`
+- `DONE: branch=<BRANCH_NAME> commit=<short_sha> files=[<comma-separated modified paths, relative to repo root>]`
 - `FAILED: <one-line reason>`
 
 Nothing else after the contract line — no pleasantries, no markdown trailer.
 
 The orchestrator parses this line by regex. Any other format is treated as `FAILED`.
 
-## RETRY MODE (when RETRY_FEEDBACK is present in your spawn prompt)
-
-If your spawn prompt contains a `RETRY_FEEDBACK=...` block, you are on a retry attempt. The worktree already exists with your previous commits on the branch — do NOT re-create it, do NOT re-init the branch.
-
-1. Read the bullets in `RETRY_FEEDBACK` carefully. They come from `quality-reviewer` and/or `test-validator` and describe issues with your previous attempt.
-2. Apply targeted fixes only for the listed issues. Do not refactor unrelated code.
-3. Run the same local validation steps as a fresh attempt (typecheck, prettier, the relevant unit tests, e2e if the change is UI-visible).
-4. `git commit` the fixes on the same branch (additive commits — no rebase, no squash).
-5. Emit the OUTPUT CONTRACT line with the new HEAD commit sha.
-
-If you cannot resolve the feedback (e.g. test infrastructure broken, missing context), emit `FAILED: <reason citing the unresolvable feedback>`.
-
-### WORKFLOW steps
+## WORKFLOW steps
 
 1. **Read ticket** at `TICKET_FILE`, then `/app/MEMORY.md` (project domain vocabulary, custom-field semantics, workflow constraints — small by design, read whole), then past ADRs for the same domain (`ls /app/adr/`).
 2. **Implement** in the worktree — Edit / Write / Bash. Atomic commits per step, every subject prefixed `feat(TASK-XXX):` or `fix(TASK-XXX):`. See _Implementation rules_ below.
@@ -73,11 +61,26 @@ If you cannot resolve the feedback (e.g. test infrastructure broken, missing con
    - Write `/app/docs/reflections/<SESSION_SHORT_ID>/<TASK_ID>.md` — absolute path, outside the worktree, directly on the shared volume. `SESSION_SHORT_ID` is the first segment of your session UUID (derive it from `WORKTREE_PATH`, e.g. `/app/worktrees/58c3f4c7/TASK-001` → `58c3f4c7`). Create the directory if needed. Load `Skill({skill: "reflection-writing"})` for the format.
 5. **Emit OUTPUT CONTRACT** — your very last line of output:
    ```
-   DONE: branch=<BRANCH_NAME> commit=<short_sha> files=[<comma-separated modified paths>]
+   DONE: branch=<BRANCH_NAME> commit=<short_sha> files=[<comma-separated modified paths, relative to repo root>]
    ```
    The SubagentStop validation chain runs typecheck + prettier + unit + e2e before your stop is accepted. If validation fails, fix the issues, commit, and stop again.
 
    If anything is unresolvably broken, emit: `FAILED: <one-line reason>`
+
+---
+
+## RETRY MODE (when RETRY_FEEDBACK is present in your spawn prompt)
+
+If your spawn prompt contains a `RETRY_FEEDBACK=...` block, you are on a retry attempt. The worktree already exists with your previous commits on the branch — do NOT re-create it, do NOT re-init the branch.
+
+1. Read the bullets in `RETRY_FEEDBACK` carefully. They come from `quality-reviewer` and/or `test-validator` and describe issues with your previous attempt.
+2. Apply targeted fixes only for the listed issues. Do not refactor unrelated code.
+3. Commit your fixes. The SubagentStop validation chain (typecheck + prettier + unit + e2e) runs automatically when you stop — failures come back to you as stderr and you fix and re-stop until it passes, exactly as for a fresh attempt.
+4. Emit the OUTPUT CONTRACT line with the new HEAD commit sha.
+
+If you cannot resolve the feedback (e.g. test infrastructure broken, missing context), emit `FAILED: <reason citing the unresolvable feedback>`.
+
+On retry attempts, skip the reflection step — write reflections only on the first successful attempt or at the orchestrator's request later.
 
 ---
 
@@ -102,6 +105,7 @@ Domain skills — load on demand with `Skill({skill: "..."})` when your task nee
 - `Skill({skill: "backend-dev"})` — Supabase/SQL/dataProvider patterns
 - `Skill({skill: "e2e-conventions"})` — e2e test conventions for this project
 - `Skill({skill: "playwright-testing"})` — Playwright API and selector patterns
+- `Skill({skill: "reflection-writing"})` — reflection format (load at WORKFLOW step 4)
 - `Skill({skill: "shadcn-customization"})` — CSS variables, OKLCH colors, theme presets (load if `"visual_customization": true`)
 
 ---
@@ -132,7 +136,7 @@ Treat it as your contract:
 
 **View update rule** — when a migration adds or removes a column, check `supabase/schemas/03_views.sql` for any view selecting from that table. If one exists, recreate it with `CREATE OR REPLACE VIEW`, new column appended at the **absolute end** of the SELECT list — after all existing columns, including computed AS aliases. PostgreSQL rejects any ordinal shift (error 42P16). PostgREST queries the view, not the table — a missing update makes the column invisible to the app.
 
-If the planner's flag is wrong (you can avoid the migration, or you discover you need one), flip it in `${TICKETS_DIR}/TASK-XXX.json` before requesting review — the only field you may change besides `status`.
+If the planner's flag is wrong (you can avoid the migration, or you discover you need one), flip it in `${TICKET_FILE}` before emitting the OUTPUT CONTRACT — the only field you may change besides `status`.
 
 ---
 
@@ -168,7 +172,7 @@ Context grows with every turn — fewer turns means lower cost and faster execut
 
 ## Pre-plan checklist
 
-1. Read `${TICKETS_DIR}/TASK-XXX.json` (substitute literal value from spawn prompt).
+1. Read `${TICKET_FILE}` (absolute path to your ticket, passed in spawn prompt).
 2. **Start from `files_to_modify`**: planner listed 2-6 probable paths. Read each before exploring. Hints, not contracts — add/remove/substitute as needed.
 3. Read existing ADRs in `/app/adr/` for the same domain — mandatory.
 
