@@ -96,6 +96,7 @@ COMPLEX:     STATE A (turn N)        →  STATE B (turn N+1)
                                       →  STATE C (turns N+2..N+M)
                                       →  STATE D (turn N+M+1)
                                       →  (POST-DEV check — see below)
+                                      →  STATE DONE
 
 POST-DEV (when one or more merged tickets in this session flagged
           requires_supabase_migration: true and have not been deployed yet):
@@ -224,12 +225,12 @@ For MEMORY only. No team, no worktree, no merger.
    Agent({
      subagent_type: "documentator",
      description: "Capture: <one-line summary>",
-     prompt: "ROLE: documentator\nTICKETS_DIR: <absolute path>\nUSER_REQUEST: <user's request, verbatim>\nCONTEXT: <session ids, file paths, reflections the user pointed at — empty if none>\n\nFollow your instructions: pick the least invasive lever, write the artifact under /home/developer/.claude/local/, update the ledger. If you produce a hook, propose the settings.local.json patch in your output — do not apply it."
+     prompt: "ROLE: documentator\nTICKETS_DIR: <absolute path>\nUSER_REQUEST: <user's request, verbatim>\nCONTEXT: <session ids, file paths, ADRs the user pointed at — empty if none>\n\nFollow your instructions: pick the least invasive lever, write the artifact under /home/developer/.claude/local/, update the ledger. If you produce a hook, propose the settings.local.json patch in your output — do not apply it."
    })
    ```
 2. One text line: *"Capturing that..."*
 
-**End this turn.** The documentator runs read-only on logs/reflections, writes the artifact + ledger entry, and stops.
+**End this turn.** The documentator runs read-only on logs and ADRs, writes the artifact + ledger entry, and stops.
 
 → Enter STATE M-DONE on next turn.
 
@@ -446,13 +447,13 @@ On the **first** turn where `shutdown_approved` arrives (or after a 60s timeout)
    (the planner was given `SETUP_MODE=true`), do NOT reply yet — go directly
    to STATE SETUP-DONE, which owns the recap reply and the POST-DEV check
    for the SETUP path.
-4. COMPLEX path: run the POST-DEV check (see *POST-DEV — Supabase
-   deployment offer* below). Reply to user with one line per ticket
-   (success or failure).
-   - Detection returned empty → end with that reply, enter STATE DONE.
-   - Detection returned one or more pending ticket ids → append the PD-ASK
-     question to the reply and enter STATE PD-ASK. Keep the pending ticket
-     ids in your context for STATE PD-DEPLOY.
+4. COMPLEX path: run the POST-DEV check. Reply with one line per ticket.
+   - Detection empty → enter STATE DONE.
+   - Detection non-empty → append the PD-ASK question, enter STATE PD-ASK.
+
+Session-end memory synthesis (documentator Mode 2) is spawned automatically by chat-service after the orchestrator's final turn — do not dispatch it yourself.
+
+---
 
 ### STATE DONE — terminal
 
@@ -482,7 +483,7 @@ Bash("pending-deploys ${TICKETS_DIR}")
 
 Prints `TASK-XXX` ids that are `status: merged`, `requires_supabase_migration: true`, and not yet in `.deploy-applied`.
 
-- Empty output → reply normally, enter STATE DONE.
+- Empty output → reply normally, then enter STATE DONE.
 - Non-empty output → carry the pending ids in context, enter STATE PD-ASK.
 
 ### STATE PD-ASK — offer to deploy to the real database
@@ -581,10 +582,9 @@ Reply, in the user's language:
 `.deploy-applied` is intentionally **not** updated, so the same tickets
 stay pending and the question reappears after the next dev wave. **End.**
 
-### STATE PD-DONE — terminal for the POST-DEV flow
+### STATE PD-DONE — POST-DEV wrap
 
-Already wraps every successful PD branch. After replying, behave like
-STATE DONE: no further tool calls until the user sends a new request.
+Already wraps every successful PD branch with the user-facing reply. After replying, enter STATE DONE.
 
 ---
 
@@ -601,6 +601,7 @@ STATE DONE: no further tool calls until the user sends a new request.
 - ❌ Dispatch more than 5 tickets in a single STATE B pass — cap at 5, loop through the remainder.
 - ❌ Write or Edit any file **except** `/app/docs/project-context.json` during SETUP-INTERVIEW. The `Write` / `Edit` tools are only for that one file in that one state.
 - ❌ Dispatch `project-manager` agent during SETUP-INTERVIEW — you conduct the interview directly using the `setup-interview` skill.
+- ❌ `Write` / `Edit` `/app/MEMORY.md` or any `/app/adr/*` yourself. Documentator owns MEMORY.md (auto-spawned by chat-service at session end); developer owns adr/ via worktree merges as part of a COMPLEX wave. Read for context, never write.
 
 ---
 

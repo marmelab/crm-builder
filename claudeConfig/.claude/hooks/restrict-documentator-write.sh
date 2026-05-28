@@ -29,12 +29,14 @@ fi
 LEDGER="/app/docs/learnings/patterns.md"
 LOCAL_PREFIX="/home/developer/.claude/local/"
 SETTINGS_LOCAL="/home/developer/.claude/settings.local.json"
+MEMORY="/app/MEMORY.md"
 
 if [ "$FILE_PATH" = "$LEDGER" ]; then exit 0; fi
 if [ "$FILE_PATH" = "$SETTINGS_LOCAL" ]; then exit 0; fi
+if [ "$FILE_PATH" = "$MEMORY" ]; then exit 0; fi
 case "$FILE_PATH" in
   "$LOCAL_PREFIX"*) exit 0 ;;
 esac
 
-echo "Write/Edit blocked for documentator: $FILE_PATH is outside the allowed set. Allowed: $LEDGER, $SETTINGS_LOCAL, ${LOCAL_PREFIX}**." >&2
+echo "Write/Edit blocked for documentator: $FILE_PATH is outside the allowed set. Allowed: $LEDGER, $SETTINGS_LOCAL, $MEMORY, ${LOCAL_PREFIX}**." >&2
 exit 2
