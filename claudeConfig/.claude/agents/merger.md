@@ -67,20 +67,21 @@ Not in any team. `BRANCH_NAME` and `WORKTREE_PATH` are in your spawn prompt. Run
    `<type>` = ticket's `type` field (feat / fix / chore). On `CONFLICT`: `git merge --abort`, report failed with conflicting files. Do NOT resolve — that's the developer's job.
 
 4. **Update ticket status** (only if a ticket file exists for this branch)
-   - **COMPLEX**: `TASK_ID` is known from the SendMessage parsing. Always update `${TICKETS_DIR}/<TASK_ID>.json`.
+   - **COMPLEX**: `TASK_ID` is known from the SendMessage parsing. Update `${TICKETS_DIR}/<TASK_ID>.json`.
    - **SIMPLE**: a pseudo-ticket file may exist when the change touched a migration. Look it up:
      ```bash
      ls ${TICKETS_DIR}/TASK-SIMPLE-*.json 2>/dev/null
      ```
-     - Exactly one match → that is the pseudo-ticket for this merge; update it.
      - No matches → cosmetic-only SIMPLE; skip this step entirely.
-     - Multiple matches → pick the most recent (`ls -t | head -1`) and update only that one.
+     - One or more matches → all of them belong to commits now merged on this branch (two SIMPLE-with-migration flows on the same session share `simple/<short>`). Update every one.
 
-   Use the **Edit tool** (NOT shell):
+   For each ticket file to update: **Read first, then Edit with the actual current status** — the planner writes `"pending"`, the developer writes `"in_progress"`, and the simple-developer pseudo-ticket starts at `"in_progress"`. Pattern-matching the Edit tool's error string is unreliable.
    ```
-   Edit(file_path: "${TICKETS_DIR}/<TICKET_ID>.json", old_string: '"status": "in_progress"', new_string: '"status": "merged"')
+   Read(file_path: "${TICKETS_DIR}/<TICKET_ID>.json")
+   # Inspect the JSON; pick the actual status value (e.g. "in_progress" or "pending").
+   Edit(file_path: "${TICKETS_DIR}/<TICKET_ID>.json", old_string: '"status": "<actual>"', new_string: '"status": "merged"')
    ```
-   If status was `"pending"`, substitute. Verify with `Read`.
+   If the status is already `"merged"` (re-run, idempotent), skip the Edit.
 
 5. **Report**
    - COMPLEX: `SendMessage(to: "team-lead", message: "merged TASK-XXX, commit=<short sha>")`

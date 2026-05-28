@@ -102,7 +102,12 @@ export async function processMessage(runtime, prompt) {
 
         let dispatchedThisEvent = false;
         for (const tool of extractToolUses(event)) {
+          // stream-json can emit the same tool_use across two assistant events
+          // (initial + post-stream). Use toolMap as the dedup gate so we count
+          // and broadcast each dispatch exactly once.
+          const alreadySeen = toolMap.has(tool.id);
           toolMap.set(tool.id, tool);
+          if (alreadySeen) continue;
           // Count orchestrator Agent/Task dispatches eagerly (the tool_use
           // event lands before the runtime fires task_started), so the bar
           // shows "1/3" right away for SIMPLE instead of growing 1/2 → 2/3.

@@ -41,6 +41,7 @@ You are dispatched **alone** (no `team_name`, no SendMessage, no peers). You com
 - Form input in the Create/Edit view (e.g. `ContactInputs.tsx`)
 - Display in the Show view (e.g. `ContactShow.tsx`)
 - Default value in fake-data generator (only if the demo profile would break without it)
+- i18n labels for the new field in `englishCrmMessages.ts` and `frenchCrmMessages.ts` (only the keys for this one field — never touch unrelated keys)
 
 **Simple list filter on an existing entity:**
 - Add filter elements (toggle buttons, filter categories, search inputs, range pickers, etc.) to an existing `*ListFilter.tsx` file (e.g. `ContactListFilter.tsx`, `CompanyListFilter.tsx`).
@@ -50,7 +51,7 @@ You are dispatched **alone** (no `team_name`, no SendMessage, no peers). You com
 
 ❌ Out of scope (refuse and output `FAILED: out of scope — needs COMPLEX flow`):
 - More than one field per request
-- i18n labels in locale files (`englishCrmMessages.ts`, `frenchCrmMessages.ts`)
+- i18n changes unrelated to the new field (touching keys that aren't for this one field, restructuring locale files, adding a new locale)
 - Import / export pipelines (`useContactImport.tsx`, sample CSVs)
 - Merge logic, sortable columns, list views, dataProvider customisations
 - **Creating a new custom React component** (for a filter, an input, a display, anything) — only reuse components that already exist
@@ -105,8 +106,8 @@ Then `Read("/app/MEMORY.md")` — domain vocabulary. Even a label rename can be 
 
 - Locate the file (Grep / Glob).
 - Edit/Write the change.
-- File modifications MUST go through Edit or Write — NEVER use Bash to write files (`sed -i`, `cat > file`, `echo > file`, etc. are blocked by `block-bash-file-write`).
-- Stay strictly within the scope above — cosmetic or single-field. Anything broader (i18n, import, multiple fields, new entity) → refuse with `FAILED: out of scope — needs COMPLEX flow`.
+- File modifications MUST go through Edit or Write — NEVER use Bash to write files (`sed -i`, `cat > file`, `echo > file`, etc. are blocked by `block-bash-file-write`). Renames via `git mv` are allowed — the hook only blocks redirections and in-place edits, not git's own file operations.
+- Stay strictly within the scope above — cosmetic, single-field (optionally with i18n labels for that field), or a list filter reusing existing components. Anything broader (multiple fields, import, new entity, new custom component) → refuse with `FAILED: out of scope — needs COMPLEX flow`.
 
 ### 3.5. Record a pseudo-ticket if a migration was created
 
@@ -116,11 +117,14 @@ POST-DEV plumbing (`pending-deploys.mjs`, `apply-migrations.sh`) is ticket-based
 
 If your diff does include a file under `supabase/migrations-pending/`:
 
-1. Pick a short pseudo-id derived from a timestamp (it must be stable across re-runs of this same change in the same session, and uniquely identify this migration):
+1. Pick a short pseudo-id derived from the **migration filename you just wrote**. The filename already encodes a timestamp picked once when the migration was created, so it's stable across re-runs in the same session AND uniquely identifies the migration. Do NOT hash CHANGE_REQUEST — it's arbitrary user input (apostrophes break shell quoting; hostile text is an injection vector).
    ```bash
-   PSEUDO_SUFFIX=$(date +%s | tail -c 7)   # 6 digits, stable per run
-   PSEUDO_ID="TASK-SIMPLE-${PSEUDO_SUFFIX}"
+   cd <WORKTREE_PATH> && \
+     MIG_PATH=$(ls supabase/migrations-pending/*.sql 2>/dev/null | head -1) && \
+     PSEUDO_SUFFIX=$(basename "$MIG_PATH" .sql | sha1sum | head -c 6) && \
+     PSEUDO_ID="TASK-SIMPLE-${PSEUDO_SUFFIX}"
    ```
+   On re-runs of the same flow (validation retry, hook-injected stderr), the migration filename is unchanged → same `PSEUDO_SUFFIX` → existing pseudo-ticket file and renamed migration file are reused, not duplicated. If multiple migrations exist under `migrations-pending/` (very unusual for SIMPLE), pick the newest one explicitly with `ls -t` and document the choice in your final report.
 2. Rename your migration file (using `git mv` from inside the worktree) so it matches the canonical pattern `apply-migrations.sh` looks for:
    ```
    <timestamp>_<SESSION_SHORT_ID>_${PSEUDO_ID}_<slug>.sql
