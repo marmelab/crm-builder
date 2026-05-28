@@ -5,8 +5,7 @@ paths: []
 # Validation commands — DO NOT RUN
 
 Validation is automated:
-- `SubagentStop` hooks run typecheck / prettier / unit / e2e after every developer stops.
-- `validate-before-review` PreToolUse hook re-runs them when a COMPLEX dev SendMessages a reviewer or merger.
+- `SubagentStop` hooks run typecheck / prettier / unit / e2e after every developer (and simple-developer) stops. A failed validation rejects the stop, the developer's internal loop fixes the issue, and only a green stop returns control to the orchestrator.
 - `block-bash-validation` PreToolUse hook blocks `developer`, `quality-reviewer`, `test-validator` from running them manually.
 
 ## Forbidden commands (developer / quality-reviewer / test-validator)

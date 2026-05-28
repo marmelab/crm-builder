@@ -75,6 +75,8 @@ The merger runs `git merge` against `/app`, which holds `.git/index.lock`. We di
 - Wave size cap `N ≤ 5` preserved from the current orchestrator. If the planner emits a wave with more than 5 tickets, take the first 5 for this pass and resume with the leftover on the next user turn.
 - Malformed agent output (does not match `DONE: ...` / `FAILED: ...` / `APPROVED` / `REJECTED: ...`) is treated as `FAILED` for the corresponding stage.
 
+**Known limitation (deferred):** The SubagentStop validation chain (typecheck/prettier/unit/e2e) iterates all active session worktrees rather than scoping to the stopping subagent's worktree. With parallel developers this can produce false-negative stops when another developer's worktree is mid-write. If the benchmark exposes contamination, address by parsing the SubagentStop stdin's prompt to set `VALIDATE_WORKTREE`.
+
 ## Agent output formats
 
 Each agent terminates with one structured text line that the orchestrator parses by regex.

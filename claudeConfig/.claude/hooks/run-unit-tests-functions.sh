@@ -10,7 +10,7 @@ echo "[$(date -Iseconds)] unit-fn START pwd=$(pwd) CLAUDE_PROJECT_DIR=$CLAUDE_PR
 REPO="${CLAUDE_PROJECT_DIR:-/app}"
 cd "$REPO" || { echo "[$(date -Iseconds)] unit-fn EXIT=0 cd_failed" >> "$LOG"; exit 0; }
 
-# VALIDATE_WORKTREE narrows to one worktree (set by validate-before-review.sh).
+# VALIDATE_WORKTREE narrows to one worktree (set by the orchestrator or upstream caller).
 # See typecheck hook header for rationale.
 SESSION_SHORT=$(basename "${CHAT_SESSION_DIR:-}" | cut -d'-' -f1)
 if [ -n "${VALIDATE_WORKTREE:-}" ] && [ -d "$VALIDATE_WORKTREE" ]; then

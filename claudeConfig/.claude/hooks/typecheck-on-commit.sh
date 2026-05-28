@@ -16,9 +16,9 @@ cd "$REPO" || { echo "[$(date -Iseconds)] typecheck EXIT=0 cd_failed" >> "$LOG";
 # previous sessions caused a regression where a developer deviated from its task
 # to "fix" unrelated typecheck errors.
 #
-# VALIDATE_WORKTREE: when set by validate-before-review.sh, restrict to that
-# single worktree. Avoids the "shared brakes" issue where one dev's broken
-# state blocks all parallel SendMessages (one bad TASK poisoning N reviewers).
+# VALIDATE_WORKTREE: when set by the orchestrator or upstream caller, restrict
+# to that single worktree. Avoids the "shared brakes" issue where one dev's
+# broken state blocks all parallel stops (one bad TASK poisoning N reviewers).
 SESSION_SHORT=$(basename "${CHAT_SESSION_DIR:-}" | cut -d'-' -f1)
 if [ -n "${VALIDATE_WORKTREE:-}" ] && [ -d "$VALIDATE_WORKTREE" ]; then
   WORKTREES="$VALIDATE_WORKTREE"

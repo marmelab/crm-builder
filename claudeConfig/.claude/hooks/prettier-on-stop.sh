@@ -12,7 +12,7 @@ cd "$REPO" || { echo "[$(date -Iseconds)] prettier EXIT=0 cd_failed" >> "$LOG"; 
 
 # Only check ACTIVE feature worktrees under /app/worktrees/. See typecheck hook
 # for the rationale (skip main repo — pre-existing state is not our concern).
-# VALIDATE_WORKTREE narrows to one worktree (set by validate-before-review.sh).
+# VALIDATE_WORKTREE narrows to one worktree (set by the orchestrator or upstream caller).
 SESSION_SHORT=$(basename "${CHAT_SESSION_DIR:-}" | cut -d'-' -f1)
 if [ -n "${VALIDATE_WORKTREE:-}" ] && [ -d "$VALIDATE_WORKTREE" ]; then
   WORKTREES="$VALIDATE_WORKTREE"
