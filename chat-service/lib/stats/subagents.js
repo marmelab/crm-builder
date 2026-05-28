@@ -163,6 +163,18 @@ async function appendSubagentToolUses(file, phase, toolCounts, allToolCalls) {
     }
 
     for (const b of e.message.content) {
+      // Surface the agent's own narration ("text" blocks) as discrete children
+      // so the chronology can show the full prose, not just tool calls. Same
+      // data the live subagent-tail emits to debug mode — this is the on-disk
+      // equivalent for an after-the-fact stats view.
+      if (b.type === 'text' && typeof b.text === 'string' && b.text.trim()) {
+        phase.children.push({
+          kind: 'agent_text',
+          ts: e.timestamp,
+          text: b.text,
+        });
+        continue;
+      }
       if (b.type !== 'tool_use' || SKIP_CHILD.has(b.name)) continue;
       phase.opsCount = (phase.opsCount || 0) + 1;
 
@@ -175,13 +187,21 @@ async function appendSubagentToolUses(file, phase, toolCounts, allToolCalls) {
           ts: e.timestamp, durationMs, isApprox,
         });
       } else {
-        phase.children.push({
+        const child = {
           kind: 'tool_use',
           tool: b.name, detail: toolDetail(b.name, b.input),
           ts: e.timestamp, durationMs, isApprox,
           agentType: phase.agentType,
           verdict: b.name === 'SendMessage' ? sendMessageVerdictFromInput(b.input) : null,
-        });
+        };
+        // SendMessage carries the full inter-agent payload — stash it on the
+        // child so the renderer can expand it (the `detail` field is truncated
+        // to a one-line preview).
+        if (b.name === 'SendMessage') {
+          const raw = b.input?.message ?? b.input?.content ?? null;
+          if (typeof raw === 'string' && raw.trim()) child.fullContent = raw;
+        }
+        phase.children.push(child);
         const tc = toolCounts.get(b.name) || { tool: b.name, count: 0, totalDurationMs: 0 };
         tc.count++; tc.totalDurationMs += durationMs;
         toolCounts.set(b.name, tc);

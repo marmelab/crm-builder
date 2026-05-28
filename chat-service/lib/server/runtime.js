@@ -29,6 +29,14 @@ export function createRuntime(session) {
     stopping: false,
     currentProc: null,
     clients: new Set(),
+    // Subagent-transcript tailer state. Lives on the runtime so it survives
+    // across turns: a long-running session re-dispatches the same subagent
+    // types repeatedly, and we need uuid-based dedup to avoid re-emitting
+    // events from prior turns' transcripts on each new turn.
+    subagentTailerStop: null,
+    subagentSeenUuids: new Set(),
+    subagentFileOffsets: new Map(),
+    subagentAgentTypeCache: new Map(),
     stats: {
       // tokensUsed = legacy headline (input + cache_creation + output). Kept as
       // a derived number so older consumers keep working. The authoritative
