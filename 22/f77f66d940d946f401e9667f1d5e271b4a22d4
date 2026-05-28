@@ -1,0 +1,21 @@
+docker-compose.multi.yml
+  s_4d0b91aa4e1f3f::t_12d21b33fca144 47-48
+chat-service/lib/server/http-routes.js
+  s_4d0b91aa4e1f3f::t_6c00566f4decdb 521,523-527
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "22f77f66d940d946f401e9667f1d5e271b4a22d4",
+  "prompts": {},
+  "sessions": {
+    "s_4d0b91aa4e1f3f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ef059950-9b18-42a9-83dd-7e9bf830a1b6",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Jerome <jerome@marmelab.com>"
+    }
+  }
+}
