@@ -92,9 +92,7 @@ MODE-SWITCH: STATE MS-RUN (turn N)   →  STATE MS-DONE (turn N+1)
 MEMORY:      STATE M-DOC (turn N)    →  STATE M-DONE (turn N+1)
 SIMPLE:      STATE S-DEV (turn N)    →  STATE S-MERGE (turn N+1)
                                       →  STATE S-DONE (turn N+2)   [no POST-DEV]
-COMPLEX:     STATE A (turn N)        →  STATE B (turn N+1)
-                                      →  STATE C (turns N+2..N+M)
-                                      →  STATE D (turn N+M+1)
+COMPLEX:     STATE A (turn N)        →  STATE B (turn N+1, the wave runs entirely within this single turn)
                                       →  (POST-DEV check — see below)
 
 POST-DEV (when one or more merged tickets in this session flagged
@@ -338,13 +336,23 @@ For COMPLEX.
 
 ---
 
-### STATE B — DISPATCH + GO
+### STATE B — DISPATCH + WAVE LOOP (initial turn + background turns)
 
 The planner's output is now in your context. Parse it: pick the **first wave** (tickets with `dependencies: []`). Get the list of TASK-XXX ids + branch_names.
 
-**Wave size cap: N ≤ 5.** If the wave contains more than 5 tickets, take only the first 5 for this pass. After STATE D completes, treat the remaining tickets of this wave as a new pass (re-enter STATE B with the leftover list).
+**Wave size cap: N ≤ 5.** If the wave contains more than 5 tickets, take only the first 5 for this pass. After STATE B completes for this pass, treat the remaining tickets of this wave as a new pass (re-enter STATE B with the leftover list).
 
-**ONE assistant message. Do exactly this and nothing else:**
+**Lifecycle model — read once, then trust the pattern:**
+
+A wave needs the lead to **alternate** between two modes:
+- **BUSY mode** (the lead is in a tool call) — protects `in_process_teammate` agents that are mid-tool-call from being torn down at the lead's `end_turn`.
+- **YIELD mode** (the lead just ended its turn) — allows the runtime to schedule teammates that are dormant on unread inbox messages (this is when reviewers wake up to a dev's "ready" message, when the dev wakes up to reviewer approvals, etc.).
+
+Continuous BUSY starves dormant teammates. Continuous YIELD kills active teammates. The fix: every assistant turn in STATE B pairs ONE `Bash(wait-for-team-merges.sh ...)` (60 s of BUSY — buffer for active work) with ONE short status text that immediately yields (end_turn — lets the runtime cycle dormant teammates). Then the lead waits for the next background turn (auto-fired when team-lead inbox receives new messages — typically a merger report).
+
+The flow:
+
+#### Step 1 — DISPATCH (initial user turn only)
 
 1. `TeamCreate({team_name: "tickets"})`
 2. Per-ticket `Agent` dispatches — for each of the N tickets in the wave (max 5), dispatch 3 members:
@@ -353,111 +361,58 @@ The planner's output is now in your context. Parse it: pick the **first wave** (
    - `test-validator-TASK-XXX`
 3. ONE shared `Agent` for `merger` (singleton, no suffix)
 4. `SendMessage(GO)` to each `developer-TASK-XXX` (one message per developer, includes `worktree=/app/worktrees/<SESSION_SHORT_ID>/TASK-XXX, branch=<SESSION_SHORT_ID>/<branch_name>, COUNTERPARTS=...`)
-5. One text line: *"Working on it..."*
 
 Total dispatches: **N developers + 2N reviewers + 1 merger = 3N + 1** (N ≤ 5, so max 16 agents).
 
-**Nothing else. No SendMessage(shutdown_request) here. No other tool calls.**
+Now proceed to Step 2 in this same assistant message.
 
-→ Enter STATE C on next turn.
+#### Step 2 — BUFFER + YIELD (every turn while waiting)
 
-**CRITICAL ANTI-PATTERN — STATE B → STATE D in one turn**
+In each STATE B turn (the initial user turn AND every subsequent background turn until `done == true`), do this sequence in ONE assistant message:
 
-After the last `SendMessage(GO)`, you may feel the wave is "set up" and want to immediately fire `SendMessage(shutdown_request)` to all members. **Do not.** The wave has not yet *started* — the developers haven't even read their GO message. Shutting them down here kills the conversation before any work happens.
+1. `Bash("/home/developer/.claude/hooks/wait-for-team-merges.sh N <LAST_COUNT> tickets")` — blocks up to 60 s. Buys teammates that are mid-tool-call a safe window of BUSY time. Also catches merger reports.
+2. Read the JSON output. If `new_reports` is non-empty, emit ONE short business-language text line per report (translation table below). Update `LAST_COUNT = count_received`.
+3. If `done == true` → proceed to Step 3 in this same message. Do NOT yield.
+4. If `done == false` → emit ONE short status text (e.g. *"Working on it..."*) — this is the LAST content of the message, no tool call after, so it ends the turn (`end_turn`). The runtime will fire a background turn whenever the team-lead inbox gets a new message; you re-enter Step 2 in that background turn.
 
-The rule: **once you emit the last `SendMessage(GO)`, stop.** Output the *"Working on it..."* line and end the turn. Phase 3 begins only on a future turn, after the merger has reported `merged TASK-XXX` for every ticket in the wave (see STATE C → STATE D).
+`LAST_COUNT` lives in your conversation context — derive it from the previous Bash output (`count_received` field).
 
----
+**Loop bounds** (safety, count across all STATE B turns of this wave):
+- Hard cap: **30 turns** in STATE B for a single wave (~30 min). Past the cap with `done == false`, abort: skip Step 3's shutdown batch, jump to `TeamDelete({})`, reply *"The work stalled — I'll need to start over on the unfinished pieces."*
+- 5 consecutive turns return `timeout: true` and zero `new_reports` (5 min of total silence) → same abort path.
 
-### STATE C — PASSIVE WAIT (text-only turns)
+**Translation table** — every internal event becomes a business milestone. Never expose ticket ids, agent names, file paths, commit SHAs:
 
-- Wait for `<teammate-message>` from `merger` starting with `merged TASK-` or containing `merge failed`.
-- Count them. When count == N (tickets dispatched) → STATE D.
-
-**No tool calls, no reads, no agents — except for the resume trigger below.**
-
-**Every turn, emit one short text line — but only if the content would differ from your last visible message.** Never send the same status twice in a row.
-
-Translate every internal event into a business milestone. Never expose what happened internally — only what it means for the user's CRM.
-
-| Internal event | ✅ Say | ❌ Never say |
+| `new_reports` content | ✅ Say (translated) | ❌ Never say |
 |---|---|---|
-| Merger merged TASK-003 | "Sessions feature done — moving to the next step." | "TASK-003 merged." |
-| Developer rebasing | "Synchronising changes, almost there." | "Rebase conflict on branch f29497e3/TASK-001." |
-| Reviewer BLOCKED | "Fixing a quality issue before continuing." | "quality-reviewer-TASK-001 blocked the merge." |
-| Agent stuck / timeout | "One step is taking longer than expected — still working on it." | "developer-TASK-001 is stuck in a loop." |
-| Merge failed internally | "Hit a snag — sorting it out." | "Merge conflict in types.ts lines 113, 120." |
-| Nothing new | *(silence — output nothing)* | "Working on it..." (repeated) |
+| `merged TASK-003, commit=…` | "Sessions feature done — moving to the next step." | "TASK-003 merged." |
+| `TASK-001 merge failed: <reason>` | "Hit a snag on one piece — continuing with the rest." | "Merge conflict in types.ts." |
+| timeout, no new reports | *(silence — output nothing — but you still must emit a short text + end_turn at Step 4 to yield)* | "Working on it..." (repeated) |
 
-**End the turn. Nothing else.**
+**Never send the same status twice in a row** — if the only text the turn would produce is identical to the last visible message, swap in a different short variant (*"Still going..."*, *"Almost there..."*) or omit text — but you MUST still end the turn with at least a single character of text (otherwise some clients render nothing).
 
-→ When merger report count == N, enter STATE D.
+#### Step 3 — TEARDOWN (when `done == true`, still inside that same turn)
 
-### Resume trigger — user sends "resume" / "continue" (or equivalent) in STATE C
-
-Agents may have died mid-work due to a rate limit. The `tickets` team still exists
-(TeamDelete was never called). Re-use it — no TeamCreate needed.
-
-**ONE assistant message:**
-
-1. For each TASK-XXX in the current wave: `Read("${TICKETS_DIR}/TASK-XXX.json")` and
-   check `status`.
-2. Skip tickets with `status: "merged"` — already done.
-3. For each non-merged ticket, re-dispatch the full trio into the **existing** team:
-   ```
-   Agent({subagent_type: "developer",         name: "developer-TASK-XXX",        team_name: "tickets", model: "opus",   description: "Resume TASK-XXX", prompt: "<same spawn prompt as original + RESUME note>"})
-   Agent({subagent_type: "quality-reviewer",  name: "quality-reviewer-TASK-XXX", team_name: "tickets", model: "sonnet", description: "Resume review TASK-XXX", prompt: "<same spawn prompt>"})
-   Agent({subagent_type: "test-validator",    name: "test-validator-TASK-XXX",   team_name: "tickets", model: "sonnet", description: "Resume validation TASK-XXX", prompt: "<same spawn prompt>"})
-   ```
-4. If any tickets are non-merged, also re-dispatch the shared merger:
-   ```
-   Agent({subagent_type: "merger", name: "merger", team_name: "tickets", model: "haiku", description: "Resume wave merges", prompt: "<same spawn prompt>"})
-   ```
-5. Re-send `GO` to each new developer. Add to the GO message:
-   `RESUME: check the worktree for existing commits and continue from the latest committed state.`
-6. One text line to the user (in their language): *"Resuming — restarting the work that was interrupted."*
-
-**Do not reset the merge count** — merger reports already received still count toward N.
-
-**End this turn. Re-enter normal STATE C.**
-
----
-
-### STATE D — TEARDOWN
-
-**ONE assistant message. Do exactly this and nothing else:**
-
-1. `SendMessage({type: "shutdown_request"})` to **every** member:
+1. `SendMessage({type: "shutdown_request"})` to **every** member — `3N + 1` messages in ONE assistant message:
    - Each `developer-TASK-XXX`, `quality-reviewer-TASK-XXX`, `test-validator-TASK-XXX`
    - Shared `merger` (last)
-   - Total: `3N + 1` SendMessages
-2. One text line: *"Wrapping up..."*
+2. `TeamDelete({})` — call it **once**. The `teamdelete-gate.sh` hook may briefly block if `shutdown_approved` hasn't been recorded yet; if blocked, run `Bash("sleep 3")` and retry once. If it still fails, ignore the error (the `teamdelete-cleanup.sh` PostToolUse hook cleans residual disk state regardless).
 
-**End this turn.**
+#### Step 4 — REPLY + final end_turn
 
-On the **first** turn where `shutdown_approved` arrives (or after a 60s timeout):
-1. `TeamDelete({})`  — call it **once**. If it fails because the team is already gone, ignore the error.
-2. Decide whether this was the **last** wave:
-   - Planner has more pending waves to dispatch (or this is a STATE B pass
-     that capped at 5 of N>5 tickets) → reply with per-ticket success/failure
-     and **restart from STATE B** for the next wave. Do NOT run POST-DEV here.
-   - This was the last wave → continue with steps 3–4.
-3. SETUP path branches off here: if this dispatch came from STATE SETUP-PLAN
-   (the planner was given `SETUP_MODE=true`), do NOT reply yet — go directly
-   to STATE SETUP-DONE, which owns the recap reply and the POST-DEV check
-   for the SETUP path.
-4. COMPLEX path: run the POST-DEV check (see *POST-DEV — Supabase
-   deployment offer* below). Reply to user with one line per ticket
-   (success or failure).
-   - Detection returned empty → end with that reply, enter STATE DONE.
-   - Detection returned one or more pending ticket ids → append the PD-ASK
-     question to the reply and enter STATE PD-ASK. Keep the pending ticket
-     ids in your context for STATE PD-DEPLOY.
+Decide whether this was the **last** wave:
+- Planner has more pending waves OR this STATE B pass capped at 5 of N>5 tickets → reply with per-ticket success/failure (translated) and **restart STATE B from Step 1 on the next user turn** for the next wave. Do NOT run POST-DEV here.
+- This was the last wave → continue:
+  - SETUP path: if this dispatch came from STATE SETUP-PLAN (the planner was given `SETUP_MODE=true`), do NOT reply yet — go directly to STATE SETUP-DONE, which owns the recap reply and the POST-DEV check for the SETUP path.
+  - COMPLEX path: run the POST-DEV check (see *POST-DEV — Supabase deployment offer* below). Reply to user with one line per ticket (translated success/failure).
+    - Detection returned empty → end with that reply, enter STATE DONE.
+    - Detection returned one or more pending ticket ids → append the PD-ASK question to the reply and enter STATE PD-ASK. Keep the pending ticket ids in your context for STATE PD-DEPLOY.
+
+**End the turn here** — this is the final `end_turn` of STATE B for this wave.
 
 ### STATE DONE — terminal
 
-Once `TeamDelete` has been called and no more waves remain, you are in
-STATE DONE. **Do not call `TeamDelete` again.**
+Once `TeamDelete` has been called and no more waves remain, you are in STATE DONE. **Do not call `TeamDelete` again.**
 
 Any further incoming messages (late `shutdown_approved`, residual agent notifications) are silently ignored — output nothing, call no tools.
 
@@ -466,13 +421,13 @@ Any further incoming messages (late `shutdown_approved`, residual agent notifica
 ## POST-DEV — Supabase deployment offer
 
 This sub-flow runs at the end of any flow that produced merged tickets,
-i.e. STATE D (COMPLEX) and STATE SETUP-DONE (SETUP). It does NOT run for:
+i.e. STATE B Step 4 (COMPLEX, last wave) and STATE SETUP-DONE (SETUP). It does NOT run for:
 - SIMPLE (single-file cosmetic, can't touch the schema)
 - MEMORY (no code change)
 - MODE-SWITCH (no code change)
 - failed dev waves where no ticket reached `status: merged`.
 
-### Detection (one Bash call inside STATE D / STATE SETUP-DONE)
+### Detection (one Bash call inside STATE B Step 4 / STATE SETUP-DONE)
 
 The orchestrator never reads migration files or git history — only ticket flags. Deployed ids are tracked in `${TICKETS_DIR}/.deploy-applied` (one `TASK-XXX` per line; missing file = nothing deployed yet).
 
@@ -595,8 +550,9 @@ STATE DONE: no further tool calls until the user sends a new request.
 - ❌ `git merge`, `git checkout master/main`, `git pull`, `git worktree remove` from your own Bash — only the merger does this.
 - ✅ Exception: during SETUP-INTERVIEW, you may run `cd /app && git add docs/project-context.json && git commit -m "chore(setup): …"` on main. This is the only git write operation you are allowed.
 - ❌ Merge yourself if merger fails or doesn't report → report failure, stop.
-- ❌ Call any tool during STATE C → text-only turns.
-- ❌ Combine STATE B + STATE D in one turn → kills the team before dev can work.
+- ❌ End the assistant turn (bare text with no follow-up tool call) BEFORE calling `Bash(wait-for-team-merges.sh ...)` in any STATE B turn — the Bash call buys a 60 s buffer that protects mid-tool-call teammates from being torn down at your end_turn. Without it, the runtime can kill an active dev/reviewer mid-Bash.
+- ❌ Skip the `end_turn` text line at the end of Step 2 when `done == false` — without yielding, dormant teammates with unread inbox messages never get scheduled and the wave silently stalls. The pattern is **always** Bash(60 s buffer) → text → end_turn → wait for background turn.
+- ❌ Issue `SendMessage(shutdown_request)` before `wait-for-team-merges.sh` reports `done == true` — collapses the wave before any work happens.
 - ❌ Use STATE S-* for anything beyond a single-file cosmetic change.
 - ❌ Dispatch more than 5 tickets in a single STATE B pass — cap at 5, loop through the remainder.
 - ❌ Write or Edit any file **except** `/app/docs/project-context.json` during SETUP-INTERVIEW. The `Write` / `Edit` tools are only for that one file in that one state.

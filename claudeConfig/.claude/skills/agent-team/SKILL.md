@@ -15,14 +15,19 @@ Invoked by `chat-orchestrator` (team-lead) for COMPLEX requests.
 
 ## Wave of N tickets
 
+A wave spans the initial user turn AND any number of background turns until the wave completes. The lead **alternates** between BUSY mode (in a tool call — protects active teammates from teardown) and YIELD mode (turn ended — lets the runtime schedule dormant teammates on unread inbox messages).
+
+Each lead turn in the wave follows the pattern: `Bash(wait-for-team-merges.sh)` for 60 s → short status text → `end_turn` → wait for background turn → repeat. The 60 s Bash buys safety for mid-tool-call teammates; the immediate `end_turn` after it lets dormant teammates wake up.
+
 1. PLANNER produces N tickets.
 2. Lead `TeamCreate({team_name: "tickets"})` (once per wave).
 3. Lead dispatches all members in ONE message: **N developers + 2N reviewers + 1 shared `merger` = 3N + 1**.
-4. Lead `SendMessage(GO)` to each `developer-TASK-XXX` (one message per dev, in one assistant turn).
-5. Lead enters passive wait. Each ticket's dev↔reviewers↔merger flow runs concurrently inside `tickets`.
-6. When merger has reported N times, lead does Phase 3 teardown.
+4. Lead `SendMessage(GO)` to each `developer-TASK-XXX` (one message per dev, in the initial user turn).
+5. In the same initial turn: lead calls `Bash("/home/developer/.claude/hooks/wait-for-team-merges.sh N 0 tickets")` (60 s) → handles any new merger reports as user-facing text → emits a short status text → `end_turn`. This yields control back to the runtime so dormant teammates can be scheduled.
+6. Each background turn (auto-fired when team-lead inbox gets a new message): lead reads incoming `<teammate-message>` blocks, calls `wait-for-team-merges.sh` again (with updated `LAST_COUNT`) → emits status text → `end_turn`. Loop until the script returns `done: true`.
+7. When `done: true`: lead does Phase 3 teardown (shutdown_request batch + TeamDelete) and the final reply in the same turn, then `end_turn` for the last time.
 
-Multi-wave: repeat 2→6 (TeamDelete then TeamCreate again).
+Multi-wave: subsequent waves begin on the next user turn (the previous wave's `TeamDelete` already ran inside its terminal turn).
 
 ---
 
@@ -83,7 +88,11 @@ Then in a second message: one `SendMessage(GO, …)` per developer:
 SendMessage({to: "developer-TASK-001", message: "GO — Implement TASK-001 (worktree=/app/worktrees/<SESSION_SHORT_ID>/TASK-001, branch=<SESSION_SHORT_ID>/<branch>). Ticket spec at <path>. COUNTERPARTS: reviewers=[quality-reviewer-TASK-001, test-validator-TASK-001], merger=merger."})
 ```
 
-After GO: lead enters **passive wait**. It receives N final SendMessages from `merger` (one per ticket: `merged TASK-XXX, commit=<sha>` or `TASK-XXX merge failed: <reason>`). When count == N → Phase 3.
+After GO: lead enters the **wait loop** described above (Bash-polled `wait-for-team-merges.sh`, still in the same assistant turn). The script counts merger reports (`merged TASK-XXX, commit=<sha>` or `TASK-XXX merge failed: <reason>`) directly from the team-lead inbox. When `done: true` (count == N) → Phase 3 in this same turn.
+
+Bounds for the loop (the lead enforces them, the script doesn't):
+- Hard cap **30 iterations** (~30 min). Past that, abort the wave: skip the shutdown batch, call `TeamDelete({})` once, report "stalled" to the user.
+- 5 consecutive iterations with `timeout: true` and zero `new_reports` (5 min of total silence) → same abort path.
 
 ### Spawn prompt frames
 
@@ -138,7 +147,9 @@ until you receive a SendMessage from a developer-TASK-XXX. Do NOT call
 
 ---
 
-## Phase 3 — Graceful teardown (lead, when merger reported N times)
+## Phase 3 — Graceful teardown (lead, immediately after `done: true`)
+
+Phase 3 runs **inside the same assistant turn** as Phase 1 and the wait loop. The lead does not yield between Phase 1 and Phase 3.
 
 ### 3a — SendMessage shutdown_request to every active member (ONE message)
 
@@ -152,37 +163,25 @@ SendMessage({to: "merger", message: {type: "shutdown_request"}})   // last
 
 Total: `3N + 1` SendMessages.
 
-### 3b — Yield the turn
-
-Emit a brief assistant text (e.g. *"Wrapping up..."*) and stop. **No other tool calls.** The runtime delivers `shutdown_approved` on the next user turn — being read in the lead's stream marks them read, preventing embryos.
-
-### 3c — Verify on next turn
-
-Scan incoming `<teammate-message>` blocks for `shutdown_approved`:
-- ✅ All approved → 3d.
-- ❌ One missing after ~10s → log "member <name> didn't acknowledge — proceeding". Investigate post-hoc via `/home/developer/.claude/projects/-app/$CLAUDE_SESSION_ID/subagents/agent-<task_id>.jsonl`.
-
-### 3d — TeamDelete
+### 3b — TeamDelete
 
 ```
 TeamDelete({})
 ```
 
-`{}` = "the only team this session has open". `teamdelete-gate.sh` blocks if any non-lead member hasn't acknowledged. If blocked: yield first, retry next turn — do not retry in same turn.
-
-### 3e — Cleanup (automatic)
-
-`teamdelete-cleanup.sh` (PostToolUse) silently removes residual `~/.claude/teams/tickets/`. Lead does nothing.
+`{}` = "the only team this session has open". `teamdelete-gate.sh` may briefly block if `shutdown_approved` hasn't been recorded yet — if blocked, the lead runs `Bash("sleep 3")` and retries once. If it still fails, the lead ignores the error: `teamdelete-cleanup.sh` (PostToolUse) cleans residual `~/.claude/teams/tickets/` regardless.
 
 Subagent transcripts (`subagents/agent-<task_id>.{jsonl,meta.json}`) are kept for stats/debugging — removed at chat-service session end.
 
-### After cleanup
+### 3c — Final reply
 
-Reply to user, one line per ticket:
-- Success: "TASK-XXX done, merge commit `<sha>`."
-- Failure: "TASK-XXX failed: `<reason>`. Branch retained at `<branch>`."
+Reply to user, one line per ticket (translated, business language):
+- Success: e.g. "Sessions feature done."
+- Failure: e.g. "Hit a snag on the sessions piece — sorted the rest."
 
-If next wave: go to Phase 4. Else end.
+After this user-facing text, this is the **first** `end_turn` of the lead since the wave started. The wave is done.
+
+If next wave: it starts on the next user turn (Phase 4). Else end.
 
 ---
 
@@ -190,9 +189,9 @@ If next wave: go to Phase 4. Else end.
 
 Some tickets depend on others. PLANNER groups them into waves.
 
-After Phase 3 completes for wave 1: recompute deps, start a new Phase 1 for wave 2 — same `tickets` team_name (previous was deleted), new dispatches.
+After Phase 3 completes for wave 1 (TeamDelete already ran inside that turn), the lead yields its `end_turn` with the recap reply. On the **next** user turn, the lead recomputes deps and starts a new Phase 1 for wave 2 — same `tickets` team_name (the previous one was deleted), new dispatches, new wait loop.
 
-TeamDelete is mandatory between waves.
+If the lead capped Step 1 at 5 of N>5 tickets for the current wave, the leftover tickets are treated as the next wave on the next turn — same mechanism.
 
 Stop when no pending tickets remain.
 
@@ -202,9 +201,11 @@ Stop when no pending tickets remain.
 
 | Scenario | Detected by | Reaction |
 |---|---|---|
-| Reviewer silent > 180s | dev (timeout) | dev → team-lead "TASK-XXX stuck on <reviewer>". Lead pings or aborts ticket. |
-| Dev fix-cycle > 5 | dev (counter) | dev → team-lead "TASK-XXX stuck: <N> cycles". Lead reformulates or aborts. |
-| Merger merge conflict | merger | merger → team-lead "TASK-XXX merge failed: <reason>". Lead resumes dev or marks failed. |
+| Reviewer silent > 180s | dev (timeout) | dev → team-lead "TASK-XXX stuck on <reviewer>". Lead's wait loop sees no new merger report; if 5 min of total silence elapses, the lead aborts the wave. |
+| Dev fix-cycle > 5 | dev (counter) | dev → team-lead "TASK-XXX stuck: <N> cycles". Same recovery path as above. |
+| Merger merge conflict | merger | merger → team-lead "TASK-XXX merge failed: <reason>". This *counts* as a merger report in the wait loop → wave can complete with a failure on this ticket. |
+| Wave stalled silently (no merger reports in 5+ min) | lead (5 consecutive `timeout: true` from `wait-for-team-merges.sh`) | Lead aborts wave: skip shutdown batch, single `TeamDelete({})`, reply to user "stalled". |
+| Wave never completes (30 iterations / ~30 min cap) | lead (iteration counter) | Same abort path as above. |
 | Hook `stop-hook-error` | system event in lead's stream | Lead reads, decides. Validation crash → "validation skipped", warn user. |
 | User STOP | chat-service `cancelled` | chat-service does brutal cleanup of `subagents/*`, doesn't wait for lead. |
 
