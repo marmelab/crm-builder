@@ -15,8 +15,9 @@ const SESSION = get('--session', '');
 if (!SESSION) { process.stderr.write('--session <SESSION_SHORT> required\n'); process.exit(0); }
 
 // Schema-relevant path heuristic: entity types, fake-data generators, resource
-// registrations. Anchored to avoid matching arbitrary paths with "fake" substrings.
-const SCHEMA_RE = /(\/types?\.ts$|dataProvider|\/dataGenerator\/|resources?\/.*\.(ts|tsx)$)/i;
+// registrations, and SQL schema files modified by simple-developer.
+// Anchored to avoid matching arbitrary paths with "fake" substrings.
+const SCHEMA_RE = /(\/types?\.ts$|dataProvider|\/dataGenerator\/|supabase\/schemas\/|resources?\/.*\.(ts|tsx)$)/i;
 
 let changed = '';
 try {
