@@ -37,9 +37,11 @@ while IFS= read -r line; do
     CURRENT_BRANCH="${line#branch refs/heads/}"
   elif [[ -z "$line" ]]; then
     if [[ "$CURRENT_PATH" == "$WORKTREE_BASE"/* ]] || [[ "$CURRENT_PATH" == "$WORKTREE_BASE" ]]; then
-      # Never clean the session integration worktree; it persists for the whole session.
+      # Never clean the session integration worktree or the SIMPLE worktree;
+      # both persist for the whole session (_session for complex merges,
+      # simple/ for the optional POST-DEV migration round).
       case "$CURRENT_PATH" in
-        */_session)
+        */_session|*/simple)
           echo "[$(date -Iseconds)] cleanup-worktree SKIP-SESSION-WORKTREE $CURRENT_PATH" >> "$LOG" 2>/dev/null || true
           SKIPPED=$((SKIPPED + 1))
           continue
@@ -83,9 +85,10 @@ done < <(git -C /app worktree list --porcelain 2>/dev/null; echo "")
 
 for branch in "${BRANCHES_TO_DELETE[@]:-}"; do
   [ -z "$branch" ] && continue
-  # Never delete session branches or the anchor ref — they must persist for the whole session.
+  # Never delete session branches, the anchor ref, or the SIMPLE branch —
+  # they must persist for the whole session (simple/ may be reused by POST-DEV migration).
   case "$branch" in
-    session/*|session-base/*)
+    session/*|session-base/*|simple/*)
       echo "[$(date -Iseconds)] cleanup-worktree SKIP-SESSION-BRANCH $branch" >> "$LOG" 2>/dev/null || true
       continue
       ;;

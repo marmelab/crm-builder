@@ -112,15 +112,19 @@ MODE-SWITCH: STATE MS-RUN (turn N)   →  STATE MS-DONE (turn N+1)
 MEMORY:      STATE M-DOC (turn N)    →  STATE M-DONE (turn N+1)
 SIMPLE:      STATE S-DEV (turn N)    →  (STATE S-REVIEW if diff touched supabase/)
                                       →  STATE S-MERGE
-                                      →  STATE S-DONE   [POST-DEV if a migration was written]
+                                      →  STATE S-DONE
+                                      →  (if schema diff: STATE PD-RESPOND → PD-MIG-DEV → … → PD-DONE)
+                                      →  (if cosmetic only: STATE DONE)
 COMPLEX:     STATE A (turn N)        →  STATE B (turn N+1)
                                       →  STATE C (turns N+2..N+M)
                                       →  STATE D (turn N+M+1)
                                       →  (POST-DEV check — see below)
                                       →  STATE DONE
 
-POST-DEV (at the end of every COMPLEX/SETUP request):
-             STATE PD-ASK (turn N)      →  STATE PD-RESPOND (turn N+1)
+POST-DEV (at the end of COMPLEX, SETUP, and schema-touching SIMPLE requests):
+             COMPLEX/SETUP only: STATE PD-ASK (turn N) →  STATE PD-RESPOND (turn N+1)
+             SIMPLE with schema diff: skips PD-ASK (satisfaction question already sent in S-DONE)
+                                      →  STATE PD-RESPOND (next user turn)
              if satisfied + non-empty schema diff:
                                          →  STATE PD-MIG-DEV (turn N+2)
                                          →  STATE PD-MIG-REVIEW
@@ -371,12 +375,14 @@ The merger's final response (or dev's failure) is in your context.
 3. Build the reply in user's language, plain words — e.g. *"Done — take a look in the demo."*
 4. Branch on the detection output:
    - Empty → send the reply, enter STATE DONE.
-   - Non-empty (one or more schema-relevant file paths) → append the PD-ASK question
-     to the reply and enter STATE PD-ASK.
+   - Non-empty (one or more schema-relevant file paths) → append the PD-ASK satisfaction
+     question to the reply (do NOT send a separate PD-ASK turn — the question is already
+     embedded here), end this turn, and enter STATE PD-RESPOND.
 
-From PD-ASK onward, the existing POST-DEV state machine (PD-RESPOND → PD-MIG-DEV →
+From PD-RESPOND onward, the existing POST-DEV state machine (PD-MIG-DEV →
 PD-MIG-REVIEW → PD-MIG-MERGE → PD-DEPLOY → PD-LIVE-ASK → PD-LIVE-SWITCH → PD-DONE)
-runs unchanged.
+runs unchanged. PD-RESPOND will re-run `pending-deploys` when the user confirms
+satisfaction — it will return non-empty, triggering PD-MIG-DEV as expected.
 
 **End.**
 
@@ -572,7 +578,9 @@ conditional on the session-branch diff touching schema-relevant files). It does 
 - SIMPLE cosmetic-only changes (no schema file touched → detection returns empty)
 - failed dev waves where no ticket reached `status: merged`.
 
-### STATE PD-ASK — open satisfaction question (every COMPLEX/SETUP request)
+### STATE PD-ASK — open satisfaction question (COMPLEX and SETUP flows only)
+
+**SIMPLE flows skip this state** — the satisfaction question is embedded in the S-DONE reply and the orchestrator enters STATE PD-RESPOND directly on the next user turn.
 
 Always ask, in the user's language, plain words only — never mention database,
 migration, deploy, Supabase:
