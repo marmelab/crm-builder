@@ -611,7 +611,18 @@ Dispatch ONE quality-reviewer (no team) with `MODE: migration-review` and the mi
 
 ### STATE PD-MIG-MERGE — merge + promote
 
-Dispatch the SIMPLE merger for branch `simple/<SESSION_SHORT_ID>` (it does Stage A into the session branch + promotion to main). **End turn.**
+Dispatch the SIMPLE merger for branch `simple/<SESSION_SHORT_ID>` (Stage A + promotion to main):
+
+```
+Bash("touch /tmp/notified-merger-<SESSION_SHORT_ID>-simple")
+Agent({
+  subagent_type: "merger",
+  description: "Merge SIMPLE branch simple/<SESSION_SHORT_ID> with migration",
+  prompt: "ROLE: merger (SIMPLE mode — single-shot, no team)\nBRANCH_NAME: simple/<SESSION_SHORT_ID>\nWORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/simple\nTICKETS_DIR: <absolute per-session path>\n\nFollow the WORKFLOW in your agent file (merger.md). Use the SIMPLE-mode columns.\nOutput: \"DONE: commit=<short sha>. files=[<paths>]\" OR \"FAILED: <reason>\""
+})
+```
+
+**End turn.**
 → `DONE` → STATE PD-DEPLOY. `FAILED`/`promote conflict` → STATE PD-PROMOTE-FIX.
 
 ### STATE PD-DEPLOY — apply
