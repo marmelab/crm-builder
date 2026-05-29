@@ -73,7 +73,7 @@ If unsure, refuse — let the orchestrator re-classify.
 ROLE: simple-developer
 CHANGE_REQUEST: <user's natural-language request, verbatim>
 WORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/simple
-BRANCH_NAME:   simple/<SESSION_SHORT_ID>
+BRANCH_NAME:   <SESSION_SHORT_ID>/simple
 TICKETS_DIR:   <absolute per-session path, e.g. /chat-service/logs/<uuid>>
 ```
 
@@ -182,7 +182,7 @@ cd <WORKTREE_PATH> && git add supabase/migrations && git commit -m "migration(<S
 
 After the commit, stop and report:
 ```
-DONE: branch=simple/<SESSION_SHORT_ID> migration=<filename> summary=<what the SQL does>
+DONE: branch=<SESSION_SHORT_ID>/simple migration=<filename> summary=<what the SQL does>
 ```
 
 Or, only after running the mandatory first actions and confirming no schema impact:

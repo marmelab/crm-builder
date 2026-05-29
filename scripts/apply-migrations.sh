@@ -45,8 +45,9 @@ if curl -s --max-time 2 -o /dev/null http://localhost:54321; then
     if echo "$MIG_OUT" | grep -q "Remote migration versions not found in local migrations directory"; then
       PHANTOM_VERSIONS=$(echo "$MIG_OUT" | grep -oE '[0-9]{14}' | sort -u | tr '\n' ' ' | sed 's/ $//')
       if [ -n "$PHANTOM_VERSIONS" ]; then
+        echo -e "${YELLOW}Auto-repairing phantom migration versions: ${PHANTOM_VERSIONS}${NC}"
         # shellcheck disable=SC2086
-        npx supabase migration repair --status reverted $PHANTOM_VERSIONS 2>/dev/null
+        npx supabase migration repair --status reverted $PHANTOM_VERSIONS
         MIG_OUT=$(npx supabase migration up 2>&1)
         MIG_EXIT=$?
       fi

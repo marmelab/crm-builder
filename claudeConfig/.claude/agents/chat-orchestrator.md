@@ -284,7 +284,7 @@ For SIMPLE only. No team, no planner, no skill on the orchestrator's side.
    Agent({
      subagent_type: "simple-developer",
      description: "SIMPLE: <one-line summary>",
-     prompt: "ROLE: simple-developer\nCHANGE_REQUEST: <user's request, verbatim>\nWORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/simple\nBRANCH_NAME: simple/<SESSION_SHORT_ID>\nTICKETS_DIR: <absolute per-session path>"
+     prompt: "ROLE: simple-developer\nCHANGE_REQUEST: <user's request, verbatim>\nWORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/simple\nBRANCH_NAME: <SESSION_SHORT_ID>/simple\nTICKETS_DIR: <absolute per-session path>"
    })
    ```
    The worktree and branch are fixed per session — the `setup-worktree` hook creates them automatically before the agent starts.
@@ -311,7 +311,7 @@ Only entered when the simple-developer's diff touched `supabase/` (raw SQL, migr
    Agent({
      subagent_type: "quality-reviewer",
      description: "SIMPLE review: <one-line summary>",
-     prompt: "ROLE: quality-reviewer (SIMPLE mode — single-shot, no team)\nWORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/simple\nBRANCH_NAME: simple/<SESSION_SHORT_ID>\nTICKETS_DIR: <absolute per-session path>\n\nFollow the SIMPLE workflow in your agent file. Apply Part A.6b (view migrations), Part B.1 (RLS), Part B.3 (injection in raw SQL). Return text only: \"APPROVED\" or \"BLOCKED:\\n- ...\". No SendMessage."
+     prompt: "ROLE: quality-reviewer (SIMPLE mode — single-shot, no team)\nWORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/simple\nBRANCH_NAME: <SESSION_SHORT_ID>/simple\nTICKETS_DIR: <absolute per-session path>\n\nFollow the SIMPLE workflow in your agent file. Apply Part A.6b (view migrations), Part B.1 (RLS), Part B.3 (injection in raw SQL). Return text only: \"APPROVED\" or \"BLOCKED:\\n- ...\". No SendMessage."
    })
    ```
 3. One text line: *"Double-checking the database change..."*
@@ -347,7 +347,8 @@ The dev's (or reviewer's) final response is in your context.
 
 ```
 ROLE: merger (SIMPLE mode — single-shot, no team)
-BRANCH_NAME: simple/<SESSION_SHORT_ID>
+SESSION_SHORT_ID: <SESSION_SHORT_ID>
+BRANCH_NAME: <SESSION_SHORT_ID>/simple
 WORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/simple
 TICKETS_DIR: <absolute per-session path>
 
@@ -604,7 +605,7 @@ Dispatch ONE simple-developer (no team) in migration mode:
 ```
 Agent({ subagent_type: "simple-developer",
   description: "Generate migrations from session diff",
-  prompt: "ROLE: simple-developer (MIGRATION MODE)\nSESSION_SHORT_ID: <id>\nWORKTREE_PATH: /app/worktrees/<id>/simple\nBRANCH_NAME: simple/<id>\nInvoke Skill({skill: \"writing-migrations\"}) and follow it. If no schema change, output NO_MIGRATION_NEEDED." })
+  prompt: "ROLE: simple-developer (MIGRATION MODE)\nSESSION_SHORT_ID: <id>\nWORKTREE_PATH: /app/worktrees/<id>/simple\nBRANCH_NAME: <id>/simple\nInvoke Skill({skill: \"writing-migrations\"}) and follow it. If no schema change, output NO_MIGRATION_NEEDED." })
 ```
 
 One line: *"Saving your changes…"*. **End turn.** SubagentStop hooks run.
@@ -619,14 +620,14 @@ Dispatch ONE quality-reviewer (no team) with `MODE: migration-review` and the mi
 
 ### STATE PD-MIG-MERGE — merge + promote
 
-Dispatch the SIMPLE merger for branch `simple/<SESSION_SHORT_ID>` (Stage A + promotion to main):
+Dispatch the SIMPLE merger for branch `<SESSION_SHORT_ID>/simple` (Stage A + promotion to main):
 
 ```
 Bash("touch /tmp/notified-merger-<SESSION_SHORT_ID>-simple")
 Agent({
   subagent_type: "merger",
-  description: "Merge SIMPLE branch simple/<SESSION_SHORT_ID> with migration",
-  prompt: "ROLE: merger (SIMPLE mode — single-shot, no team)\nBRANCH_NAME: simple/<SESSION_SHORT_ID>\nWORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/simple\nTICKETS_DIR: <absolute per-session path>\n\nFollow the WORKFLOW in your agent file (merger.md). Use the SIMPLE-mode columns.\nOutput: \"DONE: commit=<short sha>. files=[<paths>]\" OR \"FAILED: <reason>\""
+  description: "Merge SIMPLE branch <SESSION_SHORT_ID>/simple with migration",
+  prompt: "ROLE: merger (SIMPLE mode — single-shot, no team)\nSESSION_SHORT_ID: <SESSION_SHORT_ID>\nBRANCH_NAME: <SESSION_SHORT_ID>/simple\nWORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/simple\nTICKETS_DIR: <absolute per-session path>\n\nFollow the WORKFLOW in your agent file (merger.md). Use the SIMPLE-mode columns.\nOutput: \"DONE: commit=<short sha>. files=[<paths>]\" OR \"FAILED: <reason>\""
 })
 ```
 

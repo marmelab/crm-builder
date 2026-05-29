@@ -15,8 +15,8 @@ const SESSION = get('--session', '');
 if (!SESSION) { process.stderr.write('--session <SESSION_SHORT> required\n'); process.exit(0); }
 
 // Schema-relevant path heuristic: entity types, fake-data generators, resource
-// registrations. Tune the globs to the real repo layout.
-const SCHEMA_RE = /(types?\.ts$|dataProvider|fake|resources?\/.*\.(ts|tsx)$)/i;
+// registrations. Anchored to avoid matching arbitrary paths with "fake" substrings.
+const SCHEMA_RE = /(\/types?\.ts$|dataProvider|\/dataGenerator\/|resources?\/.*\.(ts|tsx)$)/i;
 
 let changed = '';
 try {

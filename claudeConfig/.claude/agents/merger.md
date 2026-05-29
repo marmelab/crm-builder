@@ -44,7 +44,7 @@ Each incoming message MUST start with `"ready: TASK-XXX, branch=<branch>"`. For 
 
 ### SIMPLE mode
 
-Not in any team. `BRANCH_NAME` and `WORKTREE_PATH` are in your spawn prompt. Derive `SESSION_SHORT_ID` from `BRANCH_NAME` (the segment after `simple/`, or after the first `/`) or from `WORKTREE_PATH` (the path segment under `/worktrees/`). Run Stage A once, then immediately run Stage B, and return.
+Not in any team. `BRANCH_NAME`, `WORKTREE_PATH`, and `SESSION_SHORT_ID` are in your spawn prompt. Run Stage A once, then immediately run Stage B, and return.
 
 ### MERGE STEPS — Stage A (task → session branch)
 
@@ -69,7 +69,7 @@ Not in any team. `BRANCH_NAME` and `WORKTREE_PATH` are in your spawn prompt. Der
      ls ${TICKETS_DIR}/TASK-SIMPLE-*.json 2>/dev/null
      ```
      - No matches → cosmetic-only SIMPLE; skip this step entirely.
-     - One or more matches → all of them belong to commits now merged on this branch (two SIMPLE-with-migration flows on the same session share `simple/<short>`). Update every one.
+     - One or more matches → all of them belong to commits now merged on this branch (two SIMPLE-with-migration flows on the same session share `<short>/simple`). Update every one.
 
    For each ticket file to update: **Read first, then Edit with the actual current status** — the planner writes `"pending"`, the developer writes `"in_progress"`, and the simple-developer pseudo-ticket starts at `"in_progress"`. Pattern-matching the Edit tool's error string is unreliable.
    ```

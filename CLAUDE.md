@@ -67,6 +67,8 @@ Every ticket agent works in `/app/worktrees/<SESSION_SHORT_ID>/TASK-XXX/`. Never
 
 Each session works on `session/<SESSION_SHORT_ID>` (forked from main at session start, with a fixed anchor ref `session-base/<SESSION_SHORT_ID>`). Task branches fork from and merge into `session/<id>` inside a dedicated `_session` worktree; the session branch is promoted to main once per request under `/app/.promote.lock`.
 
+Branch naming: `<SESSION_SHORT_ID>/TASK-XXX` (COMPLEX), `<SESSION_SHORT_ID>/simple` (SIMPLE). All work branches use the session ID as prefix. Merge path: `<ID>/TASK-XXX` or `<ID>/simple` → `session/<ID>` (Stage A, in `_session` worktree) → `main` (Stage B, under `flock`). `session-base/<ID>` never moves — used to compute the migration diff at deploy time.
+
 ## Development
 
 ```bash

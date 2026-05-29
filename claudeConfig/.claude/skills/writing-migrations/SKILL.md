@@ -6,7 +6,7 @@ description: Generate Supabase SQL migrations at deploy time from the session br
 # Writing Migrations (deploy-time round)
 
 You are `simple-developer` in migration mode. Your worktree is
-`/app/worktrees/<SESSION_SHORT_ID>/simple` on `simple/<SESSION_SHORT_ID>`,
+`/app/worktrees/<SESSION_SHORT_ID>/simple` on `<SESSION_SHORT_ID>/simple`,
 forked from `session/<SESSION_SHORT_ID>`. Produce SQL migrations that make the
 real Supabase schema match what this session's app expects — nothing more.
 
@@ -93,7 +93,7 @@ look prettier — schema drift breaks future `supabase db diff` generations.
 
 ## 6. Commit and hand off
 
-Commit the SQL on `simple/<SESSION_SHORT_ID>`. Stop. SubagentStop hooks
+Commit the SQL on `<SESSION_SHORT_ID>/simple`. Stop. SubagentStop hooks
 (typecheck/prettier/unit/e2e) run automatically. The orchestrator then sends you
 to quality-reviewer (migration mode) and the merger.
 

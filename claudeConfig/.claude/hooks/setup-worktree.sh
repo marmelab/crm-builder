@@ -12,7 +12,7 @@
 #
 # SIMPLE (simple-developer):
 #   WORKTREE_PATH = /app/worktrees/<SESSION_SHORT>/simple
-#   BRANCH_NAME   = simple/<SESSION_SHORT>
+#   BRANCH_NAME   = <SESSION_SHORT>/simple
 #
 # Recovery:
 #   1. Already registered in git   → skip (restart scenario)
@@ -63,7 +63,7 @@ if [ -n "$TASK_ID" ]; then
   BRANCH_NAME="${SESSION_SHORT}/${TASK_ID}"
 elif [ "$AGENT_TYPE" = "simple-developer" ]; then
   WORKTREE_PATH="${APP_DIR}/worktrees/${SESSION_SHORT}/simple"
-  BRANCH_NAME="simple/${SESSION_SHORT}"
+  BRANCH_NAME="${SESSION_SHORT}/simple"
 else
   echo "[$(date -Iseconds)] setup-worktree SKIP unknown agent_type=$AGENT_TYPE" >> "$LOG" 2>/dev/null || true
   exit 0
