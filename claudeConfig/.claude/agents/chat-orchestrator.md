@@ -604,6 +604,8 @@ One line: *"Saving your changes…"*. **End turn.** SubagentStop hooks run.
 
 ### STATE PD-MIG-REVIEW — review the SQL
 
+CRITICAL: ONE Agent call only. Dispatch once, end the turn, wait for the result.
+
 Dispatch ONE quality-reviewer (no team) with `MODE: migration-review` and the migration file paths. **End turn.**
 → `APPROVED` → STATE PD-MIG-MERGE. `BLOCKED` → re-dispatch simple-developer (PD-MIG-DEV) with the issues; loop.
 
