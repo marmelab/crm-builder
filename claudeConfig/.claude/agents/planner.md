@@ -194,6 +194,25 @@ Every data change always produces both:
 
 Default to one combined ticket (types + fake data) for field additions on existing entities; split into types + UI for new entities.
 
+### Banned acceptance criteria — NEVER WRITE THESE
+
+Migrations are generated at deploy time, not during feature tickets. Any AC that
+implies the developer must write a migration is a bug that produces a 7+ min
+reviewer-arbitration loop (observed in session 3f810745). NEVER write:
+
+- *"A Supabase migration is generated"* / *"… is applied locally"* / *"… is committed"*
+- *"Run `supabase db diff`"* / *"Run `npx supabase migration up`"*
+- *"`supabase/migrations/*.sql` is updated"* (the migrations folder is **off-limits** to feature tickets)
+- *"The database has the new column"* (no — the DB is touched only at deploy time)
+
+The correct phrasing for the same intent is *schema-file* based:
+- ✅ *"`supabase/schemas/01_tables.sql` adds an `<col> <type>` column"*
+- ✅ *"`supabase/schemas/03_views.sql` exposes the new column in the relevant view"*
+- ✅ *"`supabase/schemas/02_functions.sql` propagates the column in the merge function"*
+
+If you catch yourself writing "migration" anywhere in an AC, delete the line and
+rewrite it against `supabase/schemas/`.
+
 ---
 
 ## Constraints

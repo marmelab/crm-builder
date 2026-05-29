@@ -97,7 +97,7 @@ Your spawn prompt provides `WORKTREE_PATH`, `BRANCH_NAME`, `TICKETS_DIR`.
    git -C <WORKTREE_PATH> diff "$(git -C <WORKTREE_PATH> merge-base main HEAD)"..HEAD
    ```
 2. **Apply the scope-relevant rubric only** — SIMPLE diffs are small and schema-focused:
-   - **A.6b (view migrations)** — column at the end of `03_views.sql` SELECT, no ordinal shift.
+   - **A.6b (schema changes)** — no `supabase/migrations/*.sql` in the diff (off-limits to SIMPLE); schema files in `supabase/schemas/*.sql` only; new column appended at end of `03_views.sql` SELECT, no ordinal shift.
    - **B.1 (RLS)** — RLS enabled, policies cover required ops, no `USING (true)`.
    - **B.3 (injection)** — no string-concatenated SQL, no `||` of user input.
    - **A.6 (backend patterns)** — input validation, no unbounded queries.
@@ -180,15 +180,28 @@ Any `[FAIL]` → BLOCKED. Omitting a criterion from the list is itself a bug.
 - External HTTP calls have timeout
 - No internal error details to clients
 
-### A.6b Supabase view migrations (BLOCKING)
+### A.6b Supabase schema changes (BLOCKING)
 
-When the diff includes a migration that adds or removes a column:
+**Feature TASKs do NOT contain SQL migration files.** Migrations are generated
+later at deploy time by a dedicated round (see `writing-migrations` skill).
+A feature TASK that adds/removes a column touches only `supabase/schemas/*.sql`:
+typically `01_tables.sql`, `03_views.sql`, sometimes `02_functions.sql` /
+`04_triggers.sql` / `05_policies.sql`. Do NOT block on a "missing migration
+file" — that is the new normal, not a bug. Do NOT ask the developer to run
+`supabase db diff` or commit anything under `supabase/migrations*/`.
 
-- Check `supabase/schemas/03_views.sql` for any view selecting from that table. Missing update → BLOCKING (PostgREST queries the view, not the table — column invisible to the app).
-- Column **addition** MUST use `CREATE OR REPLACE VIEW` with the new column as the LAST item of the SELECT list — after every existing column AND every existing computed `AS` alias. Mechanically: positions 1..N of the new view must equal positions 1..N of the old view; the new column is position N+1. Any other placement = BLOCKING (PostgreSQL error 42P16 — "between raw columns and aggregates" is still an ordinal shift of the aggregate).
-- Column **removal or rename** MUST use `DROP VIEW IF EXISTS public.<name> CASCADE; CREATE VIEW public.<name> WITH (security_invoker = on) AS …`. The migration must list dropped dependents in a SQL comment and re-create them.
-- Column **addition** with `DROP VIEW … CASCADE` = BLOCKING (silently drops dependent views/mat-views/rules, silently nukes explicit REVOKEs at the next deploy via default privileges). CASCADE is reserved for removal/rename.
-- `03_views.sql` must mirror the deployed view's column order (append-at-end for additions). Reordering for aesthetics = BLOCKING (breaks future `supabase db diff`).
+What to check in the schema files:
+
+- Schema change → view update: when `01_tables.sql` adds/removes a column on a table referenced by a view in `03_views.sql`, the view must be updated in the same TASK. Missing update → BLOCKING (PostgREST queries the view, not the table — column invisible to the app).
+- Column order in `03_views.sql` must be **append-at-end** (new column placed after every existing column AND every existing computed `AS` alias). Reordering existing columns for aesthetics = BLOCKING (the deploy-time migration round generates `CREATE OR REPLACE VIEW` and PostgreSQL rejects any ordinal shift — error 42P16).
+- For column removal or rename: ensure the view in `03_views.sql` is updated coherently; the deploy round will use `DROP VIEW IF EXISTS … CASCADE; CREATE VIEW …` automatically.
+- Check `06_grants.sql` only if a NEW table or view is added — existing grants are inherited via default privileges.
+
+If you see a `supabase/migrations/*.sql` file in a feature-TASK diff, that's a
+bug in the developer (forbidden by `block-migration-writes.sh` hook, but check
+anyway). Flag it as BLOCKING with fix: *"remove the migration file; schema
+changes belong in `supabase/schemas/`, the migration is generated at deploy
+time"*.
 
 ### A.7 Tests (BLOCKING)
 - Complex business logic → unit test required
