@@ -326,6 +326,7 @@ The dev's (or reviewer's) final response is in your context.
 2. If reviewer returned `BLOCKED:` → already handled in STATE S-REVIEW (you should not be here).
 3. If dev returned `DONE: branch=<X>...` and (review skipped OR review `APPROVED`) → dispatch merger (no `team_name`, no SendMessage):
    ```
+   Bash("touch /tmp/notified-merger-<SESSION_SHORT_ID>-simple")
    Agent({
      subagent_type: "merger",
      description: "Merge SIMPLE branch <X>",
