@@ -345,9 +345,9 @@ The dev's (or reviewer's) final response is in your context.
 ROLE: merger (SIMPLE mode — single-shot, no team)
 BRANCH_NAME: simple/<SESSION_SHORT_ID>
 WORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/simple
+TICKETS_DIR: <absolute per-session path>
 
-Follow the WORKFLOW in your agent file (merger.md). Use the SIMPLE-mode columns
-(return text output only — no ticket to update).
+Follow the WORKFLOW in your agent file (merger.md). Use the SIMPLE-mode columns.
 Output: "DONE: commit=<short sha>. files=[<paths>]" OR "FAILED: <reason>"
 ```
 
