@@ -516,7 +516,15 @@ Agents may have died mid-work due to a rate limit. The `tickets-<SESSION_SHORT_I
 
 On the **first** turn where `shutdown_approved` arrives (or after a 60s timeout):
 1. `TeamDelete({})`  — call it **once**. If it fails because the team is already gone, ignore the error.
-2. SETUP path branches off here: if this dispatch came from STATE SETUP-PLAN
+2. **Multi-wave check** — Read every `${TICKETS_DIR}/TASK-XXX.json` from the
+   planner output. If at least one has `status != "merged"` AND is not
+   already in this wave's dispatch, more waves remain:
+   - Reply with one line per ticket in the wave just torn down (success or failure).
+   - **Restart from STATE B** for the next wave (dependencies of unmerged tickets are now satisfied — pick the next batch). Do NOT run promotion or POST-DEV here.
+   - **End turn.** The next turn opens with TeamCreate for the new wave.
+
+   If every planner ticket has `status: "merged"`, this was the last wave — continue to step 3.
+3. SETUP path branches off here: if this dispatch came from STATE SETUP-PLAN
    (the planner was given `SETUP_MODE=true`), do NOT reply yet — go directly
    to STATE SETUP-DONE, which owns the recap reply and the POST-DEV flow.
 4. COMPLEX path: reply with one line per ticket (success or failure),
