@@ -3,6 +3,7 @@ import { renderStatsPanel, initStatsRefresh } from './lib/stats/index.js';
 import { initConnection, initDisplay, initHistory, openConfirmModal, initRecentPopup } from './lib/sessions/index.js';
 import { renderInlineMarkdown } from './lib/markdown.js';
 import { initRollback } from './lib/rollback/index.js';
+import { initDeploy } from './lib/deploy/index.js';
 
 const widget   = document.getElementById('chat-widget');
 const toggle   = document.getElementById('chat-toggle');
@@ -124,6 +125,9 @@ const historyApi = initHistory({
 });
 
 initRollback({ getSessionId: () => display.getSessionId(), appendMessage });
+// Deploy drives its own SSE stream internally (it's cross-session global state,
+// live even with no chat session open) — nothing to wire through the chat WS.
+initDeploy();
 
 const connection = initConnection({
   handleWsMessage,
@@ -973,7 +977,6 @@ const AGENT_COLORS = {
   developer:          '#f97316',
   merger:             '#2dd4bf',
   documentator:       '#facc15',
-  devops:             '#94a3b8',
 };
 
 function agentColor(label) {

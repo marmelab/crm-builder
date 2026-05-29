@@ -45,7 +45,6 @@ Tests: `cd chat-service && npm test` — uses glob `'test/**/*.test.js'` (direct
 | test-validator | haiku | Integration wiring + e2e presence. |
 | merger | haiku | `git merge --no-ff` only. **Never `git add`/`git commit`**. |
 | documentator | sonnet | Mode 1 — captures rules/skills to `~/.claude/local/` on explicit user request. Mode 2 — auto-runs at the end of every COMPLEX session, appends business knowledge to `/app/MEMORY.md` from the diff vs `origin/main`. |
-| devops | sonnet | One-time bootstrap (fork, Supabase, env, deploy). |
 
 Team layout (`agent-team` skill): one `TeamCreate` per wave, `3×N + 1` members in one dispatch (developer + 2 reviewers per ticket + one shared merger). Constraint: one team per lead, no nested teams. Single merger eliminates `.git/index.lock` contention.
 
