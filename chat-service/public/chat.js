@@ -365,18 +365,28 @@ function handleWsMessage(event) {
         ];
     // Tail user messages still in the queue: walk the timeline backwards and
     // mark the last N user-message items as queued (queue holds user-only).
-    const queuedIdx = new Set();
-    let remaining = msg.queuedCount || 0;
+    // queuedIds[i] pairs with the i-th queued tail message in chronological
+    // order, so the bubble carries the server id its cancel button needs.
+    const queuedIds = Array.isArray(msg.queuedIds) ? msg.queuedIds : [];
+    const queuedCount = queuedIds.length || msg.queuedCount || 0;
+    const queueIdByTimelineIdx = new Map();
+    let remaining = queuedCount;
     for (let i = timeline.length - 1; i >= 0 && remaining > 0; i--) {
       const it = timeline[i];
       if (it.kind === 'message' && it.role === 'user') {
-        queuedIdx.add(i);
         remaining--;
+        const id = queuedIds[remaining];
+        queueIdByTimelineIdx.set(i, id != null ? id : null);
       }
     }
     timeline.forEach((it, i) => {
       if (it.kind === 'message') {
-        appendMessage(it.role, it.content, { queued: queuedIdx.has(i), subtype: it.subtype, ts: it.ts });
+        const opts = { subtype: it.subtype, ts: it.ts };
+        if (queueIdByTimelineIdx.has(i)) {
+          opts.queued = true;
+          opts.queuedId = queueIdByTimelineIdx.get(i);
+        }
+        appendMessage(it.role, it.content, opts);
         return;
       }
       // Debug event — buffer it so a later debug-toggle ON can replay it,
@@ -434,11 +444,9 @@ function handleWsMessage(event) {
       remainingTimeMsAtReceipt = 0;
       remainingTimeReceivedAt = 0;
       startRemainingTimeTicker();
-      const oldestQueued = messages.querySelector('.msg-queued');
-      if (oldestQueued) {
-        oldestQueued.classList.remove('msg-queued');
-        oldestQueued.querySelector('.queued-badge')?.remove();
-      }
+      // The queued-chrome stripping for the bubble that just moved into
+      // processing is now driven by the server's `queue_updated` event,
+      // which arrives just before this status transition.
     } else if (wasWorking && !working) {
       stopRemainingTimeTicker();
       remainingTimeMsAtReceipt = 0;
@@ -451,6 +459,11 @@ function handleWsMessage(event) {
 
   if (msg.type === 'choices') {
     appendChoices(msg.content, msg.options);
+    return;
+  }
+
+  if (msg.type === 'queue_updated') {
+    applyQueueState(msg.queuedIds, msg.cancelledId);
     return;
   }
 
@@ -611,6 +624,94 @@ function markStaleWorkingMessages() {
   }
 }
 
+// Paint a user bubble as "still in the server queue": dim it, append the
+// ⏳ badge, and (when we know the server's queue id) wire up the × cancel
+// button. Idempotent — calling it twice on the same element is harmless.
+function markQueued(el, queuedId) {
+  el.classList.add('msg-queued');
+  if (queuedId != null) el.setAttribute('data-queue-id', String(queuedId));
+  else el.removeAttribute('data-queue-id');
+  let badge = el.querySelector('.queued-badge');
+  if (!badge) {
+    badge = document.createElement('span');
+    badge.className = 'queued-badge';
+    badge.textContent = '⏳ waiting';
+    el.appendChild(badge);
+  }
+  if (queuedId != null && !el.querySelector('.queued-cancel')) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'queued-cancel';
+    btn.title = 'Cancel this message';
+    btn.setAttribute('aria-label', 'Cancel this message');
+    btn.textContent = '×';
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      cancelQueuedMessage(el);
+    });
+    el.appendChild(btn);
+  }
+}
+
+function unmarkQueued(el) {
+  el.classList.remove('msg-queued');
+  el.querySelector('.queued-badge')?.remove();
+  el.querySelector('.queued-cancel')?.remove();
+  el.removeAttribute('data-queue-id');
+}
+
+function cancelQueuedMessage(el) {
+  const idAttr = el.getAttribute('data-queue-id');
+  if (!idAttr) return;
+  const id = Number(idAttr);
+  if (!connection.safeSend({ type: 'cancel_queued', id })) return;
+  // Optimistic: drop the bubble immediately. If the server already shifted it
+  // (race with turn end), the upcoming `queue_updated` will re-render the
+  // current truth — but the message is then running, not cancellable anymore,
+  // so the bubble's disappearance is acceptable UX in either case.
+  el.remove();
+}
+
+// Reconcile the DOM with the server's current queue. Walks all tagged user
+// bubbles; any whose id is gone from the queue had to be either cancelled
+// (then explicitly named via `cancelledId` → remove the bubble) or moved into
+// processing (just drop the queued chrome). Then assigns ids to fresh tail
+// bubbles that haven't been tagged yet (e.g. just-submitted messages).
+function applyQueueState(queuedIds, cancelledId) {
+  const wantSet = new Set((queuedIds || []).map((n) => String(n)));
+  for (const el of [...messages.querySelectorAll('.msg-user[data-queue-id]')]) {
+    const id = el.getAttribute('data-queue-id');
+    if (wantSet.has(id)) continue;
+    if (cancelledId != null && id === String(cancelledId)) el.remove();
+    else unmarkQueued(el);
+  }
+  // Now sync new submissions: the last K queued ids that aren't yet bound to
+  // a DOM node attach to the most recent untagged user bubbles, in order.
+  const boundIds = new Set(
+    [...messages.querySelectorAll('.msg-user[data-queue-id]')].map((n) => n.getAttribute('data-queue-id')),
+  );
+  const unboundIds = (queuedIds || []).filter((id) => !boundIds.has(String(id)));
+  if (unboundIds.length === 0) return;
+  const userMsgs = [...messages.querySelectorAll('.msg-user')];
+  const untaggedTail = [];
+  for (let i = userMsgs.length - 1; i >= 0 && untaggedTail.length < unboundIds.length; i--) {
+    if (!userMsgs[i].hasAttribute('data-queue-id')) untaggedTail.push(userMsgs[i]);
+  }
+  // untaggedTail is bottom→top; unboundIds is chronological (oldest first)
+  // — so the bottom-most untagged bubble pairs with the last unbound id.
+  for (let i = 0; i < untaggedTail.length; i++) {
+    const id = unboundIds[unboundIds.length - 1 - i];
+    if (id == null) break;
+    markQueued(untaggedTail[i], id);
+  }
+  // Leftover bubbles that the client optimistically marked queued (working
+  // was true at submit) but the server didn't actually queue (it processed
+  // the message directly) — unmark them so the ⏳ badge doesn't stick.
+  for (const el of messages.querySelectorAll('.msg-user.msg-queued:not([data-queue-id])')) {
+    unmarkQueued(el);
+  }
+}
+
 function appendMessage(role, content, seqOrOpts = ++seqCounter) {
   const opts = typeof seqOrOpts === 'object' && seqOrOpts !== null ? seqOrOpts : {};
   const seq = typeof seqOrOpts === 'number' ? seqOrOpts : (opts.seq ?? ++seqCounter);
@@ -639,10 +740,7 @@ function appendMessage(role, content, seqOrOpts = ++seqCounter) {
     el.textContent = content;
   }
   if (queued) {
-    const badge = document.createElement('span');
-    badge.className = 'queued-badge';
-    badge.textContent = '⏳ waiting';
-    el.appendChild(badge);
+    markQueued(el, opts.queuedId);
   }
   const stamp = formatMessageTime(opts.ts);
   if (stamp) {

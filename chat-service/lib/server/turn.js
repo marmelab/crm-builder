@@ -262,7 +262,10 @@ export async function processMessage(runtime, prompt) {
     runtime.stopping = false;
     if (!wasStopped && runtime.queue.length > 0) {
       const next = runtime.queue.shift();
-      processMessage(runtime, next);
+      // The head of the queue is now running, not waiting — tabs need this to
+      // drop the ⏳ badge / × button on the bubble whose data-queue-id matches.
+      broadcast(runtime, { type: 'queue_updated', queuedIds: runtime.queue.map((q) => q.id) });
+      processMessage(runtime, next.content);
     } else {
       if (wasStopped) runtime.queue = [];
       runtime.busy = false;

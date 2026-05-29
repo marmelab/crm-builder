@@ -26,6 +26,7 @@ export function createRuntime(session) {
     claudeSessionId: session.meta.claudeSessionId || null,
     busy: false,
     queue: [],
+    queueIdSeq: 0,
     stopping: false,
     currentProc: null,
     clients: new Set(),
