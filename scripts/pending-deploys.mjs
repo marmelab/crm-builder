@@ -23,7 +23,7 @@ try {
   changed = execFileSync('git', [
     '-C', APP, 'diff', '--name-only',
     `session-base/${SESSION}..session/${SESSION}`,
-  ]).toString();
+  ], { stdio: ['pipe', 'pipe', 'pipe'] }).toString();
 } catch { process.exit(0); }
 
 const relevant = changed.split('\n').filter(Boolean).filter((p) => SCHEMA_RE.test(p));

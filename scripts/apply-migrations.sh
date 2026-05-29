@@ -36,9 +36,26 @@ mkdir -p supabase/migrations
 # ── Apply migrations to local Supabase ──
 if curl -s --max-time 2 -o /dev/null http://localhost:54321; then
   echo -e "${BOLD}Applying pending migrations to running Supabase...${NC}"
-  if ! npx supabase migration up 2>&1; then
-    echo -e "${RED}Migration up failed.${NC}" >&2
-    exit 1
+  MIG_OUT=$(npx supabase migration up 2>&1)
+  MIG_EXIT=$?
+  if [ $MIG_EXIT -ne 0 ]; then
+    # Auto-repair phantom versions that are recorded in Supabase but absent from
+    # the local migrations/ directory (happens when a prior session's worktree was
+    # cleaned up after applying the migration but before it landed in git).
+    if echo "$MIG_OUT" | grep -q "Remote migration versions not found in local migrations directory"; then
+      PHANTOM_VERSIONS=$(echo "$MIG_OUT" | grep -oE '[0-9]{14}' | sort -u | tr '\n' ' ' | sed 's/ $//')
+      if [ -n "$PHANTOM_VERSIONS" ]; then
+        # shellcheck disable=SC2086
+        npx supabase migration repair --status reverted $PHANTOM_VERSIONS 2>/dev/null
+        MIG_OUT=$(npx supabase migration up 2>&1)
+        MIG_EXIT=$?
+      fi
+    fi
+    if [ $MIG_EXIT -ne 0 ]; then
+      echo "$MIG_OUT" >&2
+      echo -e "${RED}Migration up failed.${NC}" >&2
+      exit 1
+    fi
   fi
   echo -e "${GREEN}Migrations applied.${NC}"
   # Reload PostgREST schema cache so new columns/tables are visible immediately.

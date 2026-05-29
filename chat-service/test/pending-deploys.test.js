@@ -39,3 +39,12 @@ test('non-empty when the session branch adds an entity field', () => {
   assert.notEqual(out, '');
   rmSync(dir, { recursive: true, force: true });
 });
+
+test('empty and no stderr when session branches do not exist (e.g. hooks did not run)', () => {
+  const dir = setupRepo();
+  // No session-base/xx99yy00 or session/xx99yy00 branches created intentionally.
+  let stderr = '';
+  const proc = execFileSync('node', [SCRIPT, '--app', dir, '--session', 'xx99yy00'], { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
+  assert.equal(proc.trim(), '');
+  rmSync(dir, { recursive: true, force: true });
+});

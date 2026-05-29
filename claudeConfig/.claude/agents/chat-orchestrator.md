@@ -346,9 +346,7 @@ BRANCH_NAME: simple/<SESSION_SHORT_ID>
 WORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/simple
 
 Follow the WORKFLOW in your agent file (merger.md). Use the SIMPLE-mode columns
-(return text output; update the ticket status if a `TASK-SIMPLE-*.json` pseudo-ticket
-exists in `${TICKETS_DIR}`, otherwise skip the ticket-update step).
-TICKETS_DIR: <absolute per-session path>
+(return text output only — no ticket to update).
 Output: "DONE: commit=<short sha>. files=[<paths>]" OR "FAILED: <reason>"
 ```
 
@@ -364,21 +362,20 @@ The merger's final response (or dev's failure) is in your context.
    (*"Something didn't work. Want me to try a different approach?"*) and enter STATE DONE.
 2. On `DONE` → run POST-DEV detection:
    ```
-   Bash("pending-deploys ${TICKETS_DIR}")
+   Bash("pending-deploys --app /app --session <SESSION_SHORT_ID>")
    ```
-   This picks up any `TASK-SIMPLE-<suffix>.json` the dev wrote when the change
-   touched a migration.
+   This checks whether the session branch diff touches schema-relevant files
+   (entity types, dataProvider, views). Empty output means a cosmetic-only
+   change — no migration needed.
 3. Build the reply in user's language, plain words — e.g. *"Done — take a look in the demo."*
 4. Branch on the detection output:
    - Empty → send the reply, enter STATE DONE.
-   - Non-empty (one or more pending pseudo-ticket ids) → append the PD-ASK question
-     to the reply and enter STATE PD-ASK. Keep the pending ticket ids in your
-     context for STATE PD-DEPLOY.
+   - Non-empty (one or more schema-relevant file paths) → append the PD-ASK question
+     to the reply and enter STATE PD-ASK.
 
-From PD-ASK onward, the existing POST-DEV state machine (PD-RESPOND → PD-DEPLOY →
-PD-LIVE-ASK → PD-LIVE-SWITCH → PD-DONE) runs unchanged. `apply-migrations.sh`
-already accepts `TASK-*` ids, so `TASK-SIMPLE-<suffix>` flows through without
-script changes.
+From PD-ASK onward, the existing POST-DEV state machine (PD-RESPOND → PD-MIG-DEV →
+PD-MIG-REVIEW → PD-MIG-MERGE → PD-DEPLOY → PD-LIVE-ASK → PD-LIVE-SWITCH → PD-DONE)
+runs unchanged.
 
 **End.**
 
@@ -568,11 +565,10 @@ Reached when the merger reports `promote conflict`. ONE assistant message:
 
 This sub-flow runs at the end of any flow that produced merged tickets,
 i.e. STATE D (COMPLEX), STATE SETUP-DONE (SETUP), and STATE S-DONE (SIMPLE,
-conditional on the dev writing a `TASK-SIMPLE-*.json` pseudo-ticket because
-the change touched `supabase/migrations-pending/`). It does NOT run for:
+conditional on the session-branch diff touching schema-relevant files). It does NOT run for:
 - MEMORY (no code change)
 - MODE-SWITCH (no code change)
-- SIMPLE cosmetic-only changes (no migration → no pseudo-ticket → detection returns empty)
+- SIMPLE cosmetic-only changes (no schema file touched → detection returns empty)
 - failed dev waves where no ticket reached `status: merged`.
 
 ### STATE PD-ASK — open satisfaction question (every COMPLEX/SETUP request)
