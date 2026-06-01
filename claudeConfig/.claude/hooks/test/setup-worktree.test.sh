@@ -36,5 +36,14 @@ git -C "$APP_DIR" merge-base --is-ancestor session/ab12cd34 ab12cd34/TASK-001 2>
 echo '{"agent_type":"developer-TASK-001"}' | bash "$HOOK" >/dev/null 2>&1
 assert "idempotent second run exits 0" $?
 
+# Regression: session restart where the bind-mount/cleanup wiped the _session
+# directory but git still holds the worktree registration. Plain `worktree add`
+# fails with "missing but already registered"; the hook must prune + recreate.
+rm -rf "$APP_DIR/worktrees/ab12cd34/_session"
+git -C "$APP_DIR" worktree list --porcelain | grep -qF "worktrees/ab12cd34/_session"; assert "stale _session registration survives dir wipe" $?
+echo '{"agent_type":"developer-TASK-002"}' | bash "$HOOK" >/dev/null 2>&1
+test -e "$APP_DIR/worktrees/ab12cd34/_session/.git"; assert "_session recreated after stale-registration wipe" $?
+grep -q "SESSION-BRANCH FAILED" "$CHAT_SESSION_DIR/hooks.log" 2>/dev/null; assert "no SESSION-BRANCH FAILED logged" $([ $? -ne 0 ] && echo 0 || echo 1)
+
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" = "0" ]

@@ -42,14 +42,21 @@ if ! git -C "$APP_DIR" show-ref --verify --quiet "refs/heads/session/${SESSION_S
   git -C "$APP_DIR" branch "session/${SESSION_SHORT}"      "$BASE" 2>/dev/null || true
   git -C "$APP_DIR" branch "session-base/${SESSION_SHORT}" "$BASE" 2>/dev/null || true
 fi
-if [ ! -d "$SESSION_WT" ]; then
+# A live git worktree owns a `.git` file pointing at its gitdir. Test that,
+# not mere dir presence: on a session restart the bind-mount/cleanup can wipe
+# the directory while git still holds the registration, and `git worktree add`
+# then refuses with "missing but already registered worktree". The TASK block
+# below has explicit recovery; the _session block historically had none, so the
+# add silently failed (2>/dev/null) and retried every SubagentStart forever.
+if [ ! -e "$SESSION_WT/.git" ]; then
+  rm -rf "$SESSION_WT" 2>/dev/null || true          # clear orphan dir (no .git)
   mkdir -p "$(dirname "$SESSION_WT")"
-  git -C "$APP_DIR" worktree add "$SESSION_WT" "session/${SESSION_SHORT}" 2>/dev/null || true
-  [ -e "$SESSION_WT/node_modules" ] || cp -al "${APP_DIR}/node_modules" "$SESSION_WT/node_modules" 2>/dev/null || true
-  if [ -d "$SESSION_WT" ]; then
+  git -C "$APP_DIR" worktree prune 2>/dev/null || true   # drop stale registrations
+  if git -C "$APP_DIR" worktree add "$SESSION_WT" "session/${SESSION_SHORT}" 2>/tmp/session-wt-err; then
+    [ -e "$SESSION_WT/node_modules" ] || cp -al "${APP_DIR}/node_modules" "$SESSION_WT/node_modules" 2>/dev/null || true
     echo "[$(date -Iseconds)] setup-worktree SESSION-BRANCH created session/${SESSION_SHORT} from $BASE" >> "$LOG" 2>/dev/null || true
   else
-    echo "[$(date -Iseconds)] setup-worktree SESSION-BRANCH FAILED _session worktree session/${SESSION_SHORT}" >> "$LOG" 2>/dev/null || true
+    echo "[$(date -Iseconds)] setup-worktree SESSION-BRANCH FAILED _session worktree session/${SESSION_SHORT} err=$(tr '\n' ' ' </tmp/session-wt-err 2>/dev/null)" >> "$LOG" 2>/dev/null || true
   fi
 fi
 
