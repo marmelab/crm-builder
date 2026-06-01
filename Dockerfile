@@ -9,6 +9,7 @@ FROM node:24-trixie-slim
 # ── Version pins — update when upgrading tools ────────────────
 ARG SUPABASE_CLI_VERSION=v2.98.2
 ARG CLAUDE_CODE_VERSION=2.1.98
+ARG WRANGLER_VERSION=4.42.0
 
 ENV DEBIAN_FRONTEND=noninteractive \
     APP_DIR=/app \
@@ -49,6 +50,9 @@ RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
 
 # ── TypeScript language server (required by typescript-lsp plugin for agents)
 RUN npm install -g typescript-language-server typescript
+
+# ── Wrangler (Cloudflare Workers deploy — used by the frontend deploy phase) ──
+RUN npm install -g wrangler@${WRANGLER_VERSION}
 
 # ── Download project (zip from main branch) ──────────────────
 # GitHub automatically generates a zip for any branch at:
@@ -128,16 +132,6 @@ RUN chmod +x /entrypoint.sh
 COPY claudeConfig/.claude/ /root/.claude/
 RUN cp -r /root/.claude /home/developer/.claude \
     && chown -R developer:developer /home/developer/.claude
-
-# ── Stage source for bind-mounted /app ────────────────────────
-# /app is bind-mounted from ./crm-source on the host (see docker-compose.yml)
-# so users can browse and share the CRM source from their machine. The bind
-# mount hides any content baked into the image at /app, so we relocate the
-# build artifacts here. entrypoint.sh restores them into /app on first run
-# when the bind mount is empty.
-RUN mv /app /opt/atomic-crm-source \
-    && mkdir -p /app \
-    && chown developer:developer /app
 
 # 5173  → CRM (Vite)
 # 54321 → Supabase API  (MODE=full only)

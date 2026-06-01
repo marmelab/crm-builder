@@ -138,7 +138,16 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
   flex-shrink: 0;
   transition: background .15s, color .15s;
 }
-#deploy-btn { margin-top: auto; }
+#deploy-btn { margin-top: auto; position: relative; }
+/* Red chip flagging that deployment isn't fully configured. Absolutely
+   positioned so it survives the collapsed sidebar (label hidden, icon only). */
+.deploy-btn-chip {
+  position: absolute; top: 50%; right: 10px; transform: translateY(-50%);
+  width: 8px; height: 8px; border-radius: 50%;
+  background: #f43f5e;
+  box-shadow: 0 0 0 2px #1c1c1e;
+}
+.deploy-btn-chip[hidden] { display: none; }
 /* `hidden` must win over the flex display above. */
 #deploy-edit-btn[hidden],
 #deploy-dashboard-btn[hidden] { display: none; }
@@ -1137,9 +1146,10 @@ details.child-row[open] > summary .child-detail {
 }
 .deploy-modal-panel {
   position: relative;
-  width: min(560px, calc(100vw - 32px));
-  max-height: calc(100vh - 48px);
-  overflow-y: auto;
+  width: min(640px, calc(100vw - 32px));
+  height: min(620px, calc(100vh - 48px));
+  display: flex; flex-direction: column;
+  overflow: hidden;
   background: linear-gradient(160deg, #2c2c2e 0%, #1c1c1e 100%);
   border: 1px solid #3a3a3c;
   border-radius: 16px;
@@ -1159,20 +1169,34 @@ details.child-row[open] > summary .child-detail {
 #deploy-modal-title {
   font-size: 17px; font-weight: 600; color: #f2f2f7;
   margin-bottom: 12px;
+  flex-shrink: 0;
 }
+/* Fixed-height panel: the title stays put, each view fills the space below it
+   as a flex column so its body can scroll while actions stay pinned. */
+.deploy-view {
+  flex: 1 1 auto; min-height: 0;
+  display: flex; flex-direction: column;
+}
+.deploy-view[hidden] { display: none; }
 .deploy-modal-body {
   font-size: 13px; line-height: 1.5; color: #8e8e93;
   margin-bottom: 16px;
+  flex-shrink: 0;
 }
 .deploy-modal-body a { color: #60a5fa; text-decoration: none; }
 .deploy-modal-body a:hover { text-decoration: underline; }
 
-.deploy-form { display: flex; flex-direction: column; gap: 12px; }
+.deploy-form { display: flex; flex-direction: column; gap: 12px; flex: 1 1 auto; min-height: 0; }
+/* Only the fields scroll; the tabs above and actions below stay fixed. */
+.deploy-form-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 .deploy-field { display: flex; flex-direction: column; gap: 4px; }
 .deploy-field-label {
   font-size: 12px; font-weight: 500; color: #c7c7cc;
 }
-.deploy-field-hint { color: #8e8e93; font-weight: 400; margin-left: 4px; }
+.deploy-field-hint {
+  color: #8e8e93; font-weight: 400; margin-left: 4px;
+  font-size: 12px; line-height: 1.5;
+}
 .deploy-field input {
   padding: 8px 10px; font-size: 13px;
   background: #1c1c1e; color: #f2f2f7;
@@ -1183,13 +1207,89 @@ details.child-row[open] > summary .child-detail {
   outline: none; border-color: #60a5fa;
   box-shadow: 0 0 0 3px rgba(96, 165, 250, .15);
 }
-.deploy-fieldset {
-  border: 1px solid #3a3a3c; border-radius: 10px;
-  padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 8px;
+/* Configure tabs — one per deploy target (Supabase / Cloudflare). */
+.deploy-tabs {
+  display: flex; gap: 4px;
+  border-bottom: 1px solid #2c2c2e;
+  margin-bottom: 16px;
+  flex-shrink: 0;
 }
-.deploy-fieldset legend {
+.deploy-tab {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 8px 14px; background: none; border: none;
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+  color: #8e8e93; cursor: pointer;
+  font-family: inherit; font-size: 13px; font-weight: 600;
+  transition: color .15s, border-color .15s;
+}
+.deploy-tab:hover { color: #c7c7cc; }
+.deploy-tab.deploy-tab-active {
+  color: #f2f2f7; border-bottom-color: #60a5fa;
+}
+/* Red chip on a tab label: that target isn't configured yet. */
+.deploy-tab-chip {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: #f43f5e; flex-shrink: 0;
+}
+.deploy-tab-chip[hidden] { display: none; }
+
+.deploy-tab-panel[hidden] { display: none; }
+
+/* Supabase tab: sections (project / keys / database / secrets) stack
+   vertically, each split off from the previous by a divider line. */
+.deploy-panel-intro { margin: 0 0 16px; }
+.deploy-columns { display: flex; flex-direction: column; gap: 16px; }
+.deploy-section {
+  display: flex; flex-direction: column; gap: 12px; min-width: 0;
+}
+.deploy-columns .deploy-section + .deploy-section {
+  border-top: 1px solid #3a3a3c; padding-top: 16px;
+}
+.deploy-section-title {
   font-size: 12px; font-weight: 600; color: #c7c7cc;
-  padding: 0 6px;
+  margin: 0; text-transform: uppercase; letter-spacing: .04em;
+}
+/* Section-level flow hints (e.g. "Your Project → Project Settings") sit flush
+   under the title, no <p> margin. */
+.deploy-section > .deploy-field-hint { margin: 0 0 0 4px; }
+
+/* Cloudflare token walkthrough. */
+.deploy-instructions {
+  margin: 0; padding-left: 18px;
+  display: flex; flex-direction: column; gap: 6px;
+  font-size: 12px; line-height: 1.5; color: #8e8e93;
+}
+
+/* Emphasis + links render the same in every hint, on both tabs. */
+.deploy-field-hint strong,
+.deploy-instructions strong { color: #c7c7cc; font-weight: 600; }
+.deploy-field-hint a,
+.deploy-instructions a { color: #60a5fa; text-decoration: none; }
+.deploy-field-hint a:hover,
+.deploy-instructions a:hover { text-decoration: underline; }
+
+/* Amber callout for a manual post-deploy step (the auth redirect URL must be
+   set by hand in Supabase Studio). Reads as "warning, not failure" — same
+   palette as the rate-limit bubble. */
+.deploy-warning {
+  display: flex; gap: 8px;
+  margin: 0;
+  padding: 10px 12px;
+  background: rgba(251, 191, 36, .10);
+  border: 1px solid rgba(251, 191, 36, .35);
+  border-radius: 8px;
+  font-size: 12px; line-height: 1.5; color: #d1d1d6;
+}
+.deploy-warning[hidden] { display: none; }
+.deploy-warning-icon { color: #fbbf24; flex-shrink: 0; }
+.deploy-warning strong { color: #c7c7cc; font-weight: 600; }
+.deploy-warning a { color: #60a5fa; text-decoration: none; }
+.deploy-warning a:hover { text-decoration: underline; }
+.deploy-warning code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px; word-break: break-all;
+  background: rgba(255, 255, 255, .06);
+  padding: 1px 4px; border-radius: 4px; color: #f2f2f7;
 }
 
 .deploy-form-errors {
@@ -1204,12 +1304,14 @@ details.child-row[open] > summary .child-detail {
 .deploy-form-actions {
   display: flex; gap: 10px; justify-content: flex-end;
   margin-top: 6px;
+  flex-shrink: 0;
 }
 
 .deploy-progress-status {
   font-size: 14px; font-weight: 600;
   color: #c7c7cc;
   margin-bottom: 10px;
+  flex-shrink: 0;
 }
 .deploy-progress-status.deploy-ok { color: #4ade80; }
 .deploy-progress-status.deploy-fail { color: #f87171; }
@@ -1218,8 +1320,7 @@ details.child-row[open] > summary .child-detail {
   border: 1px solid #2c2c2e;
   border-radius: 8px;
   padding: 10px 12px;
-  max-height: 50vh;
-  min-height: 200px;
+  flex: 1 1 auto; min-height: 120px;
   overflow: auto;
   color: #c7c7cc;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
