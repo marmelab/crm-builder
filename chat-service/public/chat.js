@@ -481,13 +481,16 @@ function handleWsMessage(event) {
 
   if (msg.type === 'mode_changed') {
     const prevMode = modeToggleBtn.dataset.mode || 'demo';
-    const prevStarting = modeToggleBtn.classList.contains('mode-starting');
+    const prevReady = modeToggleBtn.dataset.supabaseReady === '1';
     updateModeBtn(msg.mode, msg.supabaseReady ?? false);
-    // Reload the CRM iframe when the mode actually changes, or when Supabase
-    // transitions from starting to ready (so the app connects with a live DB).
-    const modeChanged = msg.mode !== prevMode;
-    const justReady = msg.mode === 'full' && prevStarting && (msg.supabaseReady ?? false);
-    if (modeChanged || justReady) {
+    const supabaseReady = msg.supabaseReady ?? false;
+    // Reload iframe only when: Supabase just became ready (full+not-ready → full+ready),
+    // first switch to full+ready from demo (orchestrator path), or switched back to demo.
+    // Never reload when switching to full before Supabase is ready.
+    const justReady = msg.mode === 'full' && !prevReady && supabaseReady;
+    const switchedToReadyFull = msg.mode === 'full' && supabaseReady && prevMode !== 'full';
+    const switchedToDemo = msg.mode === 'demo' && prevMode === 'full';
+    if (justReady || switchedToReadyFull || switchedToDemo) {
       const frame = document.getElementById('crm-frame');
       if (frame) frame.src = frame.src;
     }
@@ -1099,24 +1102,28 @@ let modePollingTimer = null;
 function updateModeBtn(mode, supabaseReady) {
   const label = modeToggleBtn.querySelector('.mode-toggle-label');
   modeToggleBtn.dataset.mode = mode;
-  if (mode === 'full') {
-    if (label) label.textContent = supabaseReady ? 'Real data' : 'Real data ↻';
-    modeToggleBtn.classList.toggle('mode-full', true);
-    modeToggleBtn.classList.toggle('mode-starting', !supabaseReady);
+  modeToggleBtn.dataset.supabaseReady = supabaseReady ? '1' : '0';
+  if (mode === 'full' && supabaseReady) {
+    if (label) label.textContent = 'Real data';
+    modeToggleBtn.classList.add('mode-full');
+    modeToggleBtn.classList.remove('mode-starting');
+    modeToggleBtn.disabled = false;
+    modeToggleBtn.title = 'Using your real database — click to switch to demo';
+    if (modePollingTimer) { clearInterval(modePollingTimer); modePollingTimer = null; }
+  } else {
+    // demo mode, or full+not-yet-ready (brief transition): show "Demo" disabled
+    if (label) label.textContent = 'Demo';
+    modeToggleBtn.classList.remove('mode-full', 'mode-starting');
+    modeToggleBtn.disabled = !supabaseReady;
     modeToggleBtn.title = supabaseReady
-      ? 'Using your real database — click to switch to demo'
-      : 'Connecting to your database… click to switch back to demo';
+      ? 'Using sample data — click to switch to real data'
+      : 'Connecting to your database… will activate when ready';
     if (!supabaseReady && !modePollingTimer) {
       modePollingTimer = setInterval(pollMode, 4000);
     } else if (supabaseReady && modePollingTimer) {
       clearInterval(modePollingTimer);
       modePollingTimer = null;
     }
-  } else {
-    if (label) label.textContent = 'Demo';
-    modeToggleBtn.classList.remove('mode-full', 'mode-starting');
-    modeToggleBtn.title = 'Using sample data — click to switch to your real database';
-    if (modePollingTimer) { clearInterval(modePollingTimer); modePollingTimer = null; }
   }
 }
 
@@ -1132,7 +1139,7 @@ async function pollMode() {
 modeToggleBtn.addEventListener('click', async () => {
   const currentMode = modeToggleBtn.dataset.mode || 'demo';
   const nextMode = currentMode === 'demo' ? 'full' : 'demo';
-  updateModeBtn(nextMode, false);
+  modeToggleBtn.disabled = true;
   try {
     const res = await fetch('/api/mode', {
       method: 'POST',
@@ -1140,7 +1147,7 @@ modeToggleBtn.addEventListener('click', async () => {
       body: JSON.stringify({ mode: nextMode }),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    // App.tsx is already swapped server-side — reload the CRM iframe now
+    // App.tsx is swapped synchronously server-side before the response — safe to reload
     const frame = document.getElementById('crm-frame');
     if (frame) frame.src = frame.src;
     await pollMode();

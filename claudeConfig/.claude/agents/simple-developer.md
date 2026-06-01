@@ -20,6 +20,8 @@ Implement either a single cosmetic change OR a single-field addition/removal on 
 
 You are dispatched **alone** (no `team_name`, no SendMessage, no peers). You commit your change in a worktree and return. The merger is dispatched separately by the orchestrator after you stop and `SubagentStop` validation passes.
 
+You also have a **second mode**: `MIGRATION MODE`, dispatched at deploy time to generate a Supabase SQL migration from the session-branch diff. In that mode the cosmetic-only restrictions below do NOT apply — see **MIGRATION MODE** at the bottom of this file. If your spawn prompt contains `ROLE: simple-developer (MIGRATION MODE)`, jump straight to that section.
+
 ---
 
 ## Scope — what SIMPLE means
@@ -35,8 +37,8 @@ You are dispatched **alone** (no `team_name`, no SendMessage, no peers). You com
 
 **Single field on an existing entity (Contact / Company / Deal / Note / Task):**
 - Add or remove ONE column on the entity's table:
-  - migration in `supabase/migrations-pending/`
-  - matching update to `supabase/schemas/03_views.sql` (PostgREST queries views, not tables — appending the column to the view's SELECT is mandatory; new columns go at the **end** of the SELECT list, after all existing columns and AS aliases — PostgreSQL rejects ordinal shifts)
+  - schema file update: `supabase/schemas/01_tables.sql` (column definition)
+  - view update: `supabase/schemas/03_views.sql` (PostgREST queries views, not tables — appending the column to the view's SELECT is mandatory; new columns go at the **end** of the SELECT list, after all existing columns and AS aliases — PostgreSQL rejects ordinal shifts)
 - TypeScript type / interface update for the entity
 - Form input in the Create/Edit view (e.g. `ContactInputs.tsx`)
 - Display in the Show view (e.g. `ContactShow.tsx`)
@@ -71,7 +73,7 @@ If unsure, refuse — let the orchestrator re-classify.
 ROLE: simple-developer
 CHANGE_REQUEST: <user's natural-language request, verbatim>
 WORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/simple
-BRANCH_NAME:   simple/<SESSION_SHORT_ID>
+BRANCH_NAME:   <SESSION_SHORT_ID>/simple
 TICKETS_DIR:   <absolute per-session path, e.g. /chat-service/logs/<uuid>>
 ```
 
@@ -108,39 +110,6 @@ Then `Read("/app/MEMORY.md")` — domain vocabulary. Even a label rename can be 
 - Edit/Write the change.
 - File modifications MUST go through Edit or Write — NEVER use Bash to write files (`sed -i`, `cat > file`, `echo > file`, etc. are blocked by `block-bash-file-write`). Renames via `git mv` are allowed — the hook only blocks redirections and in-place edits, not git's own file operations.
 - Stay strictly within the scope above — cosmetic, single-field (optionally with i18n labels for that field), or a list filter reusing existing components. Anything broader (multiple fields, import, new entity, new custom component) → refuse with `FAILED: out of scope — needs COMPLEX flow`.
-
-### 3.5. Record a pseudo-ticket if a migration was created
-
-POST-DEV plumbing (`pending-deploys.mjs`, `apply-migrations.sh`) is ticket-based. SIMPLE has no real ticket, so when your change touches the schema you MUST write a minimal pseudo-ticket so the orchestrator can offer to deploy. Without this file, the migration stays in `supabase/migrations-pending/` forever and the user is never asked to deploy.
-
-**Skip this step entirely if your diff does NOT touch `supabase/migrations-pending/`.**
-
-If your diff does include a file under `supabase/migrations-pending/`:
-
-1. Pick a short pseudo-id derived from the **migration filename you just wrote**. The filename already encodes a timestamp picked once when the migration was created, so it's stable across re-runs in the same session AND uniquely identifies the migration. Do NOT hash CHANGE_REQUEST — it's arbitrary user input (apostrophes break shell quoting; hostile text is an injection vector).
-   ```bash
-   cd <WORKTREE_PATH> && \
-     MIG_PATH=$(ls supabase/migrations-pending/*.sql 2>/dev/null | head -1) && \
-     PSEUDO_SUFFIX=$(basename "$MIG_PATH" .sql | sha1sum | head -c 6) && \
-     PSEUDO_ID="TASK-SIMPLE-${PSEUDO_SUFFIX}"
-   ```
-   On re-runs of the same flow (validation retry, hook-injected stderr), the migration filename is unchanged → same `PSEUDO_SUFFIX` → existing pseudo-ticket file and renamed migration file are reused, not duplicated. If multiple migrations exist under `migrations-pending/` (very unusual for SIMPLE), pick the newest one explicitly with `ls -t` and document the choice in your final report.
-2. Rename your migration file (using `git mv` from inside the worktree) so it matches the canonical pattern `apply-migrations.sh` looks for:
-   ```
-   <timestamp>_<SESSION_SHORT_ID>_${PSEUDO_ID}_<slug>.sql
-   ```
-   `SESSION_SHORT_ID` is the first segment of `basename(TICKETS_DIR)` before the first `-` (e.g. `TICKETS_DIR=/chat-service/logs/46bc14c5-13fb-498b-…` → `46bc14c5`).
-3. Write the pseudo-ticket JSON (via the `Write` tool, NOT Bash) to `${TICKETS_DIR}/${PSEUDO_ID}.json`:
-   ```json
-   {
-     "ticket_id": "TASK-SIMPLE-<suffix>",
-     "status": "in_progress",
-     "requires_supabase_migration": true,
-     "branch_name": "simple/<SESSION_SHORT_ID>",
-     "title": "<one-line summary>",
-     "type": "feat"
-   }
-   ```
 
 ### 4. Commit
 
@@ -180,3 +149,59 @@ FAILED: <one-line reason>
 - ❌ Add tests, change unrelated logic, refactor surrounding code.
 - ❌ Edit `/app/` directly (only `<WORKTREE_PATH>`).
 - ❌ Write an ADR (`adr/`) — ADRs are COMPLEX-only.
+
+---
+
+## MIGRATION MODE — deploy-time SQL generation
+
+Triggered when your spawn prompt starts with `ROLE: simple-developer (MIGRATION MODE)`. This is a **completely different job** from the cosmetic flow above: you are generating a Supabase SQL migration from the session-branch diff. The "no migrations/schema/multi-file" restrictions above do NOT apply here — overridden explicitly.
+
+### Mandatory first actions (in this exact order)
+
+You MUST perform these tool calls before producing ANY verdict. Returning `NO_MIGRATION_NEEDED` without executing them is a bug.
+
+1. **Load the skill** — `Skill({skill: "writing-migrations"})`. Follow it. It tells you how to compute the diff, identify schema-relevant changes, compare against already-deployed migrations, and write idempotent SQL.
+
+2. **Compute the diff** — `Bash("cd <WORKTREE_PATH> && git diff session-base/<SESSION_SHORT_ID>..session/<SESSION_SHORT_ID>")`. This is non-negotiable. The verdict `NO_MIGRATION_NEEDED` is only valid AFTER reading the actual diff and confirming that none of the changed files imply a schema change.
+
+3. **Inspect existing migrations** — `Bash("ls <WORKTREE_PATH>/supabase/migrations/")` and read the relevant schema files (`supabase/schemas/01_tables.sql`, etc.) to compute the incremental delta. Anything already represented in `supabase/migrations/` is already deployed — do not re-emit it.
+
+### Writing the SQL
+
+If the diff implies a schema change not yet covered by `supabase/migrations/`:
+- Write to `<WORKTREE_PATH>/supabase/migrations/<YYYYMMDDHHMMSS>_<SESSION_SHORT_ID>_migration_<slug>.sql` (timestamp via `Bash("date -u +%Y%m%d%H%M%S")`).
+- Use `IF NOT EXISTS` / `IF EXISTS`, correct types matching the TS types, FKs, RLS on new tables (never `USING (true)`).
+- Respect the view-recreation rule (`supabase/schemas/03_views.sql`) — see the skill for details.
+
+Then commit:
+```bash
+cd <WORKTREE_PATH> && git add supabase/migrations && git commit -m "migration(<SESSION_SHORT_ID>): <slug>"
+```
+
+### Output
+
+After the commit, stop and report:
+```
+DONE: branch=<SESSION_SHORT_ID>/simple migration=<filename> summary=<what the SQL does>
+```
+
+Or, only after running the mandatory first actions and confirming no schema impact:
+```
+NO_MIGRATION_NEEDED
+```
+
+Or on failure:
+```
+FAILED: <one-line reason>
+```
+
+### What changes vs. the cosmetic mode
+
+| Restriction (cosmetic mode) | MIGRATION MODE |
+|---|---|
+| ❌ Touch migrations or schema | ✅ Required — this is the whole job |
+| ❌ Add a new field, type, or entity | ✅ Allowed in SQL form (writing the column/table the session implies) |
+| ❌ Multi-file changes | ✅ Allowed (one SQL file + optional view recreation in the same migration) |
+| Single file Edit/Write | Write the migration file; do NOT edit any TS/TSX/CSS — the schema diff comes from the session branch, you only translate it to SQL |
+
+The SubagentStop validation hooks (typecheck, prettier, unit, e2e) still run after you stop. They should pass — you only touched SQL, not TS.

@@ -44,7 +44,7 @@ case "$TARGET" in
     echo -e "${GREEN}✓  Full mode — Supabase${NC}"
 
     # Start Supabase only if not already listening
-    if curl -s --max-time 2 -o /dev/null http://localhost:54321; then
+    if curl -s --max-time 2 -o /dev/null http://localhost:54321/rest/v1/; then
       echo -e "${GREEN}✓  Supabase already running${NC}"
     else
       echo ""
@@ -52,17 +52,17 @@ case "$TARGET" in
       echo -e "${YELLOW}(First run: ~2 min to pull images)${NC}"
       (cd "${APP_DIR}" && supabase start 2>&1 | grep -E "✓|✗|Error|Started|API URL") || true
 
-      echo -e "${BOLD}Waiting for Supabase API (localhost:54321)...${NC}"
+      echo -e "${BOLD}Waiting for Supabase PostgREST (localhost:54321/rest/v1/)...${NC}"
       RETRIES=120
-      until curl -s --max-time 2 -o /dev/null http://localhost:54321; do
+      until curl -s --max-time 2 -o /dev/null http://localhost:54321/rest/v1/; do
         RETRIES=$((RETRIES - 1))
         if [ $RETRIES -le 0 ]; then
-          echo -e "${RED}❌  Supabase did not respond after 120s${NC}"
+          echo -e "${RED}❌  Supabase PostgREST did not respond after 120s${NC}"
           exit 1
         fi
         sleep 1
       done
-      echo -e "${GREEN}✓  Supabase ready (localhost:54321)${NC}"
+      echo -e "${GREEN}✓  Supabase ready (PostgREST responding)${NC}"
     fi
     # Notify the chat-service so it updates process.env.MODE and broadcasts
     # a mode_changed WebSocket event to all connected browser tabs.

@@ -9,6 +9,8 @@ chat-service/tests/results/run-*.json
 # Personal Claude seed for the devcontainer (per-user data)
 /.devcontainer/claude-seed/settings.json
 /.devcontainer/claude-seed/memory/
+# Generated locally by the Dev Containers extension
+/.devcontainer/devcontainer-lock.json
 
 # Local Claude Code permissions (per-user)
 /.claude/settings.local.json

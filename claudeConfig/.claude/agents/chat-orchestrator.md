@@ -41,11 +41,11 @@ Check in this order — first match wins:
 
 | Category | When | Path |
 |---|---|---|
-| **SETUP** | The first user turn contains `<intent>setup</intent>` (the chat UI's "Define your business" button), OR a clear natural-language signal in any language meaning "set up my CRM" / "start from scratch" / "define my business". | STATE SETUP-INTERVIEW → STATE SETUP-PLAN → then STATE B → C → D → (POST-DEV) |
+| **SETUP** | The first user turn contains `<intent>setup</intent>` (the chat UI's "Define your business" button), OR a clear natural-language signal in any language meaning "set up my CRM" / "start from scratch" / "define my business". | STATE SETUP-INTERVIEW → STATE SETUP-PLAN → then STATE B → (POST-DEV) |
 | **MODE-SWITCH** | User asks to switch data mode: "use real data", "connect my database", "switch to demo", "use sample data", etc. — no code change, system operation only. | STATE MS-RUN → STATE MS-DONE |
 | **MEMORY** | user asks to remember a way of doing something or document a recurring friction (*"remember this"*, *"document this behavior"*, *"turn this into a rule"*) — no code change | STATE M-DOC → STATE M-DONE (documentator only, no team) |
 | **SIMPLE** | 1 cosmetic file OR 1 small field on an existing entity (schema + view + type + form + show, with or without i18n labels) OR 1 list filter reusing existing components. No import, no relations, no tests, no new custom component. | STATE S-DEV → (STATE S-REVIEW if the diff touches `supabase/`) → STATE S-MERGE → STATE S-DONE → (POST-DEV if a migration was written) |
-| **COMPLEX** | everything else (2+ fields, cross-entity, import/export, new entity, relations, new custom component, ambiguous) — **default** | STATE A → B → C → D → (POST-DEV) |
+| **COMPLEX** | everything else (2+ fields, cross-entity, import/export, new entity, relations, new custom component, ambiguous) — **default** | STATE A → B → (POST-DEV) |
 
 When the user message is a **reply to a pending PD-ASK or PD-LIVE-ASK**
 question (e.g. *"yes"*, *"oui"*, *"vas-y"*, *"deploy"*, *"non"*, *"not now"*),
@@ -109,19 +109,29 @@ MODE-SWITCH: STATE MS-RUN (turn N)   →  STATE MS-DONE (turn N+1)
 MEMORY:      STATE M-DOC (turn N)    →  STATE M-DONE (turn N+1)
 SIMPLE:      STATE S-DEV (turn N)    →  (STATE S-REVIEW if diff touched supabase/)
                                       →  STATE S-MERGE
-                                      →  STATE S-DONE   [POST-DEV if a migration was written]
-COMPLEX:     STATE A (turn N)        →  STATE B (turn N+1)
-                                      →  STATE C (turns N+2..N+M)
-                                      →  STATE D (turn N+M+1)
+                                      →  STATE S-DONE
+                                      →  (if schema diff: STATE PD-RESPOND → PD-MIG-DEV → … → PD-DONE)
+                                      →  (if cosmetic only: STATE DONE)
+COMPLEX:     STATE A (turn N)        →  STATE B (turns N+1..N+M, event-driven loop:
+                                         Step 1 dispatch, Step 2 react, Step 3 wave done,
+                                         Step 4 promotion to main)
                                       →  (POST-DEV check — see below)
                                       →  STATE DONE
 
-POST-DEV (when one or more merged tickets in this session flagged
-          requires_supabase_migration: true and have not been deployed yet):
-             STATE PD-ASK (turn N)   →  STATE PD-DEPLOY (turn N+1, if user agreed)
-                                      →  STATE PD-LIVE-ASK (turn N+2, if demo + deploy ok)
-                                      →  STATE PD-LIVE-SWITCH (turn N+3, if user agreed)
-                                      →  STATE PD-DONE
+POST-DEV (at the end of COMPLEX, SETUP, and schema-touching SIMPLE requests):
+             COMPLEX/SETUP only: STATE PD-ASK (turn N) →  STATE PD-RESPOND (turn N+1)
+             SIMPLE with schema diff: skips PD-ASK (satisfaction question already sent in S-DONE)
+                                      →  STATE PD-RESPOND (next user turn)
+             if satisfied + non-empty schema diff:
+                                         →  STATE PD-MIG-DEV (turn N+2)
+                                         →  STATE PD-MIG-REVIEW
+                                         →  STATE PD-MIG-MERGE
+                                         →  STATE PD-DEPLOY
+                                         →  STATE PD-LIVE-ASK (demo mode only)
+                                         →  STATE PD-LIVE-SWITCH (if user agreed)
+                                         →  STATE PD-DONE
+             if satisfied + empty diff: →  STATE DONE
+             if wants adjustment:       →  re-enter CLASSIFICATION → PD-ASK again
 ```
 
 **Do not skip states. Do not combine states.**
@@ -178,25 +188,20 @@ Entered immediately after `VALIDATED` in the same turn (no user message needed):
 **End this turn.**
 
 → On next turn (after planner returns), enter the standard STATE B —
-treat it like any COMPLEX wave. The standard STATE C/D loop applies. After
-the last wave finishes, enter STATE SETUP-DONE instead of returning to the
-prompt.
+treat it like any COMPLEX wave. The standard STATE B event-driven loop applies
+(Steps 1–4). After the last wave finishes, enter STATE SETUP-DONE instead of
+running the COMPLEX POST-DEV reply.
 
 ---
 
 ### STATE SETUP-DONE — wrap up the setup
 
-Reached only from STATE D's SETUP branch (last wave just torn down).
+Reached from STATE B's SETUP branch once the last wave is done — Step 4 after the session branch is promoted to main, or Step 3 directly if nothing merged.
 
-1. Run the POST-DEV check (see *POST-DEV — Supabase deployment offer* below).
-2. Build the SETUP recap, in the user's language, equivalent to:
+1. Build the SETUP recap, in the user's language, equivalent to:
    > *"Your CRM is scoped and the first features are in place. You can now
    > ask me for regular changes."*
-3. Send the reply:
-   - Detection returned empty → send the recap and enter STATE DONE.
-   - Detection returned pending ticket ids → append the PD-ASK question
-     to the recap and enter STATE PD-ASK. Keep the pending ticket ids in
-     your context for STATE PD-DEPLOY.
+2. Send the recap, then enter STATE PD-ASK (the open satisfaction question).
 
 **End.**
 
@@ -275,7 +280,7 @@ For SIMPLE only. No team, no planner, no skill on the orchestrator's side.
    Agent({
      subagent_type: "simple-developer",
      description: "SIMPLE: <one-line summary>",
-     prompt: "ROLE: simple-developer\nCHANGE_REQUEST: <user's request, verbatim>\nWORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/simple\nBRANCH_NAME: simple/<SESSION_SHORT_ID>\nTICKETS_DIR: <absolute per-session path>"
+     prompt: "ROLE: simple-developer\nCHANGE_REQUEST: <user's request, verbatim>\nWORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/simple\nBRANCH_NAME: <SESSION_SHORT_ID>/simple\nTICKETS_DIR: <absolute per-session path>"
    })
    ```
    The worktree and branch are fixed per session — the `setup-worktree` hook creates them automatically before the agent starts.
@@ -302,7 +307,7 @@ Only entered when the simple-developer's diff touched `supabase/` (raw SQL, migr
    Agent({
      subagent_type: "quality-reviewer",
      description: "SIMPLE review: <one-line summary>",
-     prompt: "ROLE: quality-reviewer (SIMPLE mode — single-shot, no team)\nWORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/simple\nBRANCH_NAME: simple/<SESSION_SHORT_ID>\nTICKETS_DIR: <absolute per-session path>\n\nFollow the SIMPLE workflow in your agent file. Apply Part A.6b (view migrations), Part B.1 (RLS), Part B.3 (injection in raw SQL). Return text only: \"APPROVED\" or \"BLOCKED:\\n- ...\". No SendMessage."
+     prompt: "ROLE: quality-reviewer (SIMPLE mode — single-shot, no team)\nWORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/simple\nBRANCH_NAME: <SESSION_SHORT_ID>/simple\nTICKETS_DIR: <absolute per-session path>\n\nFollow the SIMPLE workflow in your agent file. Apply Part A.6b (view migrations), Part B.1 (RLS), Part B.3 (injection in raw SQL). Return text only: \"APPROVED\" or \"BLOCKED:\\n- ...\". No SendMessage."
    })
    ```
 3. One text line: *"Double-checking the database change..."*
@@ -321,6 +326,7 @@ The dev's (or reviewer's) final response is in your context.
 2. If reviewer returned `BLOCKED:` → already handled in STATE S-REVIEW (you should not be here).
 3. If dev returned `DONE: branch=<X>...` and (review skipped OR review `APPROVED`) → dispatch merger (no `team_name`, no SendMessage):
    ```
+   Bash("touch /tmp/notified-merger-<SESSION_SHORT_ID>-simple")
    Agent({
      subagent_type: "merger",
      description: "Merge SIMPLE branch <X>",
@@ -337,15 +343,16 @@ The dev's (or reviewer's) final response is in your context.
 
 ```
 ROLE: merger (SIMPLE mode — single-shot, no team)
-BRANCH_NAME: simple/<SESSION_SHORT_ID>
+SESSION_SHORT_ID: <SESSION_SHORT_ID>
+BRANCH_NAME: <SESSION_SHORT_ID>/simple
 WORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/simple
-
-Follow the WORKFLOW in your agent file (merger.md). Use the SIMPLE-mode columns
-(return text output; update the ticket status if a `TASK-SIMPLE-*.json` pseudo-ticket
-exists in `${TICKETS_DIR}`, otherwise skip the ticket-update step).
 TICKETS_DIR: <absolute per-session path>
+
+Follow the WORKFLOW in your agent file (merger.md). Use the SIMPLE-mode columns.
 Output: "DONE: commit=<short sha>. files=[<paths>]" OR "FAILED: <reason>"
 ```
+
+The SIMPLE merger does Stage A (branch → session branch) then PROMOTION (Stage B: session branch → main) in one shot, so its `DONE` sha is the promotion commit on main. No separate `promote:` handshake is needed for SIMPLE.
 
 ---
 
@@ -357,21 +364,22 @@ The merger's final response (or dev's failure) is in your context.
    (*"Something didn't work. Want me to try a different approach?"*) and enter STATE DONE.
 2. On `DONE` → run POST-DEV detection:
    ```
-   Bash("pending-deploys ${TICKETS_DIR}")
+   Bash("pending-deploys --app /app --session <SESSION_SHORT_ID>")
    ```
-   This picks up any `TASK-SIMPLE-<suffix>.json` the dev wrote when the change
-   touched a migration.
+   This checks whether the session branch diff touches schema-relevant files
+   (entity types, dataProvider, views). Empty output means a cosmetic-only
+   change — no migration needed.
 3. Build the reply in user's language, plain words — e.g. *"Done — take a look in the demo."*
 4. Branch on the detection output:
    - Empty → send the reply, enter STATE DONE.
-   - Non-empty (one or more pending pseudo-ticket ids) → append the PD-ASK question
-     to the reply and enter STATE PD-ASK. Keep the pending ticket ids in your
-     context for STATE PD-DEPLOY.
+   - Non-empty (one or more schema-relevant file paths) → append the PD-ASK satisfaction
+     question to the reply (do NOT send a separate PD-ASK turn — the question is already
+     embedded here), end this turn, and enter STATE PD-RESPOND.
 
-From PD-ASK onward, the existing POST-DEV state machine (PD-RESPOND → PD-DEPLOY →
-PD-LIVE-ASK → PD-LIVE-SWITCH → PD-DONE) runs unchanged. `apply-migrations.sh`
-already accepts `TASK-*` ids, so `TASK-SIMPLE-<suffix>` flows through without
-script changes.
+From PD-RESPOND onward, the existing POST-DEV state machine (PD-MIG-DEV →
+PD-MIG-REVIEW → PD-MIG-MERGE → PD-DEPLOY → PD-LIVE-ASK → PD-LIVE-SWITCH → PD-DONE)
+runs unchanged. PD-RESPOND will re-run `pending-deploys` when the user confirms
+satisfaction — it will return non-empty, triggering PD-MIG-DEV as expected.
 
 **End.**
 
@@ -451,6 +459,7 @@ Each completion of a background agent fires a new background turn for you. In th
    - developer: `DONE: branch=... commit=... files=[...]` or `FAILED: ...`
    - quality-reviewer / test-validator: `APPROVED` or `REJECTED: ...`
    - merger: `DONE: TASK-XXX commit=...` or `FAILED: TASK-XXX ...`
+   - the promotion merger `merger-promote`: `DONE: PROMOTE commit=...` or `FAILED: PROMOTE ...` — handled by Step 4, NOT by the per-ticket transition table below.
    - any other shape → treat as `FAILED` for that role.
 3. Update the mental state for the relevant ticket per the transitions below.
 4. Dispatch the next agent(s) for that ticket (background, in the same assistant message), or — if no more dispatches are needed for any ticket — go to Step 3.
@@ -491,9 +500,28 @@ When every ticket of the wave is in a terminal state:
 
 1. Decide whether more waves remain (planner output may have other waves with `dependencies: [TASK-XXX]`).
 2. If more waves remain → in the SAME assistant message: emit a short business-language summary of this wave's per-ticket outcomes, then immediately re-enter Step 1 with the next wave's tickets (dispatch all N developers of wave N+1 with `run_in_background: true`, then end the turn). The mental state map carries forward — finished tickets stay `DONE`/`FAILED`, new wave tickets initialize at `{stage: "DEV", retries: 0}`.
-3. If this was the last wave:
-   - SETUP path (planner was given `SETUP_MODE=true`) → go directly to STATE SETUP-DONE in this same turn.
-   - COMPLEX path → run the POST-DEV check (`Bash("pending-deploys ${TICKETS_DIR}")`), then reply per-ticket. If pending deploys, append the PD-ASK question and enter STATE PD-ASK; otherwise enter STATE DONE.
+3. If this was the last wave, **promote the session branch to main before wrapping up** (both SETUP and COMPLEX). Per-ticket mergers only ran Stage A (each task → `session/<SESSION_SHORT_ID>`); nothing has reached `main` yet.
+   - If at least one ticket reached `DONE` (i.e. merged into the session branch): dispatch the promotion merger (background) and end the turn — its completion is handled in Step 4:
+     ```
+     Agent({
+       subagent_type: "merger",
+       name: "merger-promote",
+       description: "Promote session branch to main",
+       prompt: "ROLE: merger\nMODE: promote\nSESSION_SHORT_ID: <SESSION_SHORT_ID>",
+       run_in_background: true
+     })
+     ```
+   - If **every** ticket FAILED (nothing merged into the session branch): skip promotion entirely. SETUP path → enter STATE SETUP-DONE; COMPLEX path → reply per-ticket and enter STATE DONE.
+
+#### Step 4 — Promotion complete (last wave)
+
+`merger-promote` is the promotion-only merger from Step 3 — it is NOT a per-ticket merger, so do not run the Step 2 transition table for it. On the background turn where it returns:
+
+- `DONE: PROMOTE commit=...` → the session branch is now on `main`.
+  - SETUP path (planner was given `SETUP_MODE=true`) → enter STATE SETUP-DONE.
+  - COMPLEX path → run the POST-DEV check (`Bash("pending-deploys ${TICKETS_DIR}")`), then reply per-ticket. If pending deploys, append the PD-ASK question and enter STATE PD-ASK; otherwise enter STATE DONE.
+- `FAILED: PROMOTE promote conflict: files=[...]` → emit ONE non-technical line (*"Synchronising your changes…"*) and enter STATE PD-PROMOTE-FIX.
+- `FAILED: PROMOTE ...` (any other reason) → reply with one non-technical failure line (*"I couldn't finalise your changes — your work is saved but isn't live yet."*) and enter STATE DONE.
 
 #### Safety bounds
 
@@ -504,6 +532,8 @@ When every ticket of the wave is in a terminal state:
 - Count your background turns by inspecting your conversation history (number of background turns since the initial Step 1 turn).
 - Malformed agent output (does not match `DONE: ...` / `FAILED: ...` / `APPROVED` / `REJECTED: ...`) is treated as `FAILED` for the corresponding stage.
 
+---
+
 ### STATE DONE — terminal
 
 Once the wave is complete and no more waves remain, you are in STATE DONE.
@@ -512,88 +542,106 @@ Any further incoming messages (residual background-agent notifications) are sile
 
 ---
 
-## POST-DEV — Supabase deployment offer
+### STATE PD-PROMOTE-FIX — resolve a promotion conflict
+
+Reached when the merger reports `promote conflict`. ONE assistant message:
+
+1. Dispatch a resolver (no team):
+   ```
+   Agent({
+     subagent_type: "developer",
+     description: "Resolve session->main promotion conflict",
+     prompt: "ROLE: promotion-conflict-resolver (gated /app exception)\nSESSION_SHORT_ID: <id>\nUnder the promotion lock, in /app on main, re-run the merge and resolve it honouring BOTH sides, then commit. Run:\ncd /app && flock /app/.promote.lock bash -c 'git merge --no-ff session/<id> || true'\nResolve the conflicting files, then complete the merge with a single locked commit:\nflock /app/.promote.lock bash -c 'git add -A && git commit --no-edit'\nKnown limitation: between the initial merge and this final locked commit, the lock is briefly released while you resolve files; a concurrent promotion in that window is a rare, accepted edge case.\nOutput: RESOLVED: commit=<sha> or FAILED: <reason>. Never modify anything under session/<id>."
+   })
+   ```
+2. (no new user line — the *"Synchronising your changes…"* line was already shown when the conflict was detected)
+
+**End this turn.** On the next turn:
+- Resolver returned `RESOLVED: …` → the session branch is now on `main`. Continue where the conflict interrupted you:
+  - from STATE PD-MIG-MERGE (migration round) → STATE PD-DEPLOY.
+  - from STATE B Step 4, SETUP path → STATE SETUP-DONE.
+  - from STATE B Step 4, COMPLEX path → run the POST-DEV check (`Bash("pending-deploys ${TICKETS_DIR}")`), reply per-ticket, then enter STATE PD-ASK (or STATE DONE if no pending deploys).
+- Resolver returned `FAILED: …` → non-technical "I hit a snag finalising your changes." and stop.
+
+---
+
+## POST-DEV — satisfaction check + optional migration round
 
 This sub-flow runs at the end of any flow that produced merged tickets,
-i.e. STATE B Step 3 (COMPLEX, last wave) and STATE SETUP-DONE (SETUP). It does NOT run for:
-- SIMPLE (single-file cosmetic, can't touch the schema)
+i.e. STATE B Step 3 (COMPLEX, last wave), STATE SETUP-DONE (SETUP), and STATE
+S-DONE (SIMPLE, conditional on the session-branch diff touching schema-relevant
+files). It does NOT run for:
 - MEMORY (no code change)
 - MODE-SWITCH (no code change)
-- SIMPLE cosmetic-only changes (no migration → no pseudo-ticket → detection returns empty)
+- SIMPLE cosmetic-only changes (no schema file touched → detection returns empty)
 - failed dev waves where no ticket reached `status: merged`.
 
-### Detection (one Bash call inside STATE B Step 3 / STATE SETUP-DONE)
+### STATE PD-ASK — open satisfaction question (COMPLEX and SETUP flows only)
 
-The orchestrator never reads migration files or git history — only ticket flags. Deployed ids are tracked in `${TICKETS_DIR}/.deploy-applied` (one `TASK-XXX` per line; missing file = nothing deployed yet).
+**SIMPLE flows skip this state** — the satisfaction question is embedded in the S-DONE reply and the orchestrator enters STATE PD-RESPOND directly on the next user turn.
 
-```
-Bash("pending-deploys ${TICKETS_DIR}")
-```
+Always ask, in the user's language, plain words only — never mention database,
+migration, deploy, Supabase:
 
-Prints `TASK-XXX` ids that are `status: merged`, `requires_supabase_migration: true`, and not yet in `.deploy-applied`.
+> *"Here are your changes — does everything look the way you want, or should I adjust something?"*
 
-- Empty output → reply normally, then enter STATE DONE.
-- Non-empty output → carry the pending ids in context, enter STATE PD-ASK.
+**End this turn.** → STATE PD-RESPOND on the next user turn.
 
-### STATE PD-ASK — offer to deploy to the real database
+### STATE PD-RESPOND
 
-Append to the success reply, in the user's language, plain words only —
-never name Supabase, migrations, SQL, ticket ids, or anything technical:
-
-> *"Some of these changes affect how your data is stored. Want me to
-> apply them to your real database now?"*
-
-**End this turn.**
-
-→ Enter STATE PD-RESPOND on the next user turn.
-
-### STATE PD-RESPOND — interpret the user reply
-
-The user message is in your context. Classify it (first match wins):
-
-| Meaning | Next state |
+| Meaning | Next |
 |---|---|
-| Clear agreement (yes, ok, go ahead, deploy, apply, …) | STATE PD-DEPLOY |
-| Clear refusal (no, not now, skip, leave it, …) | STATE PD-SKIP |
-| A new code-change request, a retake, or a correction | Re-enter CLASSIFICATION on this turn — do NOT touch `.deploy-applied`. After the new dev wave, POST-DEV will detect the same pending tickets (plus any new ones) and re-ask. |
-| Ambiguous | Reply once, in the user's language, equivalent to *"Just to be sure — do you want me to apply those changes to your real database now? (yes / no / I want to change something first)"*. End. Stay in STATE PD-RESPOND. |
+| Wants to adjust / new request | Re-enter CLASSIFICATION (new request, accumulates on session/<SESSION_SHORT_ID>); ask PD-ASK again after. |
+| Satisfied (yes, perfect, looks good…) | Run `Bash("pending-deploys --app /app --session <SESSION_SHORT_ID>")`. Empty output → reply "Great, everything's set." and STATE DONE. Non-empty → emit "Saving your changes — this can take a moment." and enter STATE PD-MIG-DEV. |
+| Ambiguous | Re-ask the open question once; stay in PD-RESPOND. |
 
-### STATE PD-DEPLOY — run the migration
+### STATE PD-MIG-DEV — write the migration
 
-ONE assistant message:
+Dispatch ONE simple-developer (no team) in migration mode:
 
-1. One text line in the user's language, equivalent to:
-   *"Applying the changes to your real database — this can take a moment on first run."*
-2. `Bash("apply-migrations <SESSION_SHORT_ID> TASK-001 TASK-002 ...")`
-   — first arg is your `SESSION_SHORT_ID`, then every pending ticket id
-   from STATE PD-ASK. The script promotes only the migration files
-   matching `*_<SESSION_SHORT_ID>_<TASK-XXX>_*.sql` from
-   `supabase/migrations-pending/` to `supabase/migrations/` (one
-   commit), then applies them via `supabase migration up`.
+```
+Agent({ subagent_type: "simple-developer",
+  description: "Generate migrations from session diff",
+  prompt: "ROLE: simple-developer (MIGRATION MODE)\nSESSION_SHORT_ID: <id>\nWORKTREE_PATH: /app/worktrees/<id>/simple\nBRANCH_NAME: <id>/simple\nInvoke Skill({skill: \"writing-migrations\"}) and follow it. If no schema change, output NO_MIGRATION_NEEDED." })
+```
 
-**End this turn.** The script output is in your context on the next turn.
+One line: *"Saving your changes…"*. **End turn.** SubagentStop hooks run.
+→ If the dev returned `NO_MIGRATION_NEEDED` → reply "Everything's set." → STATE DONE. Else → STATE PD-MIG-REVIEW.
 
-→ Next turn:
-- Exit code 0 → append the deployed ticket ids to `.deploy-applied`:
-  - `Read("${TICKETS_DIR}/.deploy-applied")` (ignore if missing).
-  - Build the new content = old content + the pending ticket ids you
-    carried into STATE PD-DEPLOY, one id per line, no duplicates, trailing
-    newline.
-  - `Write("${TICKETS_DIR}/.deploy-applied", <new content>)`.
-  - Then route by mode:
-    - `MODE = demo` → STATE PD-LIVE-ASK.
-    - `MODE = full` → STATE PD-DONE, reply *"Your real database is up to
-      date."*
-- Non-zero exit → STATE PD-DONE with the failure reply. Do **not** touch
-  `.deploy-applied` — leave the tickets as pending so the next dev wave
-  re-asks.
+### STATE PD-MIG-REVIEW — review the SQL
+
+CRITICAL: ONE Agent call only. Dispatch once, end the turn, wait for the result.
+
+Dispatch ONE quality-reviewer (no team) with `MODE: migration-review` and the migration file paths. **End turn.**
+→ `APPROVED` → STATE PD-MIG-MERGE. `BLOCKED` → re-dispatch simple-developer (PD-MIG-DEV) with the issues; loop.
+
+### STATE PD-MIG-MERGE — merge + promote
+
+Dispatch the SIMPLE merger for branch `<SESSION_SHORT_ID>/simple` (Stage A + promotion to main):
+
+```
+Bash("touch /tmp/notified-merger-<SESSION_SHORT_ID>-simple")
+Agent({
+  subagent_type: "merger",
+  description: "Merge SIMPLE branch <SESSION_SHORT_ID>/simple with migration",
+  prompt: "ROLE: merger (SIMPLE mode — single-shot, no team)\nSESSION_SHORT_ID: <SESSION_SHORT_ID>\nBRANCH_NAME: <SESSION_SHORT_ID>/simple\nWORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/simple\nTICKETS_DIR: <absolute per-session path>\n\nFollow the WORKFLOW in your agent file (merger.md). Use the SIMPLE-mode columns.\nOutput: \"DONE: commit=<short sha>. files=[<paths>]\" OR \"FAILED: <reason>\""
+})
+```
+
+**End turn.**
+→ `DONE` → STATE PD-DEPLOY. `FAILED`/`promote conflict` → STATE PD-PROMOTE-FIX.
+
+### STATE PD-DEPLOY — apply
+
+One line: *"Applying your changes — this can take a moment on first run."*
+`Bash("apply-migrations")` (timeout 240000 ms).
+→ exit 0: demo mode → STATE PD-LIVE-ASK; full mode → STATE PD-DONE ("Your changes are saved."). Non-zero → PD-DONE with a non-technical failure line.
 
 ### STATE PD-LIVE-ASK — offer to switch the app to real data
 
 Demo mode only. Reply in the user's language, plain words:
 
-> *"Your real database is up to date. Want to switch the app over to your
-> real data now? You can keep using sample data otherwise."*
+> *"Your data is saved. Want to switch the app over to your real data now? You can keep using sample data otherwise."*
 
 **End this turn.**
 
@@ -605,7 +653,7 @@ Demo mode only. Reply in the user's language, plain words:
 |---|---|
 | Clear agreement | STATE PD-LIVE-SWITCH |
 | Clear refusal | STATE PD-DONE with reply *"OK — I'll leave the app on sample data. Tell me when you want to switch."* |
-| A new code-change request | Re-enter CLASSIFICATION. `.deploy-applied` already lists the deployed tickets, so the next POST-DEV will only ask about migrations introduced by the new wave. |
+| A new code-change request | Re-enter CLASSIFICATION; ask PD-ASK again after the new wave. |
 | Ambiguous | Re-ask once, then stay in STATE PD-LIVE-RESPOND. |
 
 ### STATE PD-LIVE-SWITCH — switch the app to full mode
@@ -619,17 +667,7 @@ Same as STATE MS-RUN, target `full`:
 
 → Next turn: STATE PD-DONE.
 - Success → *"Done — the CRM is now using your real data."*
-- Failure → *"The switch didn't complete. Your real database is fine, but the app is still on sample data. Want me to try again?"*
-
-### STATE PD-SKIP — user declined the deploy
-
-Reply, in the user's language:
-
-> *"OK, I'll leave your real database alone for now. The code is saved
-> and I'll offer to deploy again next time you change something."*
-
-`.deploy-applied` is intentionally **not** updated, so the same tickets
-stay pending and the question reappears after the next dev wave. **End.**
+- Failure → *"The switch didn't complete. Your data is safe, but the app is still on sample data. Want me to try again?"*
 
 ### STATE PD-DONE — POST-DEV wrap
 
@@ -641,6 +679,7 @@ Already wraps every successful PD branch with the user-facing reply. After reply
 
 - ❌ `git merge`, `git checkout master/main`, `git pull`, `git worktree remove` from your own Bash — only the merger does this.
 - ✅ Exception: during SETUP-INTERVIEW, you may run `cd /app && git add docs/project-context.json && git commit -m "chore(setup): …"` on main. This is the only git write operation you are allowed.
+- ✅ Exception: a `promotion-conflict-resolver` developer may `git add`/`git commit` a merge resolution directly in `/app` on main, under `/app/.promote.lock`. This is the only case any agent edits `/app` on main.
 - ❌ Merge yourself if merger fails or doesn't report → report failure, stop.
 - ❌ Dispatch the next stage agent for a ticket before the current stage's background agent has returned — wait for the completion event (the next background turn).
 - ❌ Treat a malformed agent output as anything other than `FAILED` for that stage — never guess intent.

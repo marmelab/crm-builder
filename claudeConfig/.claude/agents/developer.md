@@ -44,22 +44,14 @@ The orchestrator parses this line by regex. Any other format is treated as `FAIL
 1. **Read ticket** at `TICKET_FILE`, then `/app/MEMORY.md` (project domain vocabulary, custom-field semantics, workflow constraints — small by design, read whole), then past ADRs for the same domain (`ls /app/adr/`).
 2. **Implement** in the worktree — Edit / Write / Bash. Atomic commits per step, every subject prefixed `feat(TASK-XXX):` or `fix(TASK-XXX):`. See _Implementation rules_ below.
 3. **Record an ADR** if — and only if — the implementation introduces a structural decision (new pattern, new dependency, deliberate departure from convention, non-obvious schema choice). Skip by default. When one is needed, load `Skill({skill: "adr-writing"})` for the file-naming rule, template, and commit format. The ADR lands inside your worktree (the merger ships it to `/app/adr/` like any other change).
-4. **Rebase onto current main before review** — other tasks may have merged while you were implementing:
+4. **Rebase onto the session branch before review** — sibling tasks merge into `session/<SESSION_SHORT_ID>` (not main) while you work, so rebase onto it. Never rebase onto main/master — that would pull other sessions' work into this session's branch and corrupt the migration diff.
    ```bash
-   ls /app/docs/reflections/          # list past sessions
-   ls /app/docs/reflections/<session>/ # list tasks in a session
-   ```
-   Read the most recent files that look domain-relevant (same component, same feature area).
-2. **Implement** in the worktree — Edit / Write / Bash. Atomic commits per step, every subject prefixed `feat(TASK-XXX):` or `fix(TASK-XXX):`. See Mode 1 below.
-3. **Rebase onto current master** — other tasks may have merged while you were implementing:
-   ```bash
-   cd <WORKTREE_PATH> && git fetch origin && git rebase origin/master
+   cd <WORKTREE_PATH> && git rebase session/<SESSION_SHORT_ID>
    ```
    Resolve any conflicts, then `git add` + `git rebase --continue`. Commit the result if needed.
-   Only proceed once `git status` shows a clean tree on top of the latest master.
-4. **Write reflection** — after implementation is complete and committed:
-   - Write `/app/docs/reflections/<SESSION_SHORT_ID>/<TASK_ID>.md` — absolute path, outside the worktree, directly on the shared volume. `SESSION_SHORT_ID` is the first segment of your session UUID (derive it from `WORKTREE_PATH`, e.g. `/app/worktrees/58c3f4c7/TASK-001` → `58c3f4c7`). Create the directory if needed. Load `Skill({skill: "reflection-writing"})` for the format.
-5. **Emit OUTPUT CONTRACT** — your very last line of output:
+   Only proceed once `git status` shows a clean tree on top of the latest `session/<SESSION_SHORT_ID>`.
+5. **Write reflection** — after implementation is complete and committed: write `/app/docs/reflections/<SESSION_SHORT_ID>/<TASK_ID>.md` — absolute path, outside the worktree, directly on the shared volume. `SESSION_SHORT_ID` is the first segment of your session UUID (derive it from `WORKTREE_PATH`, e.g. `/app/worktrees/58c3f4c7/TASK-001` → `58c3f4c7`). Create the directory if needed. Load `Skill({skill: "reflection-writing"})` for the format. Skip on retry attempts.
+6. **Emit OUTPUT CONTRACT** — your very last line of output:
    ```
    DONE: branch=<BRANCH_NAME> commit=<short_sha> files=[<comma-separated modified paths, relative to repo root>]
    ```
@@ -115,28 +107,11 @@ Domain skills — load on demand with `Skill({skill: "..."})` when your task nee
 Always produce the runtime artefacts the project needs:
 
 - TypeScript types + fake-data generators (what the FakeRest demo serves).
-- A SQL migration when the ticket flag `requires_supabase_migration: true`
-  is set (see _Supabase-migration flag_ below).
 
-Never run `supabase` CLI commands yourself. The orchestrator promotes and
-applies migrations after the user explicitly agrees.
-
-## Supabase-migration flag on the ticket
-
-The ticket's `requires_supabase_migration` field is set by the planner.
-Treat it as your contract:
-
-- `true` → write the SQL migration to
-  `supabase/migrations-pending/<YYYYMMDDHHMMSS>_<SESSION_SHORT_ID>_<TASK-XXX>_<short-slug>.sql`
-  (e.g. `20260518091200_46bc14c5_TASK-001_add_invoices.sql`).
-  `SESSION_SHORT_ID` = first segment of `WORKTREE_PATH` (e.g. `/app/worktrees/46bc14c5/TASK-001` → `46bc14c5`).
-  Use `date -u +%Y%m%d%H%M%S` for the timestamp. Keep the `TASK-XXX` hyphen; only `<short-slug>` uses underscores.
-  The `SESSION_SHORT_ID` scopes the migration to this session so the deploy script doesn't promote a refused migration from another session.
-- `false` → do not touch `supabase/migrations*/`.
-
-**View update rule** — when a migration adds or removes a column, check `supabase/schemas/03_views.sql` for any view selecting from that table. If one exists, recreate it with `CREATE OR REPLACE VIEW`, new column appended at the **absolute end** of the SELECT list — after all existing columns, including computed AS aliases. PostgreSQL rejects any ordinal shift (error 42P16). PostgREST queries the view, not the table — a missing update makes the column invisible to the app.
-
-If the planner's flag is wrong (you can avoid the migration, or you discover you need one), flip it in `${TICKET_FILE}` before emitting the OUTPUT CONTRACT — the only field you may change besides `status`.
+**Never write SQL migrations.** Migrations are generated on demand at deploy
+time by a dedicated migration round (see the `writing-migrations` skill), not
+during feature tickets. Never run `supabase` CLI commands. Never touch
+`supabase/migrations*/`.
 
 ---
 
