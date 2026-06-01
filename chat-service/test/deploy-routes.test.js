@@ -95,6 +95,16 @@ function validConfig(overrides = {}) {
   };
 }
 
+// Poll until the in-flight deploy settles (running flips back to false) so the
+// next test starts from a clean state. A couple of tests import a fresh module
+// instance, so the target is overridable; intervalMs is just polling cadence.
+function drainDeploy(module = mod, intervalMs = 30) {
+  return new Promise((resolve) => {
+    const tick = () => (module.deployState.running ? setTimeout(tick, intervalMs) : resolve());
+    tick();
+  });
+}
+
 test('GET /api/deploy/status — unconfigured: returns configured=false, never leaks secrets', async () => {
   // No config file yet.
   await rm(process.env.DEPLOY_CONFIG_PATH, { force: true });
@@ -271,11 +281,30 @@ test('POST /api/deploy/run — 409 when deploy already running', async () => {
   assert.equal(JSON.parse(res2.body).error, 'deploy_in_progress');
 
   // Wait for the first run to drain so beforeEach in the next test sees a
-  // settled state. Poll the in-memory flag.
-  await new Promise((resolve) => {
-    const tick = () => (mod.deployState.running ? setTimeout(tick, 50) : resolve());
-    tick();
-  });
+  // settled state.
+  await drainDeploy();
+});
+
+test('POST /api/deploy/run — two requests in the same tick: exactly one wins (TOCTOU guard)', async () => {
+  await writeFile(process.env.DEPLOY_CONFIG_PATH, JSON.stringify(validConfig()), { mode: 0o600 });
+
+  // Fire BOTH before awaiting either — they race through the running-flag check
+  // in the same tick. The guard claims the slot synchronously before the first
+  // `await loadConfig()`, so the first request wins and the second bounces with
+  // 409 (no CLI delay needed — the race is decided before any await). Pre-fix
+  // both saw running===false across the await and both 202'd, launching
+  // concurrent deploys against the live project — the regression we lock down.
+  const res1 = makeRes();
+  const res2 = makeRes();
+  const p1 = mod.handleDeployRun(makeReq('POST'), res1);
+  const p2 = mod.handleDeployRun(makeReq('POST'), res2);
+  await Promise.all([p1, p2, res1.done, res2.done]);
+
+  assert.equal(res1.statusCode, 202, 'the first request starts the deploy');
+  assert.equal(res2.statusCode, 409, 'the second request is rejected');
+  assert.equal(JSON.parse(res2.body).error, 'deploy_in_progress');
+
+  await drainDeploy();
 });
 
 test('POST /api/deploy/run — happy path: tail captures lines, deploy_done fires, lastDeployAt stamped', async () => {
@@ -287,10 +316,7 @@ test('POST /api/deploy/run — happy path: tail captures lines, deploy_done fire
   assert.equal(res.statusCode, 202);
 
   // Wait for the child to finish.
-  await new Promise((resolve) => {
-    const tick = () => (mod.deployState.running ? setTimeout(tick, 30) : resolve());
-    tick();
-  });
+  await drainDeploy();
 
   assert.equal(mod.deployState.ok, true);
   assert.equal(mod.deployState.exitCode, 0);
@@ -321,10 +347,7 @@ test('POST /api/deploy/run — failure path: exitCode propagated, full error on 
     await res.done;
     assert.equal(res.statusCode, 202);
 
-    await new Promise((resolve) => {
-      const tick = () => (mod.deployState.running ? setTimeout(tick, 30) : resolve());
-      tick();
-    });
+    await drainDeploy();
   } finally {
     console.error = origErr;
   }
@@ -355,10 +378,7 @@ test('POST /api/deploy/run — missing supabase binary finalizes instead of hang
     await res.done;
     assert.equal(res.statusCode, 202);
 
-    await new Promise((resolve) => {
-      const tick = () => (freshMod.deployState.running ? setTimeout(tick, 20) : resolve());
-      tick();
-    });
+    await drainDeploy(freshMod);
 
     assert.equal(freshMod.deployState.running, false, 'deploy must not hang on a missing binary');
     assert.equal(freshMod.deployState.ok, false);
@@ -405,10 +425,7 @@ test('POST /api/deploy/run — redacts dbPassword from the mirrored Supabase out
     const res = makeRes();
     await mod.handleDeployRun(makeReq('POST'), res);
     await res.done;
-    await new Promise((resolve) => {
-      const tick = () => (mod.deployState.running ? setTimeout(tick, 30) : resolve());
-      tick();
-    });
+    await drainDeploy();
   } finally {
     console.error = origErr;
   }
@@ -476,10 +493,7 @@ test('GET /api/deploy/events — streams started/log/done live during a deploy, 
   const runRes = makeRes();
   await mod.handleDeployRun(makeReq('POST'), runRes);
   await runRes.done;
-  await new Promise((resolve) => {
-    const tick = () => (mod.deployState.running ? setTimeout(tick, 30) : resolve());
-    tick();
-  });
+  await drainDeploy();
 
   const types = res.frames().map((f) => f.type);
   assert.ok(types.includes('deploy_started'), 'SSE client must receive deploy_started');
@@ -493,9 +507,6 @@ test('GET /api/deploy/events — streams started/log/done live during a deploy, 
   const before = res.chunks.length;
   mod.deployState.running = false;
   await mod.handleDeployRun(makeReq('POST'), makeRes());
-  await new Promise((resolve) => {
-    const tick = () => (mod.deployState.running ? setTimeout(tick, 30) : resolve());
-    tick();
-  });
+  await drainDeploy();
   assert.equal(res.chunks.length, before, 'disconnected client must receive no further frames');
 });

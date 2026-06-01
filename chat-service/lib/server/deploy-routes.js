@@ -338,9 +338,9 @@ function shQuote(token) {
 // A PTY is a single stream, so the CLI's stdout+stderr arrive merged on script's
 // stdout. The argv is shQuote-escaped, so no injection despite the command being
 // a string. Resolves on exit 0; rejects (with the exit code attached) otherwise,
-// so the orchestrator stops at the first failing phase. The access token goes
-// through the environment (never argv → never visible in `ps`); the db password
-// mirrors the old script and is passed as a flag.
+// so the orchestrator stops at the first failing phase. Both secrets go through
+// the environment (SUPABASE_ACCESS_TOKEN / SUPABASE_DB_PASSWORD) rather than argv,
+// so neither is visible in `ps` on the host the Docker daemon runs on.
 function runSupabasePhase(args, config, deployId) {
   return new Promise((resolve, reject) => {
     const cmd = [SUPABASE_BIN, ...args].map(shQuote).join(' ');
@@ -349,7 +349,13 @@ function runSupabasePhase(args, config, deployId) {
       child = spawn('script', ['-qfe', '-c', cmd, '/dev/null'], {
         cwd: DEPLOY_APP_DIR,
         stdio: ['ignore', 'pipe', 'pipe'],
-        env: { ...process.env, SUPABASE_ACCESS_TOKEN: config.accessToken },
+        env: {
+          ...process.env,
+          SUPABASE_ACCESS_TOKEN: config.accessToken,
+          // The CLI reads the db password from this env var, so `link`/`db push`
+          // need no --password flag — keeps it out of argv (and thus `ps`).
+          ...(config.dbPassword ? { SUPABASE_DB_PASSWORD: config.dbPassword } : {}),
+        },
       });
     } catch (err) {
       reject(err);
@@ -386,13 +392,17 @@ export async function runDeploy(config, deployId) {
   }
   const ref = config.projectRef;
 
+  // The db password rides SUPABASE_DB_PASSWORD in the phase env (see
+  // runSupabasePhase), so neither link nor db push needs a --password flag.
   emitStep(`▶ Linking project ${ref}`, deployId);
-  await runSupabasePhase(['link', '--project-ref', ref, '--password', config.dbPassword], config, deployId);
+  await runSupabasePhase(['link', '--project-ref', ref], config, deployId);
 
   // --include-all promotes every not-yet-applied migration without the CLI
-  // prompting for older ones (which would hang a non-TTY run).
+  // prompting for older ones. --yes auto-confirms the final "push these
+  // migrations?" prompt: we run the CLI under `script` (a real PTY), so it sees
+  // isatty() and would otherwise block forever waiting on a stdin we don't wire.
   emitStep('▶ Pushing migrations', deployId);
-  await runSupabasePhase(['db', 'push', '--password', config.dbPassword, '--include-all'], config, deployId);
+  await runSupabasePhase(['db', 'push', '--include-all', '--yes'], config, deployId);
 
   // No names → deploy every function under supabase/functions/. Re-deploying an
   // unchanged bundle is a no-op on the remote, so idempotency holds.
@@ -430,8 +440,15 @@ export async function handleDeployRun(req, res) {
     res.end(JSON.stringify({ error: 'deploy_in_progress', deployId: deployState.deployId }));
     return;
   }
+  // Claim the slot synchronously, BEFORE the first await. `await loadConfig()`
+  // yields the event loop, so two POSTs in the same tick would otherwise both
+  // read running===false and both launch a deploy against the live project —
+  // exactly what the 409 guard exists to prevent.
+  deployState.running = true;
+
   const config = await loadConfig();
   if (!config) {
+    deployState.running = false; // release the slot we optimistically claimed
     res.writeHead(412, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'not_configured' }));
     return;
@@ -439,7 +456,6 @@ export async function handleDeployRun(req, res) {
 
   const deployId = newDeployId();
   const startedAt = new Date().toISOString();
-  deployState.running = true;
   deployState.deployId = deployId;
   deployState.startedAt = startedAt;
   deployState.finishedAt = null;

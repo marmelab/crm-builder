@@ -34,7 +34,6 @@ const Roles = {
     ARCHITECT: 'architect',
     DEVELOPER: 'developer',
     DOCUMENTATOR: 'documentator',
-    DEVOPS: 'devops',
     UNKNOWN: 'unknown',
 } as const;
 
@@ -54,7 +53,6 @@ const AGENT_DURATIONS_MS: Record<RoleType, number> = {
     [Roles.ARCHITECT]: 60_000,
     [Roles.DEVELOPER]: 500_000, // 8m20s
     [Roles.DOCUMENTATOR]: 60_000,
-    [Roles.DEVOPS]: 60_000,
     [Roles.UNKNOWN]: 60_000, // default for unknown agents
 };
 
@@ -62,7 +60,6 @@ const PARALLEL_ROLES: Set<RoleType> = new Set([Roles.DEVELOPER, Roles.QUALITY_RE
 
 const FLOW_PLANS: Partial<Record<RoleType, RoleType[]>> = {
     [Roles.DOCUMENTATOR]: [Roles.DOCUMENTATOR],
-    [Roles.DEVOPS]: [Roles.DEVOPS],
     // SIMPLE
     [Roles.SIMPLE_DEVELOPER]: [Roles.SIMPLE_DEVELOPER, Roles.MERGER],
     // COMPLEX (with X ticket in each wave):
