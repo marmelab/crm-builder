@@ -57,18 +57,29 @@ export async function processMessage(runtime, prompt) {
   let lastAssistantText = '';
   let exitCode = null;
   try {
-    const proc = spawnClaude(prompt, runtime.claudeSessionId, `${LOG_DIR}/${runtime.session.id}`);
-    runtime.currentProc = proc; // expose for the stop handler
     let stderrBuf = '';
-    // Prevent unhandled 'error' from crashing the process (e.g. claude binary missing).
-    const spawnError = new Promise((resolve) => proc.once('error', resolve));
-    proc.stderr.on('data', (d) => {
-      stderrBuf += d.toString();
-      console.error('[claude]', d.toString().trim());
-    });
+    // A `--resume` whose target conversation no longer exists (e.g. the container
+    // was recreated, wiping ~/.claude/projects) makes claude exit instantly with
+    // `error_during_execution` / "No conversation found". Drop the stale id and
+    // respawn fresh once, rather than surfacing a hard error to the user.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      receivedText = false;
+      rateLimit = null;
+      resultError = false;
+      toolMap.clear();
+      stderrBuf = '';
+      let staleResume = false;
+      const proc = spawnClaude(prompt, runtime.claudeSessionId, `${LOG_DIR}/${runtime.session.id}`);
+      runtime.currentProc = proc; // expose for the stop handler
+      // Prevent unhandled 'error' from crashing the process (e.g. claude binary missing).
+      const spawnError = new Promise((resolve) => proc.once('error', resolve));
+      proc.stderr.on('data', (d) => {
+        stderrBuf += d.toString();
+        console.error('[claude]', d.toString().trim());
+      });
 
-    const rl = createInterface({ input: proc.stdout, crlfDelay: Infinity });
-    for await (const line of rl) {
+      const rl = createInterface({ input: proc.stdout, crlfDelay: Infinity });
+      for await (const line of rl) {
       if (!line.trim()) continue;
       try {
         const event = JSON.parse(line);
@@ -162,6 +173,11 @@ export async function processMessage(runtime, prompt) {
 
         if (event.type === 'result') {
           if (event.is_error) resultError = true;
+          if (event.subtype === 'error_during_execution'
+            && Array.isArray(event.errors)
+            && event.errors.some((e) => /no conversation found/i.test(String(e)))) {
+            staleResume = true;
+          }
           // tokens: derived from modelUsage which is cumulative within the spawn
           // and includes sub-agent token consumption. Replace, don't add — the
           // value is the running spawn total. (Falling back to result.usage
@@ -211,6 +227,15 @@ export async function processMessage(runtime, prompt) {
         resolve(1);
       }, 30_000)),
     ]);
+      // Stale --resume target → forget it and respawn fresh once. The new spawn
+      // re-populates runtime.claudeSessionId from its own `session_id` event.
+      if (staleResume && attempt === 0 && !runtime.stopping && runtime.claudeSessionId) {
+        console.error('[claude] resume target missing — respawning without --resume');
+        runtime.claudeSessionId = null;
+        continue;
+      }
+      break;
+    }
     if (runtime.stopping) {
       const stopText = '⏹ Session stopped.';
       broadcast(runtime, { type: 'message', role: 'assistant', content: stopText, ts: new Date().toISOString() });
