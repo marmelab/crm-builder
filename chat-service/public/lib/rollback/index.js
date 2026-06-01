@@ -29,6 +29,15 @@ export function initRollback({ getSessionId, appendMessage, isBusy, refresh }) {
         return;
       }
       const data = await res.json();
+      if (data.unavailable) {
+        await openConfirmModal({
+          title: "Can't undo right now",
+          body: "We couldn't determine this session's changes to undo. Please contact your administrator.",
+          confirmLabel: 'OK',
+          hideCancel: true,
+        });
+        return;
+      }
       if (!data.commits?.length) {
         await openConfirmModal({
           title: 'Nothing to undo',

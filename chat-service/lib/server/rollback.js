@@ -103,6 +103,18 @@ async function ensureOnDefaultBranch(def) {
 async function listSessionPromotions(sessionId, tipRef) {
   const shortId = sessionId.split('-')[0];
   const sessionRef = `session/${shortId}`;
+  // A missing session branch is NOT the same as "no commits to undo": we simply
+  // can't compute this session's promotions from the graph, and reporting an
+  // empty list would tell the user "nothing to undo" while their changes are
+  // still live on the default branch. Surface it distinctly instead.
+  const branchExists = await execFileAsync(
+    'git', ['-C', CWD, 'show-ref', '--verify', '--quiet', `refs/heads/${sessionRef}`], GIT_BUF,
+  ).then(() => true).catch(() => false);
+  if (!branchExists) {
+    const e = new Error(`session branch ${sessionRef} not found`);
+    e.code = 'SESSION_BRANCH_MISSING';
+    throw e;
+  }
   const [logResult, sessionRevs, reverted] = await Promise.all([
     execFileAsync(
       'git',
@@ -169,6 +181,13 @@ export async function handleSessionCommitsRequest(req, res, sessionId) {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ sessionId, commits: enriched }));
   } catch (err) {
+    if (err?.code === 'SESSION_BRANCH_MISSING') {
+      // Distinct from an empty list: tell the client we can't determine the
+      // changes, so it shows that instead of a misleading "nothing to undo".
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ sessionId, commits: [], unavailable: true }));
+      return;
+    }
     console.error('handleSessionCommitsRequest failed:', err);
     res.writeHead(500, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'commits_lookup_failed', message: err.message }));
@@ -224,6 +243,17 @@ async function handOffToOrchestrator(sessionId, { failedCommit, remaining, base 
   return true;
 }
 
+// Unmerged paths left by a failed `git revert`. A genuine merge conflict leaves
+// `UU`/`AA`/`DD`/… entries; an operational failure (dirty tree, lock, bad object,
+// "nothing to commit") leaves none. Must be read BEFORE `revert --abort` clears
+// the conflicted state.
+async function listUnmergedConflictPaths() {
+  try {
+    const { stdout } = await execFileAsync('git', ['-C', CWD, 'status', '--porcelain'], GIT_BUF);
+    return stdout.split('\n').filter((l) => /^(UU|AA|DD|AU|UA|DU|UD) /.test(l)).map((l) => l.slice(3));
+  } catch { return []; }
+}
+
 export async function handleSessionRollbackRequest(req, res, sessionId) {
   if (!UUID_RE.test(sessionId)) {
     res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -239,19 +269,46 @@ export async function handleSessionRollbackRequest(req, res, sessionId) {
       res.end(JSON.stringify({ ok: false, error: 'session_not_found' }));
       return;
     }
+    // A rollback resets /app and reverts on the shared working tree. If a turn is
+    // already running for this session, reverting underneath it corrupts the
+    // in-flight work — refuse server-side (the client isBusy() gate is advisory,
+    // not authoritative). Re-checked under the lock below to close the race.
+    if (runtimes.get(sessionId)?.busy) {
+      res.writeHead(423, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: 'session_busy',
+        chatMessage: 'Please wait for the current task to finish before undoing this session.' }));
+      return;
+    }
 
     const reverted = [];
     let conflictAt = null;
     let noCommits = false;
+    let branchMissing = false;
+    let busyRace = false;
     // Everything that reads then mutates the base branch runs inside the lock:
     // resolve + realign onto the default branch, snapshot the commit list, then
     // revert. Snapshotting inside the lock stops a concurrent rollback from
     // computing the same list and re-reverting commits the other one just undid.
     await withMainBranchLock(async () => {
+      // Authoritative busy re-check: a turn may have started between the cheap
+      // pre-lock check and acquiring the lock.
+      if (runtimes.get(sessionId)?.busy) { busyRace = true; return; }
       const def = await resolveDefaultBranch();
-      await ensureOnDefaultBranch(def);
-      const commits = await listSessionPromotions(sessionId, def);
+      // Compute the commit list BEFORE touching the working tree. listSessionPromotions
+      // is ref-based (independent of what's checked out), so we avoid the destructive
+      // `ensureOnDefaultBranch` reset --hard when there is nothing to undo or the
+      // session branch is missing.
+      let commits;
+      try {
+        commits = await listSessionPromotions(sessionId, def);
+      } catch (e) {
+        if (e?.code === 'SESSION_BRANCH_MISSING') { branchMissing = true; return; }
+        throw e;
+      }
       if (commits.length === 0) { noCommits = true; return; }
+      // Only now realign /app onto the default branch (this drops working-tree
+      // debris, like the merger does) — we've confirmed there is work to revert.
+      await ensureOnDefaultBranch(def);
       // Batch every revert into ONE working-tree pass + ONE commit. /app is the
       // bind-mounted tree Vite watches: committing each revert separately flips
       // it through N intermediate trees, any of which may fail to compile and
@@ -269,13 +326,32 @@ export async function handleSessionRollbackRequest(req, res, sessionId) {
         await execFileAsync('git', ['-C', CWD, 'commit', '-m', `${subject}\n\n${body}`], GIT_BUF);
         reverted.push(...shas);
       } catch (err) {
-        // `--no-commit` doesn't report which SHA conflicted; abort and hand the
-        // whole list to the agent, which resets onto BASE_BRANCH and replays all.
+        // Distinguish a genuine merge conflict (unmerged paths) from an operational
+        // failure (dirty tree, lock, bad object, "nothing to commit"). Read the
+        // conflicted state BEFORE aborting. A non-conflict failure is re-thrown and
+        // surfaced as an error — NOT handed to the agent, which would reset onto a
+        // clean base and silently produce a different result than /app's real state.
+        const conflictFiles = await listUnmergedConflictPaths();
         await execFileAsync('git', ['-C', CWD, 'revert', '--abort'], GIT_BUF).catch(() => {});
+        if (conflictFiles.length === 0) throw err;
+        // `--no-commit` doesn't report which SHA conflicted; hand the whole list to
+        // the agent, which resets onto BASE_BRANCH and replays all of them.
         conflictAt = { failedCommit: commits[0], remaining: commits, base: def };
         return;
       }
     });
+    if (busyRace) {
+      res.writeHead(423, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: 'session_busy',
+        chatMessage: 'Please wait for the current task to finish before undoing this session.' }));
+      return;
+    }
+    if (branchMissing) {
+      res.writeHead(422, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: 'session_branch_missing',
+        chatMessage: "We couldn't determine this session's changes to undo. Please contact your administrator." }));
+      return;
+    }
     if (noCommits) {
       res.writeHead(404, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ ok: false, error: 'no_commits' }));

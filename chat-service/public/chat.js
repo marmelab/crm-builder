@@ -33,7 +33,14 @@ let working  = false;
 // the undo actually finishes — not just until the HTTP request returns.
 let displayedState = null;
 function isSessionBusy() {
-  return working || displayedState === 'in_progress' || displayedState === 'pending';
+  // `rate_limited` clears runtime.busy but the session is NOT safely idle: a
+  // rollback that hits a conflict re-spawns claude (handOffToOrchestrator) and
+  // re-hits the same usage window, bypassing the server's queue-drop guard. Keep
+  // the undo button disabled until the limit clears (state flips back).
+  return working
+    || displayedState === 'in_progress'
+    || displayedState === 'pending'
+    || displayedState === 'rate_limited';
 }
 function refreshRestoreBtn() {
   if (restoreBtn) restoreBtn.disabled = isSessionBusy();

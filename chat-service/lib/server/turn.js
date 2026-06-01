@@ -72,6 +72,10 @@ export async function processMessage(runtime, prompt) {
       resultError = false;
       toolMap.clear();
       stderrBuf = '';
+      // Per-attempt, not just pre-loop: a limit the subagent tailer flagged
+      // during attempt 0 must not leak into attempt 1's outcome (it would fold
+      // into `rateLimit` below and wrongly settle a clean retry as rate_limited).
+      runtime.pendingRateLimit = null;
       let staleResume = false;
       const proc = spawnClaude(prompt, runtime.claudeSessionId, `${LOG_DIR}/${runtime.session.id}`);
       runtime.currentProc = proc; // expose for the stop handler
@@ -240,6 +244,12 @@ export async function processMessage(runtime, prompt) {
       // re-populates runtime.claudeSessionId from its own `session_id` event.
       if (staleResume && attempt === 0 && !runtime.stopping && runtime.claudeSessionId) {
         console.error('[claude] resume target missing — respawning without --resume');
+        // Attempt 0 started a tailer bound to the now-dead session's dir. Stop it
+        // here (not just in the post-loop finally) so attempt 1's startSubagentTailer
+        // can claim the slot and bind to the fresh session — otherwise its start
+        // no-ops and the dead-dir interval keeps polling, losing all subagent
+        // narration and never catching a subagent rate-limit on the retry.
+        await stopSubagentTailer(runtime);
         runtime.claudeSessionId = null;
         continue;
       }
