@@ -162,7 +162,9 @@ FAILED: <one-line reason>
 
 # ROLLBACK_CONFLICT mode
 
-The chat-service's HTTP `/rollback` route attempted to `git revert -m 1 <sha>` each merge commit on the base branch, and one of them conflicted. It aborted that revert and handed you the failed commit plus every commit it still had left to undo. Your job: replay them, resolving conflicts as you go.
+The chat-service's HTTP `/rollback` route attempted to `git revert -m 1 <sha>` each merge commit on the base branch, and one of them conflicted. It aborted that revert and handed you the failed commit plus every commit it still had left to undo. Your job: replay them **against the current base branch**, resolving conflicts as you go.
+
+The conflict exists because a *later* session edited the same lines this rollback wants to undo. That conflict only shows up against the current base branch — not against the stale `session/<SESSION_SHORT_ID>` your worktree was forked from. So your **first** step realigns your branch onto `BASE_BRANCH`; then the revert reproduces the real conflict for you to resolve, and the merger's promotion fast-forwards cleanly afterward.
 
 ## Spawn prompt — what you receive
 
@@ -171,6 +173,7 @@ ROLE: simple-developer
 MODE: ROLLBACK_CONFLICT
 WORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/simple
 BRANCH_NAME: <SESSION_SHORT_ID>/simple
+BASE_BRANCH: <the default branch, e.g. master — the promotion target>
 FAILED_COMMIT: <short sha> ("<subject>")
 COMMITS_TO_REVERT:
   - <sha>    # <subject>
@@ -181,7 +184,17 @@ COMMITS_TO_REVERT:
 
 ## Workflow
 
-For each SHA in `COMMITS_TO_REVERT`, in the order given:
+### Step 0 — Realign your branch onto the base branch (do this ONCE, first)
+
+Your worktree was forked from the stale `session/<SESSION_SHORT_ID>`, where the conflicting later changes don't exist — revert there and it applies cleanly but the conflict resurfaces, unresolved, at promotion. Reset your branch onto the current base branch so you replay the reverts against the exact state the HTTP route hit the conflict on:
+
+```bash
+cd <WORKTREE_PATH> && git reset --hard <BASE_BRANCH>
+```
+
+This is the only branch-moving command you may run, and only here. After it, proceed to the loop below.
+
+Then, for each SHA in `COMMITS_TO_REVERT`, in the order given:
 
 ### Step 1 — Read the commit you're about to undo
 
@@ -281,7 +294,7 @@ FAILED: rollback merge failed: <one-line, plain-English reason — say what was 
 
 ## NEVER (ROLLBACK_CONFLICT mode)
 
-- ❌ Run `git merge`, `git push`, `git checkout`, `--no-verify`. `git reset --hard HEAD^` is allowed only to undo your own empty revert as documented in Outcome B.
+- ❌ Run `git merge`, `git push`, `git checkout`, `--no-verify`. The only branch-moving commands allowed are: `git reset --hard <BASE_BRANCH>` exactly once at Step 0, and `git reset --hard HEAD^` to undo your own empty revert as documented in Outcome B.
 - ❌ Edit anything outside `<WORKTREE_PATH>/`. Never edit `/app/...` directly, never edit `.git/` internals.
 - ❌ Drive-by refactors, prettier formatting changes, or unrelated edits. Edits must be **caused** by the revert (target additions to remove) or by a typecheck/unit/e2e failure that the revert created.
 - ❌ Dispatch agents, `TeamCreate`, `TeamDelete`, or `SendMessage` — you are solo here, exactly like SIMPLE mode.

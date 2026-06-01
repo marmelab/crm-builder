@@ -25,7 +25,19 @@ const statsPanel = document.getElementById('chat-stats-panel');
 const statsPanelBody = document.getElementById('chat-stats-panel-body');
 const statsCloseBtn = document.getElementById('chat-stats-close');
 
+const restoreBtn = document.getElementById('chat-restore-btn');
 let working  = false;
+// Last broadcast state of the *displayed* session. A rollback that hits a
+// conflict keeps the session `in_progress` for the whole background resolution,
+// so gating the restore button on this (plus `working`) keeps it disabled until
+// the undo actually finishes — not just until the HTTP request returns.
+let displayedState = null;
+function isSessionBusy() {
+  return working || displayedState === 'in_progress' || displayedState === 'pending';
+}
+function refreshRestoreBtn() {
+  if (restoreBtn) restoreBtn.disabled = isSessionBusy();
+}
 let progressTotal = 0;
 let progressDone  = 0;
 let progressSteps = [];
@@ -118,7 +130,12 @@ const historyApi = initHistory({
   closeDiscussion,
 });
 
-initRollback({ getSessionId: () => display.getSessionId(), appendMessage });
+initRollback({
+  getSessionId: () => display.getSessionId(),
+  appendMessage,
+  isBusy: isSessionBusy,
+  refresh: refreshRestoreBtn,
+});
 
 const connection = initConnection({
   handleWsMessage,
@@ -138,6 +155,8 @@ function resetChatUi() {
   display.setSessionId(null);
   if (statsMode) exitStatsMode();
   working = false;
+  displayedState = null;
+  refreshRestoreBtn();
   send.hidden = false;
   send.disabled = false;
   stopBtn.hidden = true;
@@ -336,6 +355,7 @@ function renderWorkingUi() {
     // the turn is over, it becomes the user-visible "result" of the turn.
     messages.querySelectorAll('.msg-mirrored').forEach((n) => n.classList.remove('msg-mirrored'));
   }
+  refreshRestoreBtn();
 }
 
 function handleWsMessage(event) {
@@ -353,7 +373,9 @@ function handleWsMessage(event) {
       history.replaceState({}, '', url);
     }
     display.setDisplayedTitle(msg.title || 'New session');
-    display.setDisplayedState(msg.state || 'in_progress');
+    displayedState = msg.state || 'in_progress';
+    display.setDisplayedState(displayedState);
+    refreshRestoreBtn();
     clearMessageNodes();
     // Prefer the chronological timeline; fall back to the legacy split fields
     // if the server didn't send one (older deploy).
@@ -420,7 +442,9 @@ function handleWsMessage(event) {
   }
 
   if (msg.type === 'state') {
+    displayedState = msg.state;
     display.setDisplayedState(msg.state);
+    refreshRestoreBtn();
     historyApi.refreshHistory();
     return;
   }

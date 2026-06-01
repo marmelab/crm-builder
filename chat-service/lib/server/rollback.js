@@ -26,11 +26,14 @@ export async function withMainBranchLock(fn) {
   }
 }
 
-// `git revert` writes a commit with body `This reverts commit <full sha>.`.
-// Scanning all reachable commits for that marker tells us which promotion
-// commits have already been undone, so multiple rollbacks on the same
-// session never try to revert the same commit twice.
-const REVERT_PREFIX = 'This reverts commit ';
+// `git revert` writes `This reverts commit <full sha>` in the body. Scanning all
+// reachable commits for that marker tells us which promotion commits have already
+// been undone, so multiple rollbacks on the same session never revert the same
+// commit twice. Two marker shapes exist: single-parent reverts end the line with
+// `.`; merge reverts (`-m 1` — all our cases) continue with `, reversing changes
+// made to <parent>.`. A bare slice would capture the `, reversing` tail and never
+// match a 40-hex SHA, so extract the SHA directly. Our batched revert below writes
+// the same marker (one line per commit) so both code paths stay idempotent.
 async function findRevertedFullShas() {
   try {
     const { stdout } = await execFileAsync(
@@ -38,11 +41,11 @@ async function findRevertedFullShas() {
       ['-C', CWD, 'log', '--all', '--grep=This reverts commit', '--format=%B'],
       GIT_BUF,
     );
-    const reverted = stdout
-      .split('\n')
-      .filter((line) => line.startsWith(REVERT_PREFIX))
-      .map((line) => line.slice(REVERT_PREFIX.length).replace(/\.$/, ''));
-    return new Set(reverted);
+    const reverted = new Set();
+    const re = /This reverts commit ([0-9a-f]{40})/g;  // fresh per call — /g lastIndex is stateful
+    let m;
+    while ((m = re.exec(stdout)) !== null) reverted.add(m[1]);
+    return reverted;
   } catch (err) {
     console.warn('[rollback] findRevertedFullShas failed:', err.message);
     return new Set();
@@ -178,7 +181,7 @@ export async function handleSessionCommitsRequest(req, res, sessionId) {
 // `<intent>rollback-conflict</intent>` marker to its SIMPLE-flow variant which
 // dispatches a single simple-developer + merger inside the standard SIMPLE
 // worktree (created by the `setup-worktree` hook as usual).
-async function handOffToOrchestrator(sessionId, { failedCommit, remaining }) {
+async function handOffToOrchestrator(sessionId, { failedCommit, remaining, base }) {
   let runtime = runtimes.get(sessionId);
   if (!runtime) {
     const session = await openSession(sessionId).catch(() => null);
@@ -198,6 +201,12 @@ async function handOffToOrchestrator(sessionId, { failedCommit, remaining }) {
 
   const prompt = [
     '<intent>rollback-conflict</intent>',
+    // The agent must replay the reverts against the SAME state the HTTP route
+    // hit the conflict on — the current default branch — not the stale session
+    // branch its worktree was forked from. Without this it reverts cleanly on a
+    // base where the conflict doesn't exist, and the conflict only resurfaces
+    // (unresolved) at promotion time.
+    `BASE_BRANCH: ${base}`,
     `FAILED_COMMIT: ${failedShort} ("${safeSubject}")`,
     'COMMITS_TO_REVERT (in order, all merge commits — use `git revert -m 1`):',
     list,
@@ -243,17 +252,28 @@ export async function handleSessionRollbackRequest(req, res, sessionId) {
       await ensureOnDefaultBranch(def);
       const commits = await listSessionPromotions(sessionId, def);
       if (commits.length === 0) { noCommits = true; return; }
-      for (let i = 0; i < commits.length; i++) {
-        const c = commits[i];
-        try {
-          // All session commits are merges (the merger always uses --no-ff).
-          await execFileAsync('git', ['-C', CWD, 'revert', '--no-edit', '-m', '1', c.sha], GIT_BUF);
-          reverted.push(c.sha);
-        } catch (err) {
-          await execFileAsync('git', ['-C', CWD, 'revert', '--abort'], GIT_BUF).catch(() => {});
-          conflictAt = { failedCommit: c, remaining: commits.slice(i) };
-          return;
-        }
+      // Batch every revert into ONE working-tree pass + ONE commit. /app is the
+      // bind-mounted tree Vite watches: committing each revert separately flips
+      // it through N intermediate trees, any of which may fail to compile and
+      // flash a Vite error overlay at the user. `--no-commit` stages all reverts
+      // in sequence; a single commit seals them so /app settles once, on the
+      // final state. All session commits are merges (merger uses --no-ff) → `-m 1`.
+      const shas = commits.map((c) => c.sha);
+      try {
+        await execFileAsync('git', ['-C', CWD, 'revert', '--no-commit', '-m', '1', ...shas], GIT_BUF);
+        // Hand-build the message so every revert keeps its `This reverts commit`
+        // marker (a plain commit keeps only the last). findRevertedFullShas reads
+        // these markers to make a second rollback idempotent.
+        const body = shas.map((sha) => `This reverts commit ${sha}.`).join('\n');
+        const subject = `Revert ${shas.length} session commit${shas.length > 1 ? 's' : ''} (rollback ${sessionId.split('-')[0]})`;
+        await execFileAsync('git', ['-C', CWD, 'commit', '-m', `${subject}\n\n${body}`], GIT_BUF);
+        reverted.push(...shas);
+      } catch (err) {
+        // `--no-commit` doesn't report which SHA conflicted; abort and hand the
+        // whole list to the agent, which resets onto BASE_BRANCH and replays all.
+        await execFileAsync('git', ['-C', CWD, 'revert', '--abort'], GIT_BUF).catch(() => {});
+        conflictAt = { failedCommit: commits[0], remaining: commits, base: def };
+        return;
       }
     });
     if (noCommits) {

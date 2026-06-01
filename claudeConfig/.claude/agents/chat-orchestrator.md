@@ -286,7 +286,7 @@ For SIMPLE and ROLLBACK-CONFLICT. No team, no planner, no skill on the orchestra
 The user turn determines which prompt template to use:
 
 - **Regular SIMPLE** (cosmetic change): use the CHANGE_REQUEST template below.
-- **ROLLBACK-CONFLICT** (user turn starts with `<intent>rollback-conflict</intent>`): use the ROLLBACK_CONFLICT template below. Copy `FAILED_COMMIT` and the `COMMITS_TO_REVERT` block verbatim from the user turn.
+- **ROLLBACK-CONFLICT** (user turn starts with `<intent>rollback-conflict</intent>`): use the ROLLBACK_CONFLICT template below. Copy `BASE_BRANCH`, `FAILED_COMMIT`, and the `COMMITS_TO_REVERT` block verbatim from the user turn.
 
 1. Dispatch ONE `simple-developer` agent (no `team_name`):
 
@@ -304,7 +304,7 @@ The user turn determines which prompt template to use:
    Agent({
      subagent_type: "simple-developer",
      description: "Resolve rollback conflict",
-     prompt: "ROLE: simple-developer\nMODE: ROLLBACK_CONFLICT\nWORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/simple\nBRANCH_NAME: <SESSION_SHORT_ID>/simple\nFAILED_COMMIT: <copied from user turn>\nCOMMITS_TO_REVERT:\n<the block copied verbatim from the user turn>"
+     prompt: "ROLE: simple-developer\nMODE: ROLLBACK_CONFLICT\nWORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/simple\nBRANCH_NAME: <SESSION_SHORT_ID>/simple\nBASE_BRANCH: <copied from user turn>\nFAILED_COMMIT: <copied from user turn>\nCOMMITS_TO_REVERT:\n<the block copied verbatim from the user turn>"
    })
    ```
 
