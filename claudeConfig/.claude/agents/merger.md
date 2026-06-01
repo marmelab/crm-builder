@@ -83,8 +83,6 @@ Not in any team. `BRANCH_NAME`, `WORKTREE_PATH`, and `SESSION_SHORT_ID` are in y
    - COMPLEX: `SendMessage(to: "team-lead", message: "merged TASK-XXX, commit=<short sha>")`
    - SIMPLE: proceed to Stage B immediately (do not return yet)
 
-   The PostToolUse `record-merger-commit` hook captures the merge SHA directly — you do NOT run any curl yourself.
-
 5. **On any failure of steps 1–4**:
    - COMPLEX: `SendMessage(team-lead, "TASK-XXX merge failed: <reason>")`, then idle.
    - SIMPLE: return text `FAILED: <reason>`.
