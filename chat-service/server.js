@@ -8,9 +8,9 @@ import {
   loadSystemPrompt, applySystemPrompt,
   loadDocumentatorPrompt, applyDocumentatorPrompt,
 } from './lib/server/system-prompt.js';
-import { openSession, deleteSession } from './lib/server/session-store.js';
+import { openSession, deleteSession, readMessages } from './lib/server/session-store.js';
 import { createRequestHandler, switchMode } from './lib/server/http-routes.js';
-import { runtimes, wsToRuntime, runtimeForWs, createRuntime, safeSend } from './lib/server/runtime.js';
+import { runtimes, wsToRuntime, runtimeForWs, createRuntime, safeSend, killCurrentProc } from './lib/server/runtime.js';
 import { sendToWs, broadcast } from './lib/server/ws-bus.js';
 import { updateProgressBar } from './lib/server/progress-bar.ts';
 import { regenerateTitleWithHaiku, extractText, extractToolUses } from './lib/server/claude-spawn.js';
@@ -97,6 +97,10 @@ wss.on('connection', async (ws, req) => {
     // frame so the client doesn't mistakenly interpret it as a false→true
     // transition (which would demote a still-queued message).
     working: runtime.busy,
+    // Unix-seconds timestamp when the 5h usage limit window resets. Set when
+    // the session lands in `rate_limited` state so a refresh shows the same
+    // countdown + resume button the live tab last rendered.
+    rateLimitResetsAt: runtime.session.meta.rateLimitResetsAt ?? null,
     isNew: session.isNew,
   });
   updateProgressBar(runtime, ws);
@@ -120,19 +124,38 @@ wss.on('connection', async (ws, req) => {
     const r = runtimeForWs(ws);
     if (!r) return;
 
+    // Resume button: user clicked "Resume" after the 5h limit reset, or after a
+    // turn errored. Replay the last user message so the orchestrator picks up
+    // where it left off.
+    if (parsed.type === 'resume') {
+      if (r.busy) return; // a turn is already running — nothing to resume
+      const st = r.session.meta.state;
+      if (st !== 'rate_limited' && st !== 'error') return;
+      const resetsAt = r.session.meta.rateLimitResetsAt;
+      // Defensive: the UI disables the button until reset, but a stale tab
+      // could still post — reject so the user waits the right amount.
+      if (typeof resetsAt === 'number' && Date.now() < resetsAt * 1000) return;
+      // Claim the runtime synchronously: readMessages is async, and without
+      // this another ws.on('message') firing in the gap (regular content
+      // submit, second resume click) would also pass the busy guard and
+      // start a concurrent processMessage on the same runtime.
+      r.busy = true;
+      readMessages(r.session.id).then((msgs) => {
+        const lastUser = [...msgs].reverse().find((m) => m.role === 'user');
+        if (!lastUser?.content) { r.busy = false; return; }
+        r.session.logWrite('in', { type: 'resume_requested' });
+        processMessage(r, lastUser.content);
+      }).catch(() => { r.busy = false; });
+      return;
+    }
+
     // Stop button: kill the running claude process and clear the queue.
     if (parsed.type === 'stop') {
       if (!r.busy) return;
       r.stopping = true;
       const hadQueued = r.queue.length > 0;
       r.queue = [];
-      const p = r.currentProc;
-      if (p && !p.killed) {
-        try { p.kill('SIGTERM'); } catch {}
-        setTimeout(() => {
-          try { if (p && !p.killed) p.kill('SIGKILL'); } catch {}
-        }, 2000);
-      }
+      killCurrentProc(r);
       r.session?.logWrite('in', { type: 'stop_requested' });
       if (hadQueued) {
         // Tell all tabs the queue is now empty so any queued bubbles drop their

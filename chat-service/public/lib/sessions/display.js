@@ -18,6 +18,10 @@ export function initDisplay({ chatTitle, stateBtn, newBtn, switchSession, refres
       stateBtn.title = 'Claude is waiting for your reply';
     } else if (s === 'completed') {
       stateBtn.title = 'Claude session ended — send a message to restart';
+    } else if (s === 'rate_limited') {
+      stateBtn.title = 'Usage limit reached — resume when it resets';
+    } else if (s === 'error') {
+      stateBtn.title = 'The session hit an error — click Resume to retry';
     } else {
       stateBtn.title = 'Claude is working…';
     }

@@ -33,6 +33,11 @@ export function initHistory({ historyPanel, historyList, historyEmpty, getSessio
     const li = document.createElement('li');
     li.className = 'history-item';
     if (d.id === getSessionId()) li.classList.add('active');
+    // Flag sessions parked on a resumable state so the list shows the accent
+    // stripe — the user can spot at a glance which conversations need a click.
+    if (d.state === 'rate_limited' || d.state === 'error') {
+      li.classList.add('needs-resume', `state-accent-${d.state}`);
+    }
 
     const main = document.createElement('div');
     main.className = 'history-item-main';
