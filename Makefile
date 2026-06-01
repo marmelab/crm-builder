@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help build build-instance up up-full up-instance down down-instance wipe wipe-supabase restart restart-full logs shell claude test test-unit test-smoke bench bench-update clean-sessions reset \
+.PHONY: help build build-instance up up-full up-instance down down-instance wipe-instance wipe wipe-supabase restart restart-full logs shell claude test test-unit test-smoke bench bench-update clean-sessions reset \
         start demo full stop kill image log tail bash exec tests smoke clean archive reload
 
 # Resolve the target container for claude/shell. Prefer INSTANCE=<name>;
@@ -66,6 +66,17 @@ down-instance: ## Stop a named instance: make down-instance INSTANCE=feat-x
 	fi
 	docker compose -p $(INSTANCE) \
 	  -f docker-compose.yml -f docker-compose.multi.yml down
+
+wipe-instance: ## Reset a named instance to zero: down + its own volumes + virgin crm-source (preserves shared claude-auth)
+	@if [ -z "$(INSTANCE)" ]; then \
+		echo "Usage: make wipe-instance INSTANCE=<name>"; \
+		exit 1; \
+	fi
+	docker compose -p $(INSTANCE) \
+	  -f docker-compose.yml -f docker-compose.multi.yml down
+	@docker volume ls -q --filter "name=$(INSTANCE)_" | xargs -r docker volume rm
+	docker run --rm -v "$(CURDIR)/crm-source:/x" alpine sh -c 'rm -rf /x/* /x/.[!.]* /x/..?* 2>/dev/null || true'
+	@echo "Instance '$(INSTANCE)' reset to virgin source. Next: make build-instance INSTANCE=$(INSTANCE) && make up-instance INSTANCE=$(INSTANCE) CRM=<port> CHAT=<port>"
 
 wipe: ## Stop container AND remove all volumes (wipes crm checkout, deps, sessions)
 	./scripts/down.sh -v
