@@ -95,13 +95,28 @@ Not in any team. `BRANCH_NAME`, `WORKTREE_PATH`, and `SESSION_SHORT_ID` are in y
 
 **SIMPLE trigger**: automatically after Stage A completes successfully.
 
+**Promotion ALWAYS targets the repository's default branch** — never trust
+`/app`'s current HEAD. If `/app` has drifted onto a previous session's branch
+(it can, and nothing else resets it), merging into the current HEAD silently
+piles every session onto that branch while the default branch never advances:
+the promotion "succeeds" but the work never reaches the real main. So the lock
+block checks out the default branch first, then merges.
+
 ```bash
 cd /app && flock /app/.promote.lock bash -c '
-  git reset --hard HEAD && /entrypoint-helpers/apply-app-variant.sh
+  DEFAULT=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed "s@^origin/@@")
+  [ -z "$DEFAULT" ] && { git show-ref --verify --quiet refs/heads/master && DEFAULT=master || DEFAULT=main; }
+  git reset --hard HEAD                       # drop working-tree debris on whatever branch we are on
+  git checkout "$DEFAULT" || exit 1           # promotion target is the default branch, NOT /app HEAD
+  /entrypoint-helpers/apply-app-variant.sh    # checkout reverts App.tsx variant — re-apply it
   git merge --no-ff session/<SESSION_SHORT_ID> -m "merge(session): <SESSION_SHORT_ID>" \
     || { git merge --abort; exit 1; }
 '
 ```
+
+After this block `/app` is left on the default branch (with the promotion
+merged in), which also keeps the next session's `setup-worktree` fork base
+correct.
 
 - Success → report `promoted: session=<SESSION_SHORT_ID>, commit=<short sha>`.
   - COMPLEX: `SendMessage(to: "team-lead", message: "promoted: session=<SESSION_SHORT_ID>, commit=<short sha>")`, then continue idling.
