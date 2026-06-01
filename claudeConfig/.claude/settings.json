@@ -123,16 +123,6 @@
                         "timeout": 5
                     }
                 ]
-            },
-            {
-                "matcher": "Bash",
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": "/home/developer/.claude/hooks/record-merger-commit.sh",
-                        "timeout": 10
-                    }
-                ]
             }
         ],
         "SubagentStart": [

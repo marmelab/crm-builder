@@ -5,6 +5,8 @@ import { runtimes, createRuntime, setSessionState, persistAssistantMessage } fro
 import { openSession } from './session-store.js';
 import { processMessage } from './turn.js';
 
+const SHORT_ID_RE = /^[0-9a-f]{8}$/i;
+
 const execFileAsync = promisify(execFile);
 const GIT_BUF = { maxBuffer: 4 * 1024 * 1024 };
 
@@ -27,9 +29,9 @@ export async function withMainBranchLock(fn) {
 }
 
 // `git revert` writes a commit with body `This reverts commit <full sha>.`.
-// Scanning all reachable commits for that marker gives us a safety net on top
-// of `meta.commits[].revertedAt`: if the optimistic mark was missed (crash,
-// race), the next rollback still skips already-reverted SHAs.
+// Scanning all reachable commits for that marker tells us which promotion
+// commits have already been undone, so multiple rollbacks on the same
+// session never try to revert the same commit twice.
 const REVERT_PREFIX = 'This reverts commit ';
 async function findRevertedFullShas() {
   try {
@@ -49,19 +51,33 @@ async function findRevertedFullShas() {
   }
 }
 
-// Source of truth: meta.commits, appended by the merger via the
-// /api/sessions/:id/commits/:sha endpoint after each successful merge. We
-// filter out entries already marked revertedAt AND those whose SHA appears
-// in some `This reverts commit ...` body anywhere in history.
+// Source of truth: the git graph. Promotion commits land on main as
+// `git merge --no-ff session/<SHORT_ID>`, so their second parent traces
+// back through the session branch. `--ancestry-path session/<id>..HEAD`
+// returns exactly those merge commits — one per completed request in this
+// session — without touching meta.json or any recorded SHA list.
+// Already-reverted commits are excluded via findRevertedFullShas().
 async function listActiveSessionCommits(sessionId) {
   const session = runtimes.get(sessionId)?.session || await openSession(sessionId);
   if (!session) return { session: null, commits: [] };
-  const all = session.meta.commits || [];
-  if (all.length === 0) return { session, commits: [] };
+  const shortId = sessionId.split('-')[0];
+  let stdout = '';
+  try {
+    ({ stdout } = await execFileAsync(
+      'git',
+      ['-C', CWD, 'log', '--ancestry-path', '--merges',
+        '--format=%H\t%s', `session/${shortId}..HEAD`],
+      GIT_BUF,
+    ));
+  } catch (err) {
+    console.warn('[rollback] listActiveSessionCommits git log failed:', err.message);
+    return { session, commits: [] };
+  }
   const reverted = await findRevertedFullShas();
-  const commits = all
-    .filter((c) => !c.revertedAt && !reverted.has(c.sha))
-    .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  const commits = stdout.trim().split('\n').filter(Boolean).map((line) => {
+    const tab = line.indexOf('\t');
+    return { sha: line.slice(0, tab), subject: line.slice(tab + 1) };
+  }).filter((c) => !reverted.has(c.sha));
   return { session, commits };
 }
 
@@ -89,6 +105,7 @@ async function wouldRevertConflict(sha) {
 }
 
 export async function handleSessionCommitsRequest(req, res, sessionId) {
+
   if (!UUID_RE.test(sessionId)) {
     res.writeHead(400, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'invalid_sessionId' }));
@@ -108,45 +125,6 @@ export async function handleSessionCommitsRequest(req, res, sessionId) {
     console.error('handleSessionCommitsRequest failed:', err);
     res.writeHead(500, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'commits_lookup_failed', message: err.message }));
-  }
-}
-
-// POST /api/sessions/:id/commits/:sha — called by the merger from inside its
-// agent process right after a successful `git merge --no-ff`. We resolve the
-// subject server-side from git (avoids the merger having to escape it) and
-// append the entry to meta.commits via the session's applyPatch.
-export async function handleRecordCommit(req, res, sessionId, sha) {
-  if (!UUID_RE.test(sessionId)) {
-    res.writeHead(400, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'invalid_sessionId' }));
-    return;
-  }
-  if (!/^[a-f0-9]{7,40}$/i.test(sha)) {
-    res.writeHead(400, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'invalid_sha' }));
-    return;
-  }
-  try {
-    const { stdout } = await execFileAsync(
-      'git',
-      ['-C', CWD, 'log', '-1', '--format=%H%x09%s', sha],
-      GIT_BUF,
-    );
-    const [fullSha, subject] = stdout.trim().split('\t');
-    const runtime = runtimes.get(sessionId);
-    const session = runtime?.session || await openSession(sessionId);
-    if (!session) {
-      res.writeHead(404, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'session_not_found' }));
-      return;
-    }
-    await session.applyPatch({ addCommit: { sha: fullSha, subject: subject || '' } });
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ ok: true, sha: fullSha }));
-  } catch (err) {
-    console.error('handleRecordCommit failed:', err);
-    res.writeHead(500, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ ok: false, error: 'record_commit_failed', message: err.message }));
   }
 }
 
@@ -217,7 +195,6 @@ export async function handleSessionRollbackRequest(req, res, sessionId) {
         try {
           // All session commits are merges (the merger always uses --no-ff).
           await execFileAsync('git', ['-C', CWD, 'revert', '--no-edit', '-m', '1', c.sha], GIT_BUF);
-          await session.applyPatch({ markReverted: c.sha });
           reverted.push(c.sha);
         } catch (err) {
           await execFileAsync('git', ['-C', CWD, 'revert', '--abort'], GIT_BUF).catch(() => {});
