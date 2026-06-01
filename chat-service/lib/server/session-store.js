@@ -100,6 +100,12 @@ export function digestLog(logText) {
         droppedAny = true;
         queuedUserMessageSlots.delete(entry.queueId);
       }
+    } else if (entry.dir === 'in' && entry.type === 'resume_requested') {
+      // A "Resume" click replays the last user message — it spawns a fresh
+      // claude process, so commit the prior spawn's accumulators here.
+      // We don't push a message (the prior user_message is already in the
+      // timeline) and don't bump userMessageCount.
+      if (userMessageCount > 0) commitSpawn();
     } else if (entry.dir === 'out' && entry.type === 'message' && entry.role === 'assistant') {
       const item = { kind: 'message', role: 'assistant', content: entry.content || '', ts: entry.ts };
       if (entry.subtype) item.subtype = entry.subtype;
@@ -267,8 +273,20 @@ export async function openSession(requestedId) {
     setState: async (newState) => {
       if (!ALLOWED_STATES.has(newState) || meta.state === newState) return false;
       meta.state = newState;
+      // Any transition away from rate_limited clears the persisted reset
+      // timestamp so the UI doesn't keep rendering a stale countdown after the
+      // user resumes (state → in_progress) or the session is cancelled.
+      if (newState !== 'rate_limited' && meta.rateLimitResetsAt != null) {
+        meta.rateLimitResetsAt = null;
+      }
       await saveMeta();
       return true;
+    },
+    setRateLimitResetsAt: async (ts) => {
+      const next = typeof ts === 'number' ? ts : null;
+      if (meta.rateLimitResetsAt === next) return;
+      meta.rateLimitResetsAt = next;
+      await saveMeta();
     },
     // In-memory equivalent of patchSession — keeps the runtime's meta object
     // in sync when an HTTP PATCH lands on a session that's currently active.
@@ -290,6 +308,12 @@ function applyMetaPatch(meta, patch) {
   }
   if (typeof patch.state === 'string' && ALLOWED_STATES.has(patch.state)) {
     meta.state = patch.state;
+    // Mirror setState's side-effect: any transition away from rate_limited
+    // clears the persisted reset timestamp so a stale countdown doesn't
+    // linger on listSessions / refresh.
+    if (patch.state !== 'rate_limited' && meta.rateLimitResetsAt != null) {
+      meta.rateLimitResetsAt = null;
+    }
   }
 }
 
@@ -324,6 +348,7 @@ export async function listSessions() {
         createdAt: meta.createdAt,
         lastMessageAt: meta.lastMessageAt,
         messageCount: count,
+        rateLimitResetsAt: meta.rateLimitResetsAt ?? null,
       });
     } catch {}
   }

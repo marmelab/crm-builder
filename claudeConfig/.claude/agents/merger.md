@@ -109,8 +109,9 @@ The orchestrator parses this line by regex. Any other format is treated as `FAIL
 **Promotion ALWAYS targets the repository's default branch** — never trust
 `/app`'s current HEAD. If `/app` has drifted onto a previous session's branch
 (it can, and nothing else resets it), merging into the current HEAD silently
-piles every session onto that branch while the default branch never advances.
-So the lock block checks out the default branch first, then merges.
+piles every session onto that branch while the default branch never advances:
+the promotion "succeeds" but the work never reaches the real main. So the lock
+block checks out the default branch first, then merges.
 
 ```bash
 cd /app && flock /app/.promote.lock bash -c '
