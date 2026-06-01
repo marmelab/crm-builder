@@ -1,6 +1,6 @@
 import { el, formatTokens } from './lib/dom.js';
 import { renderStatsPanel, initStatsRefresh } from './lib/stats/index.js';
-import { initConnection, initDisplay, initHistory, openConfirmModal, initRecentPopup } from './lib/sessions/index.js';
+import { initConnection, initDisplay, initHistory, openConfirmModal, initRecentPopup, initMorePopup } from './lib/sessions/index.js';
 import { renderInlineMarkdown } from './lib/markdown.js';
 import { initRollback } from './lib/rollback/index.js';
 import { initDeploy } from './lib/deploy/index.js';
@@ -1204,11 +1204,15 @@ function applySidebarCollapsed(collapsed) {
 applySidebarCollapsed(localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1');
 
 const recentPopup = initRecentPopup({ renderHistoryItem: historyApi.renderHistoryItem });
+const morePopup = initMorePopup();
 
 historyCollapseBtn.addEventListener('click', () => {
   const collapsed = !historyPanel.classList.contains('collapsed');
   applySidebarCollapsed(collapsed);
   try { localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? '1' : '0'); } catch {}
+  // The popovers are anchored at open time; the sidebar width changes on
+  // collapse, so close any open one rather than leaving it misplaced.
+  morePopup.closeMorePopup();
   // Refreshes are skipped while collapsed; pull the latest list on expand.
   if (!collapsed) {
     historyApi.refreshHistory();
