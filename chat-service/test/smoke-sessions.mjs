@@ -1,9 +1,9 @@
 // Integration smoke test for session persistence + HTTP API.
 // Boots server.js against a temp log dir and exercises create/list/resume/rename.
 // Does NOT hit Claude — we only test the persistence layer + protocol.
-import { mkdtemp, rm, readFile, readdir } from 'fs/promises';
+import { mkdtemp, rm, readFile, readdir, writeFile, chmod } from 'fs/promises';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { join, delimiter } from 'path';
 import { spawn } from 'child_process';
 import { WebSocket } from 'ws';
 import assert from 'node:assert/strict';
@@ -13,8 +13,24 @@ const PORT = 18081;
 const BASE = `http://127.0.0.1:${PORT}`;
 const WS_URL = `ws://127.0.0.1:${PORT}`;
 
+// Stub the `claude` binary so a turn deterministically fails — independent of
+// whether a real claude is installed on the host. Node resolves a spawned
+// command via the child's env.PATH (verified), so prepending this dir makes the
+// stub win over any real claude on the dev box, while CI (no claude at all)
+// behaves identically. The stub exits non-zero with no stream output, so every
+// turn takes the friendly-error path and settles on the resumable 'error' state.
+const BIN_DIR = await mkdtemp(join(tmpdir(), 'chat-smoke-bin-'));
+const claudeStub = join(BIN_DIR, 'claude');
+await writeFile(claudeStub, '#!/bin/sh\nexit 1\n');
+await chmod(claudeStub, 0o755);
+
 const server = spawn(process.execPath, ['server.js'], {
-  env: { ...process.env, CHAT_LOG_DIR: LOG_DIR, PORT: String(PORT) },
+  env: {
+    ...process.env,
+    CHAT_LOG_DIR: LOG_DIR,
+    PORT: String(PORT),
+    PATH: `${BIN_DIR}${delimiter}${process.env.PATH ?? ''}`,
+  },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 server.stdout.on('data', (d) => process.stdout.write(`[srv] ${d}`));
@@ -67,8 +83,8 @@ try {
   const id1 = init1.sessionId;
   console.log(`✓ new session created: ${id1}`);
 
-  // 2. Send a user message. Claude is not installed on the host, so the server
-  //    will emit a friendly-error assistant message — we expect BOTH the user
+  // 2. Send a user message. The stubbed claude exits non-zero, so the server
+  //    emits a friendly-error assistant message — we expect BOTH the user
   //    message and that error to be persisted.
   ws1.send(JSON.stringify({ content: 'Hello world from smoke test' }));
   // Wait for status:false → turn finished, then files are fully written.
@@ -86,16 +102,16 @@ try {
   assert.equal(meta1.title, 'Hello world from smoke test', 'title auto-generated');
   assert.ok(meta1.lastMessageAt, 'lastMessageAt set');
   assert.ok(meta1.messageCount >= 1, 'messageCount incremented');
-  // Claude's spawn failed (no binary on host), so the turn ends and state auto-
-  // transitions back to 'completed'.
-  assert.equal(meta1.state, 'completed', 'state auto → completed after turn');
+  // The claude spawn exits non-zero (stub), so the turn fails and settles on the
+  // resumable 'error' state — not 'completed'.
+  assert.equal(meta1.state, 'error', 'state → error after a failed turn');
   assert.equal(meta1.userMessageCount, 1, 'userMessageCount=1 after first message');
-  console.log(`✓ user message persisted, title auto-generated, state auto→completed`);
+  console.log(`✓ user message persisted, title auto-generated, state → error`);
 
-  // 2b. Verify the client received the 'completed' transition
+  // 2b. Verify the client received the 'error' transition
   const stateEvents = e1.filter((e) => e.type === 'state');
-  assert.ok(stateEvents.some((e) => e.state === 'completed'), 'completed broadcast');
-  console.log('✓ completed broadcast over WS at turn end');
+  assert.ok(stateEvents.some((e) => e.state === 'error'), 'error broadcast');
+  console.log('✓ error broadcast over WS at turn end');
 
   // 3. Choice with display label → saved as label
   ws1.send(JSON.stringify({ content: 'QUICK_EDIT', display: '⚡ Make a quick change' }));
@@ -110,23 +126,23 @@ try {
   assert.equal(userMsgs1b[1].display, '⚡ Make a quick change', 'display label preserved');
   console.log('✓ choice label preserved (content=ID, display=label)');
 
-  // 3b. Second message: state should have flipped in_progress → completed again
+  // 3b. Second message: state should have flipped in_progress → error again
   const stateEvents2 = e1.filter((e) => e.type === 'state');
   assert.ok(stateEvents2.some((e) => e.state === 'in_progress'), 'in_progress rebroadcast on 2nd message');
   assert.ok(
-    stateEvents2.filter((e) => e.state === 'completed').length >= 2,
-    'completed broadcast twice (end of turn 1 and turn 2)'
+    stateEvents2.filter((e) => e.state === 'error').length >= 2,
+    'error broadcast twice (end of turn 1 and turn 2)'
   );
-  console.log('✓ state auto-cycled in_progress → completed on relaunch');
+  console.log('✓ state auto-cycled in_progress → error on relaunch');
 
-  // 3c. 1st user message triggered a Haiku retitle, but claude binary is absent
-  //     on the test host, so the title should remain the initial auto-title and
+  // 3c. 1st user message triggered a Haiku retitle, but the stubbed claude exits
+  //     non-zero, so the title should remain the initial auto-title and
   //     titleAutoGenerated must NOT have been set.
   const metaAfter2nd = JSON.parse(await readFile(join(LOG_DIR, id1, 'meta.json'), 'utf8'));
   assert.equal(metaAfter2nd.userMessageCount, 2, 'userMessageCount=2 on 2nd msg');
   assert.ok(!metaAfter2nd.titleAutoGenerated, 'titleAutoGenerated stays false when haiku call fails');
   assert.equal(metaAfter2nd.title, 'Hello world from smoke test', 'title unchanged on haiku failure');
-  console.log('✓ 1st user message attempted haiku retitle (no-op without claude binary)');
+  console.log('✓ 1st user message attempted haiku retitle (no-op: stub exits non-zero)');
 
   ws1.close();
   await new Promise((r) => setTimeout(r, 100));
@@ -247,4 +263,5 @@ try {
 } finally {
   server.kill();
   await rm(LOG_DIR, { recursive: true, force: true }).catch(() => {});
+  await rm(BIN_DIR, { recursive: true, force: true }).catch(() => {});
 }

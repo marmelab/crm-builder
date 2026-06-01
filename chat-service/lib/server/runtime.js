@@ -32,6 +32,11 @@ export function createRuntime(session) {
     queueIdSeq: 0,
     stopping: false,
     currentProc: null,
+    // Set when a blocked rate_limit_event is seen — either on the main stream
+    // (turn.js) or in a subagent transcript (subagent-tail.js). The turn's read
+    // loop reconciles it into the local `rateLimit` so a subagent-triggered
+    // limit settles the session on `rate_limited` instead of hanging forever.
+    pendingRateLimit: null,
     clients: new Set(),
     // Subagent-transcript tailer state. Lives on the runtime so it survives
     // across turns: a long-running session re-dispatches the same subagent
@@ -87,6 +92,30 @@ export function createRuntime(session) {
       dispatchedSubagentTypes: [],
     },
   };
+}
+
+// Kill the current claude spawn with SIGTERM, falling back to SIGKILL after 2s
+// for the (rare) process that ignores SIGTERM (e.g. blocked on uninterruptible
+// IO). The timer is unref'd so it never holds the event loop open past a clean
+// SIGTERM exit. Shared by the stop handler, the main-stream rate-limit branch,
+// and the subagent tailer.
+export function killCurrentProc(runtime) {
+  const p = runtime?.currentProc;
+  if (!p || p.killed) return;
+  try { p.kill('SIGTERM'); } catch {}
+  setTimeout(() => {
+    try { if (p && !p.killed) p.kill('SIGKILL'); } catch {}
+  }, 2000).unref();
+}
+
+// Record a blocked rate-limit and kill the hung spawn. The CLI does not exit on
+// a blocked limit — it hangs indefinitely — so killing it lets the read loop
+// drain and the turn settle on `rate_limited`. Idempotent: a second call (e.g.
+// main stream + subagent both report it) just re-kills an already-dead process.
+export function noteRateLimit(runtime, info) {
+  if (!runtime) return;
+  runtime.pendingRateLimit = info;
+  killCurrentProc(runtime);
 }
 
 export async function transitionState(runtime, newState) {

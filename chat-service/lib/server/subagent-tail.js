@@ -16,6 +16,7 @@ import { readFile, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { claudeSubagentsDir } from "./config.js";
 import { broadcast } from "./ws-bus.js";
+import { noteRateLimit } from "./runtime.js";
 
 const POLL_INTERVAL_MS = 2500;
 // Cap the in-memory buffer for one slice. A single multi-MB assistant event
@@ -157,6 +158,14 @@ async function processFile(runtime, jsonlPath, { emit }) {
     if (!ev.uuid || runtime.subagentSeenUuids.has(ev.uuid)) continue;
     runtime.subagentSeenUuids.add(ev.uuid);
     if (!emit) continue;
+    // A subagent that hits the 5h limit logs a blocked rate_limit_event here —
+    // it never reaches the orchestrator's main stdout, so without this the
+    // spawn hangs forever. Flag it + kill the spawn; turn.js folds the pending
+    // limit into the turn outcome and settles on `rate_limited`.
+    if (ev.type === "rate_limit_event" && ev.rate_limit_info?.status === "blocked") {
+      noteRateLimit(runtime, ev.rate_limit_info);
+      continue;
+    }
     if (ev.type !== "assistant") continue;
     const blocks = ev.message?.content;
     if (!Array.isArray(blocks)) continue;

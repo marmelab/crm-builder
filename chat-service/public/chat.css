@@ -194,6 +194,8 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
 .state-completed { background: rgba(99,99,102,.25); color: #a1a1a6; }
 .state-cancelled { background: rgba(251,146,60,.15); color: #fb923c; }
 .state-waiting { background: rgba(96,165,250,.15); color: #60a5fa; }
+.state-rate_limited { background: rgba(251,191,36,.18); color: #fbbf24; }
+.state-error { background: rgba(244,63,94,.15); color: #f43f5e; }
 
 .history-state {
   display: inline-block;
@@ -249,6 +251,11 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
 .history-item:last-child { border-bottom: none; }
 .history-item:hover { background: #2c2c2e; }
 .history-item.active { background: rgba(59,130,246,.12); }
+/* Sessions that need the user to click Resume (limit reached / errored) get a
+   left accent stripe so they stand out at a glance in the list. Inset shadow,
+   not a border, so it doesn't shift the row's content. */
+.history-item.needs-resume { box-shadow: inset 3px 0 0 #f43f5e; }
+.history-item.needs-resume.state-accent-rate_limited { box-shadow: inset 3px 0 0 #fbbf24; }
 .history-item-main { flex: 1; min-width: 0; }
 .history-title {
   color: #f2f2f7; font-size: 13px; font-weight: 500;
@@ -554,6 +561,76 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
   /* Bubble no longer has its own padding (so the bar can sit flush at the
      top), so the hint state recreates it here. */
   padding: 10px 14px;
+}
+
+/* Limit-reached bubble — shown in place of the working spinner when the 5h
+   usage limit was hit mid-turn. Amber accent reads as "warning, not failure"
+   and stays distinct from the green/gray/orange/blue badges used elsewhere. */
+.msg-rate-limited {
+  align-self: flex-start;
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 12px 14px;
+  background: rgba(251,191,36,.10);
+  border: 1px solid rgba(251,191,36,.35);
+  border-radius: 14px; border-bottom-left-radius: 4px;
+  width: min(85%, 320px);
+  flex-shrink: 0;
+}
+.msg-rate-limited .rate-limited-header {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 13px; font-weight: 600; color: #fbbf24;
+}
+.msg-rate-limited .rate-limited-icon { font-size: 14px; line-height: 1; }
+.msg-rate-limited .rate-limited-countdown {
+  font-size: 12px; color: #d1d1d6;
+}
+.msg-rate-limited .rate-limited-resume {
+  align-self: flex-start;
+  background: #fbbf24; color: #1c1c1e;
+  border: none; border-radius: 8px;
+  padding: 6px 14px;
+  font-size: 13px; font-weight: 600;
+  cursor: pointer;
+  transition: background .15s, opacity .15s;
+}
+.msg-rate-limited .rate-limited-resume:hover:not(:disabled) { background: #fcd34d; }
+.msg-rate-limited .rate-limited-resume:disabled {
+  background: #3a3a3c; color: #8e8e93;
+  cursor: not-allowed;
+}
+
+/* Resumable error bubble — a turn ended on a Claude Code / API error (or a
+   limit that surfaced as a plain error). Red accent reads as "failed, but
+   recoverable"; the Resume button replays the last message. No countdown. */
+.msg-error {
+  align-self: flex-start;
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 12px 14px;
+  background: rgba(244,63,94,.10);
+  border: 1px solid rgba(244,63,94,.35);
+  border-radius: 14px; border-bottom-left-radius: 4px;
+  width: min(85%, 320px);
+  flex-shrink: 0;
+}
+.msg-error .error-header {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 13px; font-weight: 600; color: #f43f5e;
+}
+.msg-error .error-icon { font-size: 14px; line-height: 1; }
+.msg-error .error-body { font-size: 12px; color: #d1d1d6; }
+.msg-error .error-resume {
+  align-self: flex-start;
+  background: #f43f5e; color: #fff;
+  border: none; border-radius: 8px;
+  padding: 6px 14px;
+  font-size: 13px; font-weight: 600;
+  cursor: pointer;
+  transition: background .15s, opacity .15s;
+}
+.msg-error .error-resume:hover:not(:disabled) { background: #fb7185; }
+.msg-error .error-resume:disabled {
+  background: #3a3a3c; color: #8e8e93;
+  cursor: not-allowed;
 }
 #chat-form {
   display: flex; align-items: flex-end; gap: 10px;

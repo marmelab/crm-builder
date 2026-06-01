@@ -41,6 +41,11 @@ function refreshRestoreBtn() {
 let progressTotal = 0;
 let progressDone  = 0;
 let progressSteps = [];
+// Unix-seconds timestamp when the 5h usage limit window resets. Non-null while
+// the session sits in `rate_limited` state — drives the bubble + resume button
+// and the countdown ticker below.
+let rateLimitResetsAt = null;
+let rateLimitTickHandle = null;
 // Remaining time is computed server-side from fixed per-role durations and
 // shipped in the `progress` payload. We anchor the snapshot to its reception
 // time so the displayed value can tick down smoothly between events.
@@ -147,7 +152,7 @@ const connection = initConnection({
 });
 
 function clearMessageNodes() {
-  messages.querySelectorAll('.msg, .msg-choices, .msg-working').forEach((n) => n.remove());
+  messages.querySelectorAll('.msg, .msg-choices, .msg-working, .msg-rate-limited, .msg-error').forEach((n) => n.remove());
 }
 
 function resetChatUi() {
@@ -168,6 +173,8 @@ function resetChatUi() {
   remainingTimeMsAtReceipt = 0;
   remainingTimeReceivedAt = 0;
   stopRemainingTimeTicker();
+  rateLimitResetsAt = null;
+  stopRateLimitTicker();
   debugEventBuffer.length = 0;
 }
 
@@ -337,6 +344,154 @@ function fallbackEqualSteps(total, done) {
   return out;
 }
 
+function formatRateLimitCountdown(resetsAtSec) {
+  // No reset hint from the server — show a generic prompt instead of NaN math.
+  if (typeof resetsAtSec !== 'number') return 'Click Resume to retry.';
+  const remainingMs = resetsAtSec * 1000 - Date.now();
+  if (remainingMs <= 0) return "You're good to go — click Resume to retry.";
+  const totalMin = Math.ceil(remainingMs / 60000);
+  if (totalMin < 60) return `Resumes in ${totalMin} min`;
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  return m ? `Resumes in ${h}h ${m}min` : `Resumes in ${h}h`;
+}
+
+function startRateLimitTicker() {
+  if (rateLimitTickHandle) return;
+  // 15s cadence — the countdown ticks in minutes, so a faster refresh would
+  // burn cycles for no visible change. Aligned with whole-minute boundaries
+  // is unnecessary; the user notices "Resume" enabling, not the exact tick.
+  rateLimitTickHandle = setInterval(tickRateLimitBubble, 15000);
+}
+
+function stopRateLimitTicker() {
+  if (!rateLimitTickHandle) return;
+  clearInterval(rateLimitTickHandle);
+  rateLimitTickHandle = null;
+}
+
+function tickRateLimitBubble() {
+  const bubble = messages.querySelector('.msg-rate-limited');
+  if (!bubble || rateLimitResetsAt == null) { stopRateLimitTicker(); return; }
+  const countdownEl = bubble._countdownEl;
+  const resumeBtn = bubble._resumeBtn;
+  if (countdownEl) countdownEl.textContent = formatRateLimitCountdown(rateLimitResetsAt);
+  // Don't touch the button once the user has clicked Resume — the click
+  // disabled it and set "Resuming…", and a passing-reset tick would
+  // otherwise re-enable it and invite a double-submit.
+  if (resumeBtn && !bubble._resumeRequested) {
+    resumeBtn.disabled = Date.now() < rateLimitResetsAt * 1000;
+  }
+}
+
+function renderRateLimitedUi() {
+  // Pull the working spinner — the turn ended on a limit, not on progress.
+  working = false;
+  stopRemainingTimeTicker();
+  const spinner = messages.querySelector('.msg-working:not(.msg-assistant)');
+  if (spinner) spinner.remove();
+  stopBtn.hidden = true;
+  send.hidden = false;
+
+  // rateLimitResetsAt may be null (a limit with no reset hint): still render the
+  // bubble, just with no countdown and an immediately-enabled Resume button.
+  let bubble = messages.querySelector('.msg-rate-limited');
+  if (!bubble) {
+    bubble = document.createElement('div');
+    bubble.className = 'msg msg-rate-limited';
+    bubble.dataset.seq = String(Number.MAX_SAFE_INTEGER);
+
+    const header = document.createElement('div');
+    header.className = 'rate-limited-header';
+    header.innerHTML = '<span class="rate-limited-icon" aria-hidden="true">⏳</span><span>Usage limit reached</span>';
+
+    const countdown = document.createElement('div');
+    countdown.className = 'rate-limited-countdown';
+
+    const resumeBtn = document.createElement('button');
+    resumeBtn.type = 'button';
+    resumeBtn.className = 'rate-limited-resume';
+    resumeBtn.textContent = 'Resume';
+    resumeBtn.addEventListener('click', () => {
+      if (resumeBtn.disabled) return;
+      if (!connection.safeSend({ type: 'resume' })) return;
+      bubble._resumeRequested = true;
+      resumeBtn.disabled = true;
+      resumeBtn.textContent = 'Resuming…';
+    });
+
+    bubble.append(header, countdown, resumeBtn);
+    bubble._countdownEl = countdown;
+    bubble._resumeBtn = resumeBtn;
+    messages.appendChild(bubble);
+  }
+  bubble._countdownEl.textContent = formatRateLimitCountdown(rateLimitResetsAt);
+  // Same reason as in tickRateLimitBubble: preserve the in-flight
+  // "Resuming…" state when a duplicate rate_limited broadcast lands.
+  if (!bubble._resumeRequested) {
+    // null resetsAt → `null * 1000` is 0 → never disabled (resume immediately).
+    bubble._resumeBtn.disabled = Date.now() < rateLimitResetsAt * 1000;
+    bubble._resumeBtn.textContent = 'Resume';
+  }
+  // Only tick when there's an actual countdown to refresh.
+  if (typeof rateLimitResetsAt === 'number') startRateLimitTicker();
+  messages.scrollTop = messages.scrollHeight;
+}
+
+function clearRateLimitedUi() {
+  rateLimitResetsAt = null;
+  stopRateLimitTicker();
+  messages.querySelectorAll('.msg-rate-limited').forEach((n) => n.remove());
+}
+
+// Sibling of renderRateLimitedUi for a turn that ended on a plain error (gap 3,
+// and rate-limits that surface as an error rather than a clean rate_limit_event).
+// Same shape minus the countdown: a red bubble with a Resume button that replays
+// the last user message via the same `resume` ws message the limit flow uses.
+function renderErrorUi() {
+  // The turn ended on an error, not on progress — pull the working spinner.
+  working = false;
+  stopRemainingTimeTicker();
+  const spinner = messages.querySelector('.msg-working:not(.msg-assistant)');
+  if (spinner) spinner.remove();
+  stopBtn.hidden = true;
+  send.hidden = false;
+
+  let bubble = messages.querySelector('.msg-error');
+  if (!bubble) {
+    bubble = document.createElement('div');
+    bubble.className = 'msg msg-error';
+    bubble.dataset.seq = String(Number.MAX_SAFE_INTEGER);
+
+    const header = document.createElement('div');
+    header.className = 'error-header';
+    header.innerHTML = '<span class="error-icon" aria-hidden="true">⚠️</span><span>Something went wrong</span>';
+
+    const body = document.createElement('div');
+    body.className = 'error-body';
+    body.textContent = 'The session stopped before finishing. You can pick up where it left off.';
+
+    const resumeBtn = document.createElement('button');
+    resumeBtn.type = 'button';
+    resumeBtn.className = 'error-resume';
+    resumeBtn.textContent = 'Resume';
+    resumeBtn.addEventListener('click', () => {
+      if (resumeBtn.disabled) return;
+      if (!connection.safeSend({ type: 'resume' })) return;
+      resumeBtn.disabled = true;
+      resumeBtn.textContent = 'Resuming…';
+    });
+
+    bubble.append(header, body, resumeBtn);
+    messages.appendChild(bubble);
+  }
+  messages.scrollTop = messages.scrollHeight;
+}
+
+function clearErrorUi() {
+  messages.querySelectorAll('.msg-error').forEach((n) => n.remove());
+}
+
 function renderWorkingUi() {
   stopBtn.hidden = !working;
   stopBtn.disabled = false;
@@ -427,6 +582,17 @@ function handleWsMessage(event) {
       // `progress` event lands with a fresh server-side estimate.
       startRemainingTimeTicker();
       renderWorkingUi();
+    } else if (msg.state === 'rate_limited') {
+      // Re-render the limit-reached bubble after a reload so the user sees
+      // the same countdown + resume button the live tab last showed them.
+      // resetsAt may be null (a limit without a reset hint) — still render,
+      // just with no countdown and an enabled Resume button.
+      rateLimitResetsAt = typeof msg.rateLimitResetsAt === 'number' ? msg.rateLimitResetsAt : null;
+      renderRateLimitedUi();
+    } else if (msg.state === 'error') {
+      // Same idea for an errored session: re-show the Resume affordance after
+      // a reload or when switching back to the session.
+      renderErrorUi();
     }
     historyApi.refreshHistory();
     return;
@@ -445,6 +611,10 @@ function handleWsMessage(event) {
     displayedState = msg.state;
     display.setDisplayedState(msg.state);
     refreshRestoreBtn();
+    // A turn that just settled on `error` shows the Resume bubble. (rate_limited
+    // is driven by its own `rate_limited` event carrying resetsAt, so it's not
+    // handled here.)
+    if (msg.state === 'error') renderErrorUi();
     historyApi.refreshHistory();
     return;
   }
@@ -471,6 +641,9 @@ function handleWsMessage(event) {
       // The queued-chrome stripping for the bubble that just moved into
       // processing is now driven by the server's `queue_updated` event,
       // which arrives just before this status transition.
+      // A new turn starts — the previous limit-reached / error bubble is obsolete.
+      clearRateLimitedUi();
+      clearErrorUi();
     } else if (wasWorking && !working) {
       stopRemainingTimeTicker();
       remainingTimeMsAtReceipt = 0;
@@ -500,6 +673,12 @@ function handleWsMessage(event) {
       remainingTimeReceivedAt = Date.now();
     }
     updateWorkingProgress();
+    return;
+  }
+
+  if (msg.type === 'rate_limited') {
+    rateLimitResetsAt = typeof msg.resetsAt === 'number' ? msg.resetsAt : null;
+    renderRateLimitedUi();
     return;
   }
 

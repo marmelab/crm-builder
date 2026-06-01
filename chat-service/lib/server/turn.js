@@ -3,9 +3,10 @@ import { cp, copyFile, mkdir, chmod, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { LOG_DIR, claudeProjectDir, claudeSessionDir } from './config.js';
 import { broadcast, sendStats } from './ws-bus.js';
-import { runtimes, transitionState } from './runtime.js';
+import { runtimes, transitionState, noteRateLimit } from './runtime.js';
 import { spawnClaude, extractText, extractToolUses, friendlyError } from './claude-spawn.js';
 import { endsWithQuestion } from './session-store.js';
+import { decideNextState } from './turn-state.js';
 import { startSubagentTailer, stopSubagentTailer } from './subagent-tail.js';
 import {
   emptyBreakdown, addBreakdown, breakdownFromModelUsage, costFromBreakdown,
@@ -50,6 +51,9 @@ export async function processMessage(runtime, prompt) {
   // Claude (re)starts → session is active again.
   transitionState(runtime, 'in_progress');
   broadcast(runtime, { type: 'status', working: true });
+  // Clear any rate-limit flagged by a previous turn (or by the subagent tailer
+  // before this spawn started) so it can't leak into this turn's outcome.
+  runtime.pendingRateLimit = null;
   const toolMap = new Map();
   let receivedText = false;
   let rateLimit = null;
@@ -141,7 +145,12 @@ export async function processMessage(runtime, prompt) {
         }
 
         if (event.type === 'rate_limit_event' && event.rate_limit_info?.status === 'blocked') {
+          // The CLI doesn't exit on a blocked limit — it hangs indefinitely.
+          // noteRateLimit kills the spawn so the readline loop drains and the
+          // turn ends. (Subagent-triggered limits take the same path from the
+          // subagent tailer, surfacing via runtime.pendingRateLimit below.)
           rateLimit = event.rate_limit_info;
+          noteRateLimit(runtime, rateLimit);
         }
 
         // Track active sub-agents. Claude Code emits task_started events for
@@ -236,6 +245,10 @@ export async function processMessage(runtime, prompt) {
       }
       break;
     }
+    // A limit hit by a subagent lands in its transcript, not the main stream —
+    // the tailer flags it on runtime.pendingRateLimit and kills the spawn. Fold
+    // it in here so the turn settles on `rate_limited` like a main-stream limit.
+    if (!rateLimit && runtime.pendingRateLimit) rateLimit = runtime.pendingRateLimit;
     if (runtime.stopping) {
       const stopText = '⏹ Session stopped.';
       broadcast(runtime, { type: 'message', role: 'assistant', content: stopText, ts: new Date().toISOString() });
@@ -246,6 +259,16 @@ export async function processMessage(runtime, prompt) {
       // Await: the finally block below writes meta.json right after; a
       // fire-and-forget here would race with that write and corrupt the file.
       await runtime.session?.recordMessage('assistant', errText).catch(() => {});
+      if (rateLimit) {
+        // resetsAt may be absent on a blocked event (or a subagent-surfaced
+        // limit). Broadcast/persist null rather than skipping: the state still
+        // settles on 'rate_limited' below, so without this the session would
+        // strand with a badge but no Resume affordance. A null resetsAt just
+        // renders the bubble with an immediately-enabled Resume button.
+        const resetsAt = typeof rateLimit.resetsAt === 'number' ? rateLimit.resetsAt : null;
+        broadcast(runtime, { type: 'rate_limited', resetsAt });
+        await runtime.session?.setRateLimitResetsAt(resetsAt).catch(() => {});
+      }
     }
   } catch (err) {
     if (err?.name !== 'AbortError') {
@@ -296,24 +319,28 @@ export async function processMessage(runtime, prompt) {
     // "stop everything"), clear the flag, and don't auto-process the queue.
     const wasStopped = !!runtime.stopping;
     runtime.stopping = false;
-    if (!wasStopped && runtime.queue.length > 0) {
+    // Don't drain the queue when the limit just hit — every queued message
+    // would re-spawn claude, hit the same window, and re-broadcast another
+    // rate_limited event before ever reaching the 'rate_limited' state.
+    // Drop the queue (symmetric with STOP) so the session settles on the
+    // rate-limited bubble and the user decides what to do.
+    if (!wasStopped && !rateLimit && runtime.queue.length > 0) {
       const next = runtime.queue.shift();
       // The head of the queue is now running, not waiting — tabs need this to
       // drop the ⏳ badge / × button on the bubble whose data-queue-id matches.
       broadcast(runtime, { type: 'queue_updated', queuedIds: runtime.queue.map((q) => q.id) });
       processMessage(runtime, next.content);
     } else {
-      if (wasStopped) runtime.queue = [];
+      if (wasStopped || rateLimit) runtime.queue = [];
       runtime.busy = false;
-      // Pick the next state:
-      //   - user pressed STOP → 'cancelled'
-      //   - turn errored (non-zero exit, rate limit, result error, no text) → 'completed'
-      //   - last assistant message ends with '?' → 'waiting' (Claude asked a
-      //     question and expects a reply before continuing)
-      //   - otherwise → 'completed'
       const turnErrored = exitCode !== 0 || !receivedText || resultError || rateLimit;
+      // A clean exit that produced no assistant text (e.g. a turn that only ran
+      // tool calls) isn't a failure — it completes silently, as it did before
+      // the 'error' state existed. Only a non-zero exit or an explicit result
+      // error is a resumable 'error'; a rate limit settles on its own state.
+      const turnFailed = exitCode !== 0 || resultError;
       const asksQuestion = !wasStopped && !turnErrored && endsWithQuestion(lastAssistantText);
-      const nextState = wasStopped ? 'cancelled' : asksQuestion ? 'waiting' : 'completed';
+      const nextState = decideNextState({ wasStopped, rateLimit: !!rateLimit, turnFailed, asksQuestion });
       await transitionState(runtime, nextState);
       // Schedule the documentator (Mode 2) once the turn lands on 'completed'
       // and at least one ticket has been merged in this session. Debounced so
