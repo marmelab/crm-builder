@@ -19,11 +19,13 @@ const SKIP_CHILD = new Set();
 export async function enrichSubagentChildren(phases, subagentsDir, toolCounts, allToolCalls) {
   const baseDir = subagentsDir;
 
-  // Only target COMPLEX team members. Local agents (planner, simple-developer)
-  // already have their tool_uses in the main stream via parent_tool_use_id —
-  // loading their subagent files would double-count.
+  // Target COMPLEX team members (in_process_teammate) AND background local_agents
+  // (run_in_background: true). Sync local_agents (planner) have their messages in
+  // the main stream via parent_tool_use_id and are handled by accumulatePerPhaseTokens
+  // — loading their JSONL here would double-count.
   const targets = phases.filter((p) =>
-    p.kind === 'agent' && p.taskType === 'in_process_teammate' && p.agentName
+    p.kind === 'agent' && p.agentName &&
+    (p.taskType === 'in_process_teammate' || p.isBackground)
   );
   if (targets.length === 0) return;
 
@@ -66,7 +68,9 @@ export async function enrichSubagentChildren(phases, subagentsDir, toolCounts, a
   }
 
   // Group by (agentName, firstUuid), pick largest per group.
-  const winnersByName = new Map(); // agentName → [{path, mtimeMs}, …]
+  // meta.agentType stores the bare subagent type ("developer"), not the suffixed
+  // dispatch name ("developer-TASK-001"), so we key winners by agentType too.
+  const winnersByType = new Map(); // agentType → [{path, mtimeMs}, …]
   const groups = new Map(); // key=name|firstUuid → best
   for (const f of fileMeta) {
     const k = f.agentName + '|' + f.firstUuid;
@@ -74,20 +78,23 @@ export async function enrichSubagentChildren(phases, subagentsDir, toolCounts, a
     if (!cur || cur.size < f.size) groups.set(k, f);
   }
   for (const f of groups.values()) {
-    const list = winnersByName.get(f.agentName) || [];
+    const list = winnersByType.get(f.agentName) || [];
     list.push(f);
-    winnersByName.set(f.agentName, list);
+    winnersByType.set(f.agentName, list);
   }
 
-  const phasesByName = new Map();
+  // phases.agentType = bare subagent type (matches meta.agentType).
+  // phases.agentName = suffixed dispatch name (e.g. "developer-TASK-001") — not in meta.
+  const phasesByType = new Map();
   for (const p of targets) {
-    const list = phasesByName.get(p.agentName) || [];
+    const key = p.agentType;
+    const list = phasesByType.get(key) || [];
     list.push(p);
-    phasesByName.set(p.agentName, list);
+    phasesByType.set(key, list);
   }
 
-  for (const [name, phasesForName] of phasesByName) {
-    const winners = (winnersByName.get(name) || []).sort((a, b) => a.mtimeMs - b.mtimeMs);
+  for (const [name, phasesForName] of phasesByType) {
+    const winners = (winnersByType.get(name) || []).sort((a, b) => a.mtimeMs - b.mtimeMs);
     const phasesSorted = [...phasesForName].sort((a, b) => a.startTs.localeCompare(b.startTs));
     const n = Math.min(winners.length, phasesSorted.length);
     for (let i = 0; i < n; i++) {

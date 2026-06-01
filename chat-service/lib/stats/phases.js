@@ -9,6 +9,7 @@ export function extractPhases(events, agentToolIdToTeam) {
   const agentTypeByToolId = new Map();
   const agentNameByToolId = new Map();
   const agentTypeByTaskId = new Map();
+  const isBackgroundByToolId = new Map();
   // First pass: index Agent/Task tool_uses by their tool_use_id.
   // Also capture the dispatch `name` (e.g. "developer-TASK-001") which is needed
   // to map a phase to its per-activation subagent transcripts (N reveils via
@@ -19,6 +20,7 @@ export function extractPhases(events, agentToolIdToTeam) {
       if ((b.name === 'Agent' || b.name === 'Task') && b.input?.subagent_type) {
         agentTypeByToolId.set(b.id, b.input.subagent_type);
         if (b.input.name) agentNameByToolId.set(b.id, b.input.name);
+        if (b.input.run_in_background) isBackgroundByToolId.set(b.id, true);
       }
     }
   }
@@ -59,6 +61,9 @@ export function extractPhases(events, agentToolIdToTeam) {
           // Falls back to undefined for local_agent dispatches without a name.
           agentName: agentNameByToolId.get(ev.tool_use_id),
           taskType: ev.task_type, // 'local_agent' | 'in_process_teammate' — distinguishes COMPLEX team members from planner/simple-developer
+          // Background local_agents (run_in_background: true) write only to their own
+          // JSONL file, never to the main stream — enriched via enrichSubagentChildren.
+          isBackground: isBackgroundByToolId.get(ev.tool_use_id) ?? false,
           description: ev.description || '',
           teamName: agentToolIdToTeam.get(ev.tool_use_id) ?? null,
           startTs: rec.ts,
@@ -231,7 +236,7 @@ export function accumulatePerPhaseTokens(events, phases) {
   const orch = phases.find((p) => p.kind === 'orchestrator');
   const phaseByToolUseId = new Map();
   for (const p of phases) {
-    if (p.kind !== 'agent' || p.taskType === 'in_process_teammate') continue;
+    if (p.kind !== 'agent' || p.taskType === 'in_process_teammate' || p.isBackground) continue;
     if (p._toolUseId) phaseByToolUseId.set(p._toolUseId, p);
   }
 
