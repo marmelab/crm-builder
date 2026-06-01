@@ -26,14 +26,20 @@ services:
       - MODE=${MODE:-demo}
     volumes:
       - ./crm-source:/app
-      - claude-auth:/home/developer/.claude
+      # Shared volume carries ONLY the OAuth login (entrypoint.sh symlinks the
+      # credential files into .claude). The harness config — agents, skills,
+      # hooks, rules, settings.json — comes purely from the image, so each
+      # instance runs its own branch's harness and a parallel instance can never
+      # overwrite it via this volume.
+      - claude-auth:/home/developer/.claude-auth
       - /var/run/docker.sock:/var/run/docker.sock
       - supabase-cache:/root/.docker
       - ./sessions:/chat-service/logs
 
 volumes:
   supabase-cache:
-  # Pinned name so OAuth credentials survive `-p <instance>` namespacing
-  # and are shared with every multi-instance stack (see docker-compose.multi.yml).
+  # Pinned name so the OAuth login survives `-p <instance>` namespacing and is
+  # shared with every multi-instance stack (see docker-compose.multi.yml).
+  # Mounted at /home/developer/.claude-auth (login only) — NOT over .claude.
   claude-auth:
     name: atomic-crm-claude-auth
