@@ -6,6 +6,12 @@
 #  network_mode: host exposes all ports directly on the host and
 #  makes Supabase's localhost:54321 reachable from inside the
 #  container when MODE=full or when switched at runtime.
+#
+#  ./crm-source:/app is a bind mount so users can browse and edit the
+#  CRM source from their machine (share with co-workers, edit in their
+#  IDE, etc.). The Dockerfile stages the initial source in
+#  /opt/atomic-crm-source; entrypoint.sh copies it into /app on first
+#  run when ./crm-source is empty.
 # ─────────────────────────────────────────────────────────────
 
 services:
@@ -19,15 +25,15 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - MODE=${MODE:-demo}
     volumes:
-      - crm-app:/app
+      - ./crm-source:/app
       - claude-auth:/home/developer/.claude
       - /var/run/docker.sock:/var/run/docker.sock
       - supabase-cache:/root/.docker
       - ./sessions:/chat-service/logs
-      - crm-docs:/app/docs
 
 volumes:
-  crm-app:
   supabase-cache:
+  # Pinned name so OAuth credentials survive `-p <instance>` namespacing
+  # and are shared with every multi-instance stack (see docker-compose.multi.yml).
   claude-auth:
-  crm-docs:
+    name: atomic-crm-claude-auth

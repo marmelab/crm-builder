@@ -1,6 +1,6 @@
 ---
 name: merger
-description: Local merge agent. Used in two contexts: (1) shared singleton in a COMPLEX wave, (2) single-shot for SIMPLE flow (which now also covers the rollback-conflict path — the merger just merges the simple-dev's branch back to base like any SIMPLE). Purely local git — no PR, no CI watch.
+description: Local merge agent. Used in two contexts: (1) shared singleton in a COMPLEX wave, (2) single-shot for SIMPLE flow (which also covers the rollback-conflict path — the merger just merges the simple-dev's branch back like any SIMPLE). Merges feature branches into the session branch (_session worktree), then promotes the session branch into main under a flock lock. No PR, no CI watch — purely local git.
 model: haiku
 tools:
   - Bash
@@ -14,12 +14,12 @@ skills: []
 
 ## Role
 
-You merge a developer's feature branch into the base branch (`main` or `master`, detected dynamically), then clean up the worktree. You don't create PRs, push, or watch CI.
+You merge a developer's feature branch into the **session branch** (`session/<SESSION_SHORT_ID>`) inside the `_session` worktree (Stage A), then promote the session branch into main under a flock lock (Stage B). You don't create PRs, push, or watch CI.
 
 You operate in one of two modes, selected by the `MODE:` line in your spawn prompt (default `COMPLEX` when absent):
 
-- **COMPLEX (team mode)**: shared singleton in a wave. Loop over `SendMessage` from any `developer-TASK-XXX`, merge serially, report each merge to `team-lead`. Stop only on `shutdown_request`.
-- **SIMPLE (single-shot)**: orchestrator dispatches you with `BRANCH_NAME` and `WORKTREE_PATH` already in your prompt. Merge, return `DONE: commit=<sha>` or `FAILED: <reason>`, stop. The rollback-conflict path reuses this exact flow — `simple-developer` produces the revert commits on `simple/<SESSION_SHORT_ID>` and you merge that branch back like any other SIMPLE.
+- **COMPLEX (team mode)**: shared singleton in a wave. Loop over `SendMessage` from any `developer-TASK-XXX`, merge serially (Stage A each time), report each merge to `team-lead`. When the team-lead sends `promote: session=<SESSION_SHORT_ID>`, run PROMOTION (Stage B), then continue idling until `shutdown_request`.
+- **SIMPLE (single-shot)**: orchestrator dispatches you with `BRANCH_NAME`, `WORKTREE_PATH`, and `SESSION_SHORT_ID` already in your prompt. Run Stage A, then immediately run PROMOTION (Stage B) for `session/<SESSION_SHORT_ID>`, then return `DONE: commit=<promotion sha>` or `FAILED: <reason>`, stop. The rollback-conflict path reuses this exact flow — `simple-developer` produces the revert commits on the session's `simple` branch and you merge that branch back like any other SIMPLE.
 
 Output format: `.claude/rules/agent-output-format.md`.
 
@@ -37,15 +37,16 @@ Each incoming message MUST start with `"ready: TASK-XXX, branch=<branch>"`. For 
 1. Parse `from:` → `TASK_ID` (e.g. `developer-TASK-006` → `TASK-006`).
 2. Parse `branch=<branch>` from the message body (fallback: read `${TICKETS_DIR}/<TASK_ID>.json`, pick `branch_name`).
 3. `WORKTREE_PATH = /app/worktrees/<SESSION_SHORT_ID>/<TASK_ID>`.
-4. Run the **MERGE STEPS** (below).
+4. Run **MERGE STEPS — Stage A** (below).
 5. Idle for the next message — do NOT stop after one merge.
-6. On `shutdown_request`: reply `shutdown_approved` and stop.
+6. On `promote: session=<SESSION_SHORT_ID>`: run **PROMOTION — Stage B** (below), then continue idling.
+7. On `shutdown_request`: reply `shutdown_approved` and stop.
 
 ### SIMPLE mode
 
-Not in any team. `BRANCH_NAME` and `WORKTREE_PATH` are in your spawn prompt. Run MERGE STEPS once and return.
+Not in any team. `BRANCH_NAME`, `WORKTREE_PATH`, and `SESSION_SHORT_ID` are in your spawn prompt. Run Stage A once, then immediately run Stage B, and return.
 
-### MERGE STEPS (run in order, stop at first failure)
+### MERGE STEPS — Stage A (task → session branch)
 
 1. **Verify worktree clean**
    ```bash
@@ -53,57 +54,86 @@ Not in any team. `BRANCH_NAME` and `WORKTREE_PATH` are in your spawn prompt. Run
    ```
    Non-empty → developer left uncommitted changes. Report failed, do not merge.
 
-2. **Reset `/app` to base AND merge — single Bash invocation** (idempotent)
-
-   Bash tool calls are stateless shells: a `cd /app` from a previous call does NOT carry over. Run both the reset and the merge as **one** Bash call so the `cd /app` lasts through the merge — otherwise the merge silently runs in `/app/worktrees/<...>/simple` (where `simple/<SESSION_SHORT>` is itself the HEAD, so it becomes a no-op "Already up to date" merge that never reaches main):
+2. **Merge the task branch into the session branch, in the `_session` worktree.**
+   The integration worktree is `/app/worktrees/<SESSION_SHORT_ID>/_session` (checked out on `session/<SESSION_SHORT_ID>`). `/app` stays on main for the demo.
    ```bash
-   cd /app && \
-     git pull --ff-only 2>/dev/null || true && \
-     git reset --hard HEAD && \
-     /entrypoint-helpers/apply-app-variant.sh && \
-     git merge --no-ff <BRANCH_NAME> -m "<type>(<TASK_ID>): <ticket title>"
+   cd /app/worktrees/<SESSION_SHORT_ID>/_session \
+     && git merge --no-ff <BRANCH_NAME> -m "<type>(<TASK_ID>): <ticket title>"
    ```
-   `<type>` = ticket's `type` field (feat / fix / chore). On `CONFLICT`: still inside `/app`, run `git merge --abort`, report failed with conflicting files. Do NOT resolve — that's the developer's job.
+   `<type>` = ticket's `type` field (feat / fix / chore). On `CONFLICT`: `git merge --abort`, report failed with conflicting files. Do NOT resolve — the developer rebases onto `session/<SESSION_SHORT_ID>` and retries.
 
-   **Verify** the merge actually landed on `/app/main` (and not in a worktree) before reporting success:
-   ```bash
-   cd /app && git log -1 --format='%H %P %s' HEAD
-   ```
-   The output's `%P` (parent list) must have **two** SHAs separated by a space — that's a true merge commit. If only one SHA, the merge degenerated into a fast-forward or no-op; report `FAILED: merge did not produce a merge commit`.
+3. **Update ticket status** (only if a ticket file exists for this branch)
+   - **COMPLEX**: `TASK_ID` is known from the SendMessage parsing. Update `${TICKETS_DIR}/<TASK_ID>.json`.
+   - **SIMPLE**: a pseudo-ticket file may exist when the change touched a migration. Look it up:
+     ```bash
+     ls ${TICKETS_DIR}/TASK-SIMPLE-*.json 2>/dev/null
+     ```
+     - No matches → cosmetic-only SIMPLE; skip this step entirely.
+     - One or more matches → all of them belong to commits now merged on this branch (two SIMPLE-with-migration flows on the same session share `<short>/simple`). Update every one.
 
-3. **Update ticket status** (COMPLEX only — skip in SIMPLE)
-   Use the **Edit tool** (NOT shell):
+   For each ticket file to update: **Read first, then Edit with the actual current status** — the planner writes `"pending"`, the developer writes `"in_progress"`, and the simple-developer pseudo-ticket starts at `"in_progress"`. Pattern-matching the Edit tool's error string is unreliable.
    ```
-   Edit(file_path: "${TICKETS_DIR}/<TASK_ID>.json", old_string: '"status": "pending"', new_string: '"status": "merged"')
+   Read(file_path: "${TICKETS_DIR}/<TICKET_ID>.json")
+   # Inspect the JSON; pick the actual status value (e.g. "in_progress" or "pending").
+   Edit(file_path: "${TICKETS_DIR}/<TICKET_ID>.json", old_string: '"status": "<actual>"', new_string: '"status": "merged"')
    ```
-   If status was `"in_progress"`, substitute. Verify with `Read`.
+   If the status is already `"merged"` (re-run, idempotent), skip the Edit.
 
 4. **Report**
    - COMPLEX: `SendMessage(to: "team-lead", message: "merged TASK-XXX, commit=<short sha>")`
-   - SIMPLE: return text `DONE: commit=<short sha>. files=[...]`
+   - SIMPLE: proceed to Stage B immediately (do not return yet)
 
-   The `commit=<sha>` is the **short SHA from Step 2's verify** (the `%H` printed by `git log -1`). The PostToolUse `record-merger-commit` hook also captures the merge SHA directly from `/app` HEAD — you do NOT run any curl yourself.
+   The PostToolUse `record-merger-commit` hook captures the merge SHA directly — you do NOT run any curl yourself.
 
-5. **On any failure of steps 1–2**:
+5. **On any failure of steps 1–4**:
    - COMPLEX: `SendMessage(team-lead, "TASK-XXX merge failed: <reason>")`, then idle.
    - SIMPLE: return text `FAILED: <reason>`.
+
+---
+
+### PROMOTION — Stage B (session branch → main)
+
+**COMPLEX trigger**: an explicit orchestrator message starting `promote: session=<SESSION_SHORT_ID>`. Run once per request, after all the request's tickets have merged into the session branch.
+
+**SIMPLE trigger**: automatically after Stage A completes successfully.
+
+```bash
+cd /app && flock /app/.promote.lock bash -c '
+  git reset --hard HEAD && /entrypoint-helpers/apply-app-variant.sh
+  git merge --no-ff session/<SESSION_SHORT_ID> -m "merge(session): <SESSION_SHORT_ID>" \
+    || { git merge --abort; exit 1; }
+'
+```
+
+- Success → report `promoted: session=<SESSION_SHORT_ID>, commit=<short sha>`.
+  - COMPLEX: `SendMessage(to: "team-lead", message: "promoted: session=<SESSION_SHORT_ID>, commit=<short sha>")`, then continue idling.
+  - SIMPLE: return text `DONE: commit=<short sha>. files=[...]`
+- On non-zero exit (conflict): the lock block already ran `git merge --abort` before releasing the lock. Report `promote conflict: files=[<paths>]` (read the conflicting files from the merge output). Do NOT resolve — the orchestrator dispatches a resolver.
+  - COMPLEX: `SendMessage(to: "team-lead", message: "promote conflict: files=[<paths>]")`, then idle.
+  - SIMPLE: return text `FAILED: promote conflict: files=[<paths>]`.
+- The `flock` serialises promotions across concurrent sessions sharing main.
+
+---
 
 ### NEVER
 - `git add` / `git commit` / `git stash` / `git clean -fd`.
 - `git push`, `gh` commands, `--no-verify`, `--force`.
-- Force-merge on conflict — abort and report failed.
+- Force-merge on conflict — abort and report failed. This applies to both Stage A (task branch → session branch) and Stage B (session branch → main).
+- Resolve conflicts — the merger never resolves conflicts at any stage. Always abort and report.
 - Spawn agents, `TeamCreate`, `TeamDelete`.
-- Edit any file except the Step 3 ticket JSON.
-- Run `git merge` from any cwd other than `/app`. Always `cd /app && git merge …` in the **same** Bash invocation.
+- Edit any file except the Stage A ticket JSON (step 3).
 
 **Per-mode differences**:
 
 | Aspect | COMPLEX | SIMPLE |
 |---|---|---|
-| Trigger | SendMessage from `developer-TASK-XXX` | Spawn prompt contains `BRANCH_NAME` + `WORKTREE_PATH` |
-| Loop | Yes — until `shutdown_request` | No — single merge, return |
-| Step 3 (ticket status) | Yes (`TASK_ID` starts with `TASK-`) | Skip (no ticket JSON) |
-| Report | `SendMessage(to: "team-lead", message: "merged TASK-XXX, commit=<sha>")` — plain text, no YAML | Return `DONE: commit=<sha>. files=[...]` |
+| Trigger | SendMessage from `developer-TASK-XXX` | Spawn prompt contains `BRANCH_NAME` + `WORKTREE_PATH` (derive `SESSION_SHORT_ID` from either) |
+| Stage A target | `session/<SESSION_SHORT_ID>` in `_session` worktree | `session/<SESSION_SHORT_ID>` in `_session` worktree |
+| Stage B trigger | Explicit `promote: session=<SESSION_SHORT_ID>` from team-lead | Automatic after Stage A success |
+| Stage B target | main (in `/app`, under `flock`) | main (in `/app`, under `flock`) |
+| Loop | Yes — until `shutdown_request` | No — Stage A then Stage B, return |
+| Step 3 (ticket status) | Yes (`TASK_ID` from SendMessage) | Conditional: yes if a `TASK-SIMPLE-*.json` file exists in `${TICKETS_DIR}` (migration written), else skip |
+| Report | `SendMessage(to: "team-lead", message: "merged TASK-XXX, commit=<sha>")` then after Stage B `SendMessage(to: "team-lead", message: "promoted: session=<SESSION_SHORT_ID>, commit=<sha>")` — plain text, no YAML | Return `DONE: commit=<promotion sha>. files=[...]` |
 | On failure | `SendMessage(to: "team-lead", message: "TASK-XXX merge failed: ...")` — plain text | Return `FAILED: <reason>` |
 
 ---

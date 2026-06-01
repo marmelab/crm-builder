@@ -29,9 +29,19 @@ export function createRuntime(session) {
     claudeSessionId: session.meta.claudeSessionId || null,
     busy: false,
     queue: [],
+    queueIdSeq: 0,
     stopping: false,
     currentProc: null,
     clients: new Set(),
+    // Subagent-transcript tailer state. Lives on the runtime so it survives
+    // across turns: a long-running session re-dispatches the same subagent
+    // types repeatedly, and we need uuid-based dedup to avoid re-emitting
+    // events from prior turns' transcripts on each new turn.
+    subagentTailerStop: null,
+    subagentSeenUuids: new Set(),
+    subagentFileOffsets: new Map(),
+    subagentFileMtimes: new Map(),
+    subagentAgentTypeCache: new Map(),
     stats: {
       // tokensUsed = legacy headline (input + cache_creation + output). Kept as
       // a derived number so older consumers keep working. The authoritative
@@ -71,16 +81,10 @@ export function createRuntime(session) {
       // is locked on the FIRST dispatch from its subagent_type so SIMPLE/
       // MEMORY flows show a stable total upfront. `dispatchedSubagentTypes`
       // keeps subagent_type in dispatch order — length is the dispatched
-      // count; per-position role drives the remaining time in ticket-progress.js.
+      // count; per-position role drives the remaining time in progress-bar.ts.
       agentsCompleted: 0,
       flowExpected: 0,
       dispatchedSubagentTypes: [],
-      // Parallel to dispatchedSubagentTypes — epoch ms at dispatch time.
-      // Drives the per-step time-based fill animation on the client (so a
-      // step's bar advances over its predicted duration even between
-      // progress events). Also used for the orchestrator: turnStartedAt.
-      dispatchedSubagentStartedAt: [],
-      turnStartedAt: 0,
     },
   };
 }

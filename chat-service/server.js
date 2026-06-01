@@ -4,12 +4,15 @@ import { fileURLToPath } from 'url';
 import { WebSocketServer } from 'ws';
 
 import { PORT, MODE_DEMO, MODE_FULL } from './lib/server/config.js';
-import { loadSystemPrompt, applySystemPrompt } from './lib/server/system-prompt.js';
+import {
+  loadSystemPrompt, applySystemPrompt,
+  loadDocumentatorPrompt, applyDocumentatorPrompt,
+} from './lib/server/system-prompt.js';
 import { openSession, deleteSession } from './lib/server/session-store.js';
 import { createRequestHandler, switchMode } from './lib/server/http-routes.js';
 import { runtimes, wsToRuntime, runtimeForWs, createRuntime, safeSend } from './lib/server/runtime.js';
-import { sendToWs } from './lib/server/ws-bus.js';
-import { sendProgress } from './lib/server/ticket-progress.js';
+import { sendToWs, broadcast } from './lib/server/ws-bus.js';
+import { updateProgressBar } from './lib/server/progress-bar.ts';
 import { regenerateTitleWithHaiku, extractText, extractToolUses } from './lib/server/claude-spawn.js';
 import { processMessage } from './lib/server/turn.js';
 import { endsWithQuestion } from './lib/server/session-store.js';
@@ -85,8 +88,10 @@ wss.on('connection', async (ws, req) => {
     // Messages currently waiting in the queue are persisted in the log like
     // any other user message; the "waiting" badge is a pure client-side
     // marker. Tell the joining tab how many of the tail user messages are
-    // still queued so it can re-apply the badge.
+    // still queued so it can re-apply the badge, and their queue ids so the
+    // tab can wire each queued message to its server-side cancellation id.
     queuedCount: runtime.queue.length,
+    queuedIds: runtime.queue.map((q) => q.id),
     // Re-hydrate the "working" UI (dots, stop button, spinner) when a turn
     // is in progress — conveyed inline rather than via a separate status
     // frame so the client doesn't mistakenly interpret it as a false→true
@@ -94,12 +99,7 @@ wss.on('connection', async (ws, req) => {
     working: runtime.busy,
     isNew: session.isNew,
   });
-  // Send the current progress snapshot so a (re)joining tab paints the
-  // counter immediately instead of waiting for the next agent event. Direct
-  // per-ws send bypasses the broadcast dedup cache — without that, a refresh
-  // during a stable phase (no state change since the last broadcast) would
-  // leave the new tab stuck at 0%.
-  sendProgress(runtime, ws);
+  updateProgressBar(runtime, ws);
   // Repaint the cumulative tokens/cost ticker on (re)connect — runtime.stats
   // is seeded from the log digest, but resetChatUi just cleared the DOM.
   // Skip when there's nothing to show (fresh session) to avoid a "0 tokens
@@ -124,6 +124,7 @@ wss.on('connection', async (ws, req) => {
     if (parsed.type === 'stop') {
       if (!r.busy) return;
       r.stopping = true;
+      const hadQueued = r.queue.length > 0;
       r.queue = [];
       const p = r.currentProc;
       if (p && !p.killed) {
@@ -133,6 +134,32 @@ wss.on('connection', async (ws, req) => {
         }, 2000);
       }
       r.session?.logWrite('in', { type: 'stop_requested' });
+      if (hadQueued) {
+        // Tell all tabs the queue is now empty so any queued bubbles drop their
+        // ⏳ badge / × button.
+        broadcast(r, { type: 'queue_updated', queuedIds: [] });
+      }
+      return;
+    }
+
+    // Cancel a specific queued message by its server-assigned id. Idempotent:
+    // a stale id (already shifted or cancelled) just re-broadcasts the current
+    // queue so the requester reconciles. The user message stays in the log but
+    // is flagged via a paired `cancel_queued` entry, which digestLog filters
+    // out — so refresh / rejoin won't resurrect the cancelled bubble.
+    if (parsed.type === 'cancel_queued') {
+      const id = Number(parsed.id);
+      if (!Number.isFinite(id)) return;
+      const idx = r.queue.findIndex((q) => q.id === id);
+      if (idx !== -1) {
+        r.queue.splice(idx, 1);
+        r.session?.logWrite('in', { type: 'cancel_queued', queueId: id });
+      }
+      const queuedIds = r.queue.map((q) => q.id);
+      const payload = idx !== -1
+        ? { type: 'queue_updated', queuedIds, cancelledId: id }
+        : { type: 'queue_updated', queuedIds };
+      broadcast(r, payload);
       return;
     }
 
@@ -142,7 +169,18 @@ wss.on('connection', async (ws, req) => {
     const displayed = typeof parsed.display === 'string' && parsed.display.trim()
       ? parsed.display
       : parsed.content;
-    r.session.logWrite('in', { type: 'user_message', content: parsed.content, display: displayed });
+    // Tag the log entry with `queueId` only when the message lands in the
+    // queue: that id is what `cancel_queued` references, and digestLog uses
+    // the pair to drop cancelled bubbles on rehydrate. Messages that run
+    // immediately can never be cancelled, so they stay untagged.
+    let queueId = null;
+    if (r.busy) {
+      queueId = ++r.queueIdSeq;
+      r.queue.push({ id: queueId, content: parsed.content });
+    }
+    const logEntry = { type: 'user_message', content: parsed.content, display: displayed };
+    if (queueId !== null) logEntry.queueId = queueId;
+    r.session.logWrite('in', logEntry);
     r.session.recordMessage('user', displayed).then(() => {
       // Trigger Haiku retitling on the 1st user message, once per session.
       const m = r.session.meta;
@@ -150,8 +188,9 @@ wss.on('connection', async (ws, req) => {
         regenerateTitleWithHaiku(r).catch(() => {});
       }
     }).catch(() => {});
-    if (r.busy) {
-      r.queue.push(parsed.content);
+    if (queueId !== null) {
+      const queuedIds = r.queue.map((q) => q.id);
+      broadcast(r, { type: 'queue_updated', queuedIds, addedId: queueId });
     } else {
       r.busy = true;
       processMessage(r, parsed.content);
@@ -179,12 +218,22 @@ wss.on('connection', async (ws, req) => {
 });
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  loadSystemPrompt().then((parsed) => {
-    applySystemPrompt(parsed);
-    const t = parsed.tools?.length ? parsed.tools.join(',') : 'default';
-    console.log(parsed.content ? `Orchestrator loaded (model: ${parsed.model || 'default'}, tools: ${t}).` : 'No orchestrator prompt, using default.');
-  });
-  httpServer.listen(PORT, '0.0.0.0', () => {
-    console.log(`Chat service listening on port ${PORT}`);
+  // Await both prompt loads before accepting connections — otherwise a turn
+  // can complete in the window between listen() and the .then callback and
+  // spawn the documentator with an empty prompt.
+  Promise.all([
+    loadSystemPrompt().then((parsed) => {
+      applySystemPrompt(parsed);
+      const t = parsed.tools?.length ? parsed.tools.join(',') : 'default';
+      console.log(parsed.content ? `Orchestrator loaded (model: ${parsed.model || 'default'}, tools: ${t}).` : 'No orchestrator prompt, using default.');
+    }),
+    loadDocumentatorPrompt().then((parsed) => {
+      applyDocumentatorPrompt(parsed);
+      console.log(parsed.content ? `Documentator loaded (model: ${parsed.model || 'default'}).` : 'No documentator prompt, post-turn synthesis disabled.');
+    }),
+  ]).then(() => {
+    httpServer.listen(PORT, '0.0.0.0', () => {
+      console.log(`Chat service listening on port ${PORT}`);
+    });
   });
 }

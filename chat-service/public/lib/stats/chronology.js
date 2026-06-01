@@ -193,9 +193,11 @@ function renderPhaseRow(phase, relLabel) {
 
 function renderChildRow(child, relLabel) {
   let icon = '🔧', label = child.kind, detail = '';
+  let fullBody = null;
   if (child.kind === 'tool_use') {
     icon = (child.verdict && VERDICT_ICON[child.verdict]) ? VERDICT_ICON[child.verdict] : toolIcon(child.tool);
     label = child.tool; detail = child.detail ?? '';
+    if (child.tool === 'SendMessage' && child.fullContent) fullBody = child.fullContent;
   }
   else if (child.kind === 'skill') { icon = '🧠'; label = 'Skill'; detail = child.skill; }
   else if (child.kind === 'hook') {
@@ -210,10 +212,18 @@ function renderChildRow(child, relLabel) {
     label = silent ? 'silent gap' : 'gap';
     detail = child.preview ?? (silent ? 'no stream activity' : `${child.eventsDuringGap} event${child.eventsDuringGap > 1 ? 's' : ''}`);
   }
+  else if (child.kind === 'agent_text') {
+    icon = '💬';
+    label = 'text';
+    detail = String(child.text).replace(/\s+/g, ' ').trim();
+    fullBody = child.text;
+  }
 
-  const dur = child.isApprox
-    ? `~${formatDuration(child.durationMs)}`
-    : formatDuration(child.durationMs);
+  const dur = child.kind === 'agent_text'
+    ? ''
+    : (child.isApprox
+        ? `~${formatDuration(child.durationMs)}`
+        : formatDuration(child.durationMs));
 
   const detailSpan = el('span', { className: 'child-detail', title: String(detail) });
   detailSpan.textContent = String(detail);
@@ -221,11 +231,26 @@ function renderChildRow(child, relLabel) {
   const failedHook = child.kind === 'hook' && child.result === 'fail';
   const verdictCls = child.verdict ? ` child-verdict-${child.verdict}` : '';
   const cls = `child-row child-${child.kind}${failedHook ? ' child-hook-fail' : ''}${verdictCls}`;
-  return el('div', { className: cls },
+
+  const cells = [
     el('span', { className: 'child-time' }, relLabel(child.ts || child.startTs)),
     el('span', { className: 'child-icon' }, icon),
     el('span', { className: 'child-label' }, label),
     detailSpan,
     el('span', { className: 'child-dur' }, dur),
-  );
+  ];
+
+  // Expandable rows: agent text + SendMessage with a full body. <details> is
+  // collapsed by default so the timeline stays scannable; expanding swaps in a
+  // <pre> with the full content.
+  if (fullBody) {
+    const det = el('details', { className: cls + ' child-expandable' });
+    const summary = el('summary', { className: 'child-row-summary' }, ...cells);
+    const body = el('pre', { className: 'child-full' });
+    body.textContent = fullBody;
+    det.append(summary, body);
+    return det;
+  }
+
+  return el('div', { className: cls }, ...cells);
 }

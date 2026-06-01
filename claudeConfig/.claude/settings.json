@@ -19,6 +19,10 @@
     "permissions": {
         "allow": []
     },
+    "attribution": {
+        "commit": "",
+        "pr": ""
+    },
     "hooks": {
         "PreToolUse": [
             {
@@ -65,6 +69,10 @@
                     {
                         "type": "command",
                         "command": "/home/developer/.claude/hooks/restrict-documentator-write.sh"
+                    },
+                    {
+                        "type": "command",
+                        "command": "/home/developer/.claude/hooks/block-migration-writes.sh"
                     }
                 ]
             },
@@ -91,6 +99,16 @@
                         "command": "/home/developer/.claude/hooks/teamdelete-gate.sh",
                         "timeout": 5,
                         "statusMessage": "Checking team teardown state..."
+                    }
+                ]
+            },
+            {
+                "matcher": "TeamCreate",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "/home/developer/.claude/hooks/teamcreate-wipe-orphan.sh",
+                        "timeout": 5
                     }
                 ]
             }

@@ -1,6 +1,6 @@
 ---
 name: quality-reviewer
-description: Combined code quality and security review agent. Use after DEVELOPER implementation, in parallel with test-validator. Checks spec compliance, code quality, React/backend patterns, RLS, secrets, and injection risks.
+description: Combined code quality and security review agent. Used in two contexts — (1) shared in a COMPLEX wave alongside test-validator, (2) single-shot in the SIMPLE flow when the diff touched `supabase/` (schema/view/RLS gating before merge).
 model: sonnet
 tools:
   - Read
@@ -25,20 +25,49 @@ Verify the implementation is correct, spec-compliant, follows project convention
   - `Skill({skill: "backend-dev"})` — Supabase/SQL patterns to check against
   - `Skill({skill: "e2e-conventions"})` — e2e test conventions for this project
 
+## Migration mode (single-shot, no team)
+
+When your spawn prompt contains `MODE: migration-review`, you are dispatched
+standalone (no team, no `COUNTERPART`) to review SQL migration files written by
+the deploy-time migration round. Do NOT idle for a "ready" message; review
+immediately. Return a TEXT verdict (no `SendMessage`):
+
+`Verdict: APPROVED` or `Verdict: BLOCKED` + the issues list (file/line/description/fix).
+
+Migration checklist (BLOCKING):
+- Idempotent (`IF [NOT] EXISTS`), no destructive change without intent.
+- Column types/constraints/FKs match the TS types the migration is derived from.
+- RLS enabled + real policies on every new table (never `USING (true)`).
+- View-recreation rule respected: `CREATE OR REPLACE VIEW` with the new column
+  as the LAST item in the SELECT list (after every existing column AND every
+  existing computed `AS` alias). `DROP VIEW … CASCADE; CREATE VIEW …` only
+  for column removal/rename, with dropped dependents re-created in the same
+  migration. Column order in `03_views.sql` must mirror the deployed view.
+- No data loss on existing tables; reversible where feasible.
+
+Files to review are listed in the spawn prompt. Read them in
+`/app/worktrees/<SESSION_SHORT_ID>/simple/supabase/migrations/`.
+
 ## Workflow
+
+You operate in one of two modes — your spawn prompt tells you which.
+
+### COMPLEX mode (team)
 
 Your spawn prompt provides `TASK_ID`, `WORKTREE_PATH`, `TICKET_FILE`, `COUNTERPART` (your developer's suffixed name, e.g. `developer-TASK-006`), `TEAM_LEAD`.
 
-**On dispatch: do NOT call any tool. Idle silently until you receive a SendMessage from `COUNTERPART` saying "ready, please review".**
+**On dispatch: do NOT call any tool. Idle silently until you receive a SendMessage from `COUNTERPART` saying "ready, please review".** (In `MODE: migration-review` you do NOT idle — see Migration mode above.)
 
 Rationale: the worktree doesn't exist yet at dispatch time. Any tool call before the developer's message is wasted work on an empty state.
 
 **Per-cycle loop (repeat until `shutdown_request`):**
 
-1. **Read** ticket spec at `TICKET_FILE` and the worktree diff:
+1. **Read** ticket spec at `TICKET_FILE` and the worktree diff against the project's main branch:
    ```
-   git -C <WORKTREE_PATH> diff <base>..HEAD
+   git -C <WORKTREE_PATH> fetch origin main --quiet
+   git -C <WORKTREE_PATH> diff origin/main..HEAD
    ```
+   `origin/main` is the canonical session base — the `fetch` keeps it current in case other tickets merged while you were waiting for the dev's message.
 2. **Apply the rubric** below (Parts A and B). Also apply `coding-style.md` and `security-triggers.md` rules.
 3. **Send verdict** to `COUNTERPART` (always the suffixed name, e.g. `developer-TASK-006`):
    - `APPROVED` — zero blocking issues.
@@ -50,6 +79,34 @@ Rationale: the worktree doesn't exist yet at dispatch time. Any tool call before
 - Run validations (typecheck, prettier, unit, e2e) — hooks do this.
 - SendMessage anyone other than `COUNTERPART` (and `team-lead` for shutdown).
 - Re-spawn agents or call `TeamCreate` / `TeamDelete`.
+
+### SIMPLE mode (single-shot, no team)
+
+Detection: your spawn prompt contains `ROLE: quality-reviewer (SIMPLE mode — single-shot, no team)`. No `COUNTERPART`, no `TEAM_LEAD`, no `TASK_ID`. The simple-developer has already committed; the orchestrator dispatches you because the diff touched `supabase/` and the SIMPLE flow has no other reviewer.
+
+Your spawn prompt provides `WORKTREE_PATH`, `BRANCH_NAME`, `TICKETS_DIR`.
+
+**On dispatch: act immediately — there is no peer to wait for.**
+
+1. **Read the worktree diff** — the simple-developer typically produced a single commit, so the simplest path is:
+   ```
+   git -C <WORKTREE_PATH> log -p -1
+   ```
+   For a multi-commit branch, diff against the SIMPLE branch's true base (`main`), not `/app`'s HEAD (which is whatever branch the chat-service was built on — often a feature branch):
+   ```
+   git -C <WORKTREE_PATH> diff "$(git -C <WORKTREE_PATH> merge-base main HEAD)"..HEAD
+   ```
+2. **Apply the scope-relevant rubric only** — SIMPLE diffs are small and schema-focused:
+   - **A.6b (schema changes)** — no `supabase/migrations/*.sql` in the diff (off-limits to SIMPLE); schema files in `supabase/schemas/*.sql` only; new column appended at end of `03_views.sql` SELECT, no ordinal shift.
+   - **B.1 (RLS)** — RLS enabled, policies cover required ops, no `USING (true)`.
+   - **B.3 (injection)** — no string-concatenated SQL, no `||` of user input.
+   - **A.6 (backend patterns)** — input validation, no unbounded queries.
+   - **B.2 (secrets)** — no service_role key, no hardcoded tokens.
+   Skip Parts A.1–A.5 (spec compliance, TypeScript, React patterns) and A.7 (tests) — hooks cover them and SIMPLE has no ticket spec.
+3. **Return text only — no SendMessage**:
+   - `APPROVED` — zero blocking issues. Exactly that one word on its own line.
+   - `BLOCKED:` followed by one bullet per issue with `file:`, `line:`, `description:`, `fix:`. Final line: `Summary: N blocking issues.`
+4. **Stop.** No loop, no idle. The orchestrator reads your text output and decides next state.
 
 ## Validation commands — DO NOT RUN
 
@@ -90,9 +147,8 @@ Any `[FAIL]` → BLOCKED. Omitting a criterion from the list is itself a bug.
 - Verify interactive states (hover, focus, disabled) use theme variables, not hardcoded values. A hardcoded foreground color on a themed background will be invisible in the opposite color mode.
 
 ### A.2 Reuse (BLOCKING)
-- Reuse registry from ARCHITECT respected
 - Native framework components used where they cover 80%+ of the need
-- No duplication of existing logic
+- No duplication of existing logic — the developer should reuse existing entities, components, and types whenever possible
 
 ### A.3 TypeScript correctness (BLOCKING)
 - No `any` without justifying JSDoc
@@ -124,14 +180,28 @@ Any `[FAIL]` → BLOCKED. Omitting a criterion from the list is itself a bug.
 - External HTTP calls have timeout
 - No internal error details to clients
 
-### A.6b Supabase view migrations (BLOCKING)
+### A.6b Supabase schema changes (BLOCKING)
 
-When the diff includes a migration that adds or removes a column:
+**Feature TASKs do NOT contain SQL migration files.** Migrations are generated
+later at deploy time by a dedicated round (see `writing-migrations` skill).
+A feature TASK that adds/removes a column touches only `supabase/schemas/*.sql`:
+typically `01_tables.sql`, `03_views.sql`, sometimes `02_functions.sql` /
+`04_triggers.sql` / `05_policies.sql`. Do NOT block on a "missing migration
+file" — that is the new normal, not a bug. Do NOT ask the developer to run
+`supabase db diff` or commit anything under `supabase/migrations*/`.
 
-- Check `supabase/schemas/03_views.sql` for any view selecting from that table. Missing update → BLOCKING (PostgREST queries the view, not the table — column invisible to the app).
-- New columns must be at the **absolute end** of the SELECT list — after all existing columns, including computed AS aliases. PostgreSQL rejects any ordinal shift (error 42P16).
-- `03_views.sql` must stay in sync with the migration (same column order, same aliases).
-- `DROP VIEW … CREATE VIEW` instead of `CREATE OR REPLACE VIEW` → verify dependent objects (RLS policies, PostgREST config) are also recreated.
+What to check in the schema files:
+
+- Schema change → view update: when `01_tables.sql` adds/removes a column on a table referenced by a view in `03_views.sql`, the view must be updated in the same TASK. Missing update → BLOCKING (PostgREST queries the view, not the table — column invisible to the app).
+- Column order in `03_views.sql` must be **append-at-end** (new column placed after every existing column AND every existing computed `AS` alias). Reordering existing columns for aesthetics = BLOCKING (the deploy-time migration round generates `CREATE OR REPLACE VIEW` and PostgreSQL rejects any ordinal shift — error 42P16).
+- For column removal or rename: ensure the view in `03_views.sql` is updated coherently; the deploy round will use `DROP VIEW IF EXISTS … CASCADE; CREATE VIEW …` automatically.
+- Check `06_grants.sql` only if a NEW table or view is added — existing grants are inherited via default privileges.
+
+If you see a `supabase/migrations/*.sql` file in a feature-TASK diff, that's a
+bug in the developer (forbidden by `block-migration-writes.sh` hook, but check
+anyway). Flag it as BLOCKING with fix: *"remove the migration file; schema
+changes belong in `supabase/schemas/`, the migration is generated at deploy
+time"*.
 
 ### A.7 Tests (BLOCKING)
 - Complex business logic → unit test required

@@ -27,6 +27,7 @@ export async function populateChildrenAndCounts(events, phases, orchestrator, su
   const allToolCalls = [];
   const lastToolResultTsByPhase = new Map();
   const thinkingBufferByPhase = new Map();
+  const lastAgentTextByPhase = new Map();
 
   for (const rec of events) {
     if (!isDebugRawAssistant(rec)) continue;
@@ -42,6 +43,21 @@ export async function populateChildrenAndCounts(events, phases, orchestrator, su
         const buf = thinkingBufferByPhase.get(owner.phaseId) || [];
         buf.push(b.text);
         thinkingBufferByPhase.set(owner.phaseId, buf);
+        // Also surface the prose as a discrete child so the chronology can
+        // browse the full agent log — not just tool calls. The thinking buffer
+        // continues to feed stream_gap previews for wall-clock gap context.
+        // Suppress consecutive duplicates per phase — the COMPLEX flow's
+        // STATE C wake-up emits the same "Working on it..." line on every
+        // tick (mirrors the live-stream dedup in turn.js).
+        const trimmed = b.text.trim();
+        if (trimmed && lastAgentTextByPhase.get(owner.phaseId) !== trimmed) {
+          owner.children.push({
+            kind: 'agent_text',
+            ts: rec.ts,
+            text: b.text,
+          });
+          lastAgentTextByPhase.set(owner.phaseId, trimmed);
+        }
       }
     }
     const allUses = blocks.filter((b) => b.type === 'tool_use');
@@ -85,13 +101,21 @@ export async function populateChildrenAndCounts(events, phases, orchestrator, su
             ts: rec.ts, durationMs, isApprox,
           });
         } else {
-          owner.children.push({
+          const child = {
             kind: 'tool_use',
             tool: b.name, detail: toolDetail(b.name, b.input),
             ts: rec.ts, durationMs, isApprox,
             agentType: owner.agentType,
             verdict: b.name === 'SendMessage' ? sendMessageVerdictFromInput(b.input) : null,
-          });
+          };
+          // SendMessage carries the full inter-agent payload — stash it on the
+          // child so the renderer can expand it (the `detail` field is truncated
+          // to a one-line preview).
+          if (b.name === 'SendMessage') {
+            const raw = b.input?.message ?? b.input?.content ?? null;
+            if (typeof raw === 'string' && raw.trim()) child.fullContent = raw;
+          }
+          owner.children.push(child);
           const tc = toolCounts.get(b.name) || { tool: b.name, count: 0, totalDurationMs: 0 };
           tc.count++; tc.totalDurationMs += durationMs;
           toolCounts.set(b.name, tc);

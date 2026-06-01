@@ -49,6 +49,10 @@ export function digestLog(logText) {
   let currentSpawnBreakdown = emptyBreakdown();
   let currentSpawnFallback = emptyBreakdown();
   let currentSpawnSawModelUsage = false;
+  // queueId → timeline index of the user message it was assigned to. When the
+  // matching `cancel_queued` entry is later encountered, we null out that slot
+  // so the bubble doesn't reappear on rehydrate.
+  const queuedUserMessageSlots = new Map();
 
   const commitSpawn = () => {
     costUsd += currentSpawnMax;
@@ -88,6 +92,14 @@ export function digestLog(logText) {
       if (userMessageCount > 0) commitSpawn();
       userMessageCount++;
       timeline.push({ kind: 'message', role: 'user', content: entry.display || entry.content || '', ts: entry.ts });
+      if (entry.queueId != null) queuedUserMessageSlots.set(entry.queueId, timeline.length - 1);
+    } else if (entry.dir === 'in' && entry.type === 'cancel_queued') {
+      const slot = queuedUserMessageSlots.get(entry.queueId);
+      if (slot != null) {
+        timeline[slot] = null;
+        droppedAny = true;
+        queuedUserMessageSlots.delete(entry.queueId);
+      }
     } else if (entry.dir === 'out' && entry.type === 'message' && entry.role === 'assistant') {
       const item = { kind: 'message', role: 'assistant', content: entry.content || '', ts: entry.ts };
       if (entry.subtype) item.subtype = entry.subtype;

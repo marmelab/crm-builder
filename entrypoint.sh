@@ -19,6 +19,20 @@ fi
 echo -e "${BOLD}${BLUE}╚══════════════════════════════════════════════════════╝${NC}"
 echo ""
 
+# ── First-run bootstrap ───────────────────────────────────────
+# /app is bind-mounted from ./crm-source on the host so users can browse and
+# share the CRM source. On the first run that host folder is empty, so we
+# restore the build artifacts staged at /opt/atomic-crm-source by the
+# Dockerfile (includes node_modules, .git, etc. — keeps `cp -al` worktree
+# hard-links working since everything stays on the same device).
+if [ ! -f /app/package.json ] && [ -d /opt/atomic-crm-source ]; then
+  echo -e "${BOLD}${BLUE}First run — populating /app from image (this takes ~30s)…${NC}"
+  cp -a /opt/atomic-crm-source/. /app/
+  chown -R developer:developer /app
+  echo -e "${GREEN}✓  Source ready in ./crm-source${NC}"
+  echo ""
+fi
+
 # ── Auth check — API key or OAuth token ───────────────────────
 CLAUDE_DIR="/home/developer/.claude"
 
@@ -92,13 +106,13 @@ touch /chat-service/logs/hooks.log 2>/dev/null || true
 chown developer:developer /chat-service/logs/hooks.log 2>/dev/null || true
 chmod 664 /chat-service/logs/hooks.log 2>/dev/null || true
 
-# Runtime-generated docs (reflections, learnings) — bind-mounted from host ./crm-docs.
-# On a fresh host, the directory may be empty and owned by root (if Docker runs as
-# root on Linux) or by a host UID that doesn't match developer's UID. Without this
-# chown the developer cannot write reflections and Mode 2 silently fails.
+# Runtime-generated docs (reflections, learnings) — live inside the ./crm-source
+# bind mount at /app/docs. On a fresh host, parent dirs may be missing or owned
+# by an unexpected UID after the first-run bootstrap; ensure they exist and are
+# writable by developer so Mode 2 can persist reflections.
 # Note: ticket files (TASK-XXX.json) live in /chat-service/logs/<sessionId>/ now,
 # alongside log.jsonl and meta.json — chown'd via the chat-service logs block above.
-mkdir -p /app/docs/reflections /app/docs/learnings 2>/dev/null || true
+mkdir -p /app/docs/learnings /app/adr 2>/dev/null || true
 
 if [ ! -f /app/docs/learnings/patterns.md ]; then
   cat > /app/docs/learnings/patterns.md <<'PATTERNS_EOF'
@@ -130,9 +144,9 @@ if [ -f /app/.gitignore ] && ! grep -qxF 'worktrees/' /app/.gitignore; then
 fi
 
 # ── Sync node_modules with package-lock.json ──────────────────
-# Volume crm-app:/app persists node_modules across restarts. If an agent
-# modifies package.json/package-lock.json (e.g. adds a dependency) and
-# commits, the volume keeps the old node_modules. Hash-check at boot:
+# The ./crm-source bind mount persists node_modules across restarts. If an
+# agent modifies package.json/package-lock.json (e.g. adds a dependency) and
+# commits, the host folder keeps the old node_modules. Hash-check at boot:
 # if package-lock.json changed since last npm ci, re-install.
 LOCK_HASH=$(sha256sum /app/package-lock.json 2>/dev/null | cut -d' ' -f1)
 PREV_HASH=$(cat /app/.npm-ci-hash 2>/dev/null || echo "")
@@ -171,9 +185,33 @@ manually — request a setup via the chat UI's "Define your business" flow.
 If the file is missing or has \`validated: false\`, the project has not yet
 been cadred — propose the user to run "Define your business" from the chat
 UI before implementing entity/field changes.
+
+Architectural decisions live in \`adr/\`. Source files reference them via
+\`// See adr/ADR-NNN-...\` comments — \`grep -r 'adr/ADR-' src/\` to locate.
+
+\`MEMORY.md\` holds long-lived domain knowledge (business rules, custom-field
+semantics, workflow constraints). Read explicitly by domain-aware agents
+(planner, developer, simple-developer, documentator), not auto-imported.
+
 ${APP_AGENTS_REF}
 CLAUDEMD
 chown developer:developer /app/CLAUDE.md 2>/dev/null || true
+
+# Seed /app/MEMORY.md once on first boot. Maintained by the documentator
+# at session end — idempotent, only seeded if absent.
+if [ ! -f /app/MEMORY.md ]; then
+  cat > /app/MEMORY.md <<'MEMORYMD'
+# Project memory
+
+Long-lived domain knowledge. Maintained by the documentator at session end.
+One bullet, one sentence per fact.
+
+## Business Knowledge
+
+<!-- Domain vocabulary, business rules, custom fields, workflows. -->
+MEMORYMD
+  chown developer:developer /app/MEMORY.md 2>/dev/null || true
+fi
 
 # Commit the orientation file on main if it differs from HEAD. Without this
 # commit, the merger's `git reset --hard HEAD` (in /app between merges) would
@@ -197,6 +235,32 @@ if [ -d /app/.git ]; then
         -c user.email="builder@atomic-crm.local" \
         commit -m "chore: refresh CLAUDE.md orientation header" --quiet
   ' || echo -e "${YELLOW}Could not commit CLAUDE.md (non-fatal)${NC}"
+
+  # Commit MEMORY.md if seeded or changed. Session-end documentator
+  # updates produce their own commits.
+  su developer -c '
+    set -e
+    cd /app
+    BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null || true)
+    if [ -z "$BRANCH" ]; then
+      exit 0
+    fi
+    # Distinguish initial seed (untracked) from later changes so the commit
+    # message is accurate. Later changes are usually the user editing on the
+    # host between restarts — not a re-seed.
+    if git ls-files --error-unmatch MEMORY.md >/dev/null 2>&1; then
+      if git diff --quiet HEAD -- MEMORY.md 2>/dev/null; then
+        exit 0  # tracked and clean
+      fi
+      MSG="chore: update MEMORY.md"
+    else
+      MSG="chore: seed MEMORY.md"
+    fi
+    git add MEMORY.md
+    git -c user.name="Atomic CRM Builder" \
+        -c user.email="builder@atomic-crm.local" \
+        commit -m "$MSG" --quiet
+  ' || echo -e "${YELLOW}Could not commit MEMORY.md (non-fatal)${NC}"
 fi
 
 # Disable atomic-crm project's PostToolUse format-file.sh hook — replaced by a
@@ -301,11 +365,11 @@ fi
 
 # ── URL summary ───────────────────────────────────────────────
 echo ""
-echo -e "  ${BLUE}🌐  CRM              →  http://localhost:5173${NC}"
+echo -e "  ${BLUE}🌐  CRM              →  http://localhost:${PORT_CRM:-5173}${NC}"
 if [ "$MODE" = "full" ]; then
 echo -e "  ${BLUE}🗄️   Supabase         →  http://localhost:54323${NC}"
 fi
-echo -e "  ${BLUE}💬  Chat assistant   →  http://localhost:8080${NC}"
+echo -e "  ${BLUE}💬  Chat assistant   →  http://localhost:${PORT_CHAT:-8080}${NC}"
 echo ""
 echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo -e "${YELLOW}  For an interactive Claude session, from your host:   ${NC}"
@@ -333,6 +397,6 @@ _stop() {
 }
 trap _stop TERM INT
 
-/usr/bin/supervisord -n -c /etc/supervisor/conf.d/supervisord.conf &
+/usr/bin/supervisord --user=root -n -c /etc/supervisor/conf.d/supervisord.conf &
 SUPERVISOR_PID=$!
 wait $SUPERVISOR_PID

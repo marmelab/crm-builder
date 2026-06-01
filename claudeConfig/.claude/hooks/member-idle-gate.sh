@@ -132,6 +132,21 @@ try {
       exit 0
     fi
   fi
+  # Migration-round reviewer bypass: a quality-reviewer operating on the
+  # migration worktree (/worktrees/<SESSION_SHORT>/simple) is dispatched
+  # sequentially AFTER the SQL is written — the empty-worktree race the gate
+  # guards against cannot happen. Allow it.
+  if [ "$GATE_TYPE" = "qr" ] && [ -n "$SESSION_SHORT" ]; then
+    IS_MIG=$(node -e "
+try { const i=JSON.parse(process.argv[1]||'{}');
+  const s=JSON.stringify(i.tool_input||{});
+  process.stdout.write(s.includes('/worktrees/${SESSION_SHORT}/simple') ? '1' : '');
+} catch { process.stdout.write(''); }" "$STDIN" 2>/dev/null || echo "")
+    if [ -n "$IS_MIG" ]; then
+      echo "[$(date -Iseconds)] member-idle-gate PASS agent=$AGENT task=migration (migration-review bypass)" >> "$LOG" 2>/dev/null || true
+      exit 0
+    fi
+  fi
   # No TASK_ID anywhere — block conservatively: reviewers/merger should always
   # have a TASK context; no context means something unexpected is happening.
   echo "[$(date -Iseconds)] member-idle-gate BLOCK-NOTASK agent=$AGENT gate=$GATE_TYPE (no TASK_ID in input)" >> "$LOG" 2>/dev/null || true

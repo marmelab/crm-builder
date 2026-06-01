@@ -7,7 +7,9 @@ description: Multi-agent team workflow for implementing tickets with peer-to-pee
 
 Invoked by `chat-orchestrator` (team-lead) for COMPLEX requests.
 
-**Runtime constraint:** one team per lead, no nested teams. So all members of a wave live in one shared team `tickets`, with deterministic suffixed names.
+**Runtime constraint:** one team per lead, no nested teams. So all members of a wave live in one shared team **`tickets-<SESSION_SHORT_ID>`** (e.g. `tickets-46bc14c5`), with deterministic suffixed names.
+
+**Session-scoped team name.** The `<SESSION_SHORT_ID>` suffix is mandatory: without it, parallel chat sessions would collide on the canonical `tickets` name and Claude CLI would auto-rename the second session's team to a random adjective-string. Subsequent `Agent({team_name: "tickets"})` calls would then route every new member into the first session's team, and SendMessages from the developer would target dead recipients in the wrong session. Always interpolate the actual `SESSION_SHORT_ID` value (it's already in every `WORKTREE_PATH` and `BRANCH_NAME` in your spawn prompts) — never use the bare string `tickets`.
 
 **Out of scope:** SIMPLE requests (1-file cosmetic). Those bypass this skill — orchestrator dispatches one developer agent without `team_name`.
 
@@ -16,13 +18,13 @@ Invoked by `chat-orchestrator` (team-lead) for COMPLEX requests.
 ## Wave of N tickets
 
 1. PLANNER produces N tickets.
-2. Lead `TeamCreate({team_name: "tickets"})` (once per wave).
+2. Lead `TeamCreate({team_name: "tickets-<SESSION_SHORT_ID>"})` (once per wave). Replace `<SESSION_SHORT_ID>` with the actual 8-char value (e.g. `tickets-46bc14c5`). A PreToolUse hook wipes any orphan team with the same name from a prior crashed run of THIS session before creation.
 3. Lead dispatches all members in ONE message: **N developers + 2N reviewers + 1 shared `merger` = 3N + 1**.
 4. Lead `SendMessage(GO)` to each `developer-TASK-XXX` (one message per dev, in one assistant turn).
-5. Lead enters passive wait. Each ticket's dev↔reviewers↔merger flow runs concurrently inside `tickets`.
+5. Lead enters passive wait. Each ticket's dev↔reviewers↔merger flow runs concurrently inside the team.
 6. When merger has reported N times, lead does Phase 3 teardown.
 
-Multi-wave: repeat 2→6 (TeamDelete then TeamCreate again).
+Multi-wave: repeat 2→6 (TeamDelete then TeamCreate again, both with the session-scoped name).
 
 ---
 
@@ -38,7 +40,7 @@ Plus one shared `merger` for the whole wave.
 
 ---
 
-## Addressing (single team `tickets`, bare names)
+## Addressing (single team `tickets-<SESSION_SHORT_ID>`, bare names)
 
 | Recipient | `to:` value | Scope |
 |---|---|---|
@@ -61,21 +63,23 @@ Why one shared merger: `git merge` against `/app` holds `.git/index.lock`. Paral
 
 Pre-condition: PLANNER produced N tickets.
 
-In one assistant message:
+In one assistant message (replace every `<SESSION_SHORT_ID>` with the actual value, e.g. `46bc14c5`):
 
 ```
-TeamCreate({team_name: "tickets", description: "Wave of N tickets"})
+TeamCreate({team_name: "tickets-<SESSION_SHORT_ID>", description: "Wave of N tickets"})
 
 // Per ticket (one trio per ticket, all in this same message):
-Agent({subagent_type: "developer", name: "developer-TASK-001", team_name: "tickets", model: "opus", description: "Implement TASK-001", prompt: "<see Spawn prompt frames below>"})
-Agent({subagent_type: "quality-reviewer", name: "quality-reviewer-TASK-001", team_name: "tickets", model: "sonnet", description: "Quality review TASK-001", prompt: "<see Spawn prompt frames below>"})
-Agent({subagent_type: "test-validator", name: "test-validator-TASK-001", team_name: "tickets", model: "sonnet", description: "Test validation TASK-001", prompt: "<see Spawn prompt frames below>"})
+Agent({subagent_type: "developer", name: "developer-TASK-001", team_name: "tickets-<SESSION_SHORT_ID>", model: "opus", description: "Implement TASK-001", prompt: "<see Spawn prompt frames below>"})
+Agent({subagent_type: "quality-reviewer", name: "quality-reviewer-TASK-001", team_name: "tickets-<SESSION_SHORT_ID>", model: "sonnet", description: "Quality review TASK-001", prompt: "<see Spawn prompt frames below>"})
+Agent({subagent_type: "test-validator", name: "test-validator-TASK-001", team_name: "tickets-<SESSION_SHORT_ID>", model: "sonnet", description: "Test validation TASK-001", prompt: "<see Spawn prompt frames below>"})
 
 // (... repeat trio for TASK-002, TASK-003, ...)
 
 // ONE shared merger (last):
-Agent({subagent_type: "merger", name: "merger", team_name: "tickets", model: "haiku", description: "Merge all tickets", prompt: "<see Spawn prompt frames below>"})
+Agent({subagent_type: "merger", name: "merger", team_name: "tickets-<SESSION_SHORT_ID>", model: "haiku", description: "Merge all tickets", prompt: "<see Spawn prompt frames below>"})
 ```
+
+The `team_name` MUST be the same string on every call in this dispatch and on every reference to the team later (Phase 3 TeamDelete). If you spawn one agent with `team_name: "tickets-46bc14c5"` and another with `team_name: "tickets"`, they land in two different teams and SendMessage routing breaks.
 
 Then in a second message: one `SendMessage(GO, …)` per developer:
 
@@ -95,7 +99,7 @@ the per-ticket inputs; agents read their own file for the workflow.
 ```
 ROLE: developer
 TASK_ID: TASK-XXX
-TEAM: tickets
+TEAM: tickets-<SESSION_SHORT_ID>
 WORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/TASK-XXX
 BRANCH_NAME: <SESSION_SHORT_ID>/feature/<branch>
 TICKET_FILE: <session_dir>/TASK-XXX.json
@@ -112,7 +116,7 @@ Follow the WORKFLOW in your agent file (developer.md). Do NOT call
 ```
 ROLE: <quality-reviewer | test-validator>
 TASK_ID: TASK-XXX
-TEAM: tickets
+TEAM: tickets-<SESSION_SHORT_ID>
 WORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/TASK-XXX
 TICKET_FILE: <session_dir>/TASK-XXX.json
 COUNTERPART: developer-TASK-XXX
@@ -127,7 +131,7 @@ Follow the WORKFLOW in your agent file. Do NOT call any tool until
 ```
 ROLE: merger
 NAME: merger   (no suffix — single shared merger for the whole wave)
-TEAM: tickets
+TEAM: tickets-<SESSION_SHORT_ID>
 TICKETS_DIR: <session_dir>   (passed at spawn)
 TEAM_LEAD: team-lead
 
@@ -172,7 +176,7 @@ TeamDelete({})
 
 ### 3e — Cleanup (automatic)
 
-`teamdelete-cleanup.sh` (PostToolUse) silently removes residual `~/.claude/teams/tickets/`. Lead does nothing.
+`teamdelete-cleanup.sh` (PostToolUse) silently removes residual `~/.claude/teams/tickets-<SESSION_SHORT_ID>/`. Lead does nothing.
 
 Subagent transcripts (`subagents/agent-<task_id>.{jsonl,meta.json}`) are kept for stats/debugging — removed at chat-service session end.
 
@@ -190,7 +194,7 @@ If next wave: go to Phase 4. Else end.
 
 Some tickets depend on others. PLANNER groups them into waves.
 
-After Phase 3 completes for wave 1: recompute deps, start a new Phase 1 for wave 2 — same `tickets` team_name (previous was deleted), new dispatches.
+After Phase 3 completes for wave 1: recompute deps, start a new Phase 1 for wave 2 — same `tickets-<SESSION_SHORT_ID>` team_name (previous was deleted), new dispatches.
 
 TeamDelete is mandatory between waves.
 

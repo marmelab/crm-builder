@@ -4,7 +4,7 @@
 #  MODE=demo  → FakeRest (browser-side), no external dependencies
 #  MODE=full  → Local Supabase, requires host Docker socket
 # ─────────────────────────────────────────────────────────────
-FROM node:22-bookworm-slim
+FROM node:24-trixie-slim
 
 # ── Version pins — update when upgrading tools ────────────────
 ARG SUPABASE_CLI_VERSION=v2.98.2
@@ -62,6 +62,7 @@ RUN wget -q https://github.com/marmelab/atomic-crm/archive/refs/heads/main.zip \
 
 WORKDIR ${APP_DIR}
 RUN npm install
+RUN npm install playwright@^1.60 @playwright/test@^1.60
 # Pre-bundle Vite dependencies so the first dev-server start is instant
 RUN npx vite optimize 2>/dev/null || true
 
@@ -127,6 +128,16 @@ RUN chmod +x /entrypoint.sh
 COPY claudeConfig/.claude/ /root/.claude/
 RUN cp -r /root/.claude /home/developer/.claude \
     && chown -R developer:developer /home/developer/.claude
+
+# ── Stage source for bind-mounted /app ────────────────────────
+# /app is bind-mounted from ./crm-source on the host (see docker-compose.yml)
+# so users can browse and share the CRM source from their machine. The bind
+# mount hides any content baked into the image at /app, so we relocate the
+# build artifacts here. entrypoint.sh restores them into /app on first run
+# when the bind mount is empty.
+RUN mv /app /opt/atomic-crm-source \
+    && mkdir -p /app \
+    && chown developer:developer /app
 
 # 5173  → CRM (Vite)
 # 54321 → Supabase API  (MODE=full only)

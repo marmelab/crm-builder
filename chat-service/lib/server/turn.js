@@ -1,20 +1,40 @@
 import { createInterface } from 'node:readline';
 import { cp, copyFile, mkdir, chmod, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { LOG_DIR, CLAUDE_HOME, CWD } from './config.js';
+import { LOG_DIR, claudeProjectDir, claudeSessionDir } from './config.js';
 import { broadcast, sendStats } from './ws-bus.js';
 import { runtimes, transitionState } from './runtime.js';
-import { sendProgress, predictedFlowExpected } from './ticket-progress.js';
 import { spawnClaude, extractText, extractToolUses, friendlyError } from './claude-spawn.js';
 import { endsWithQuestion } from './session-store.js';
+import { startSubagentTailer, stopSubagentTailer } from './subagent-tail.js';
 import {
   emptyBreakdown, addBreakdown, breakdownFromModelUsage, costFromBreakdown,
 } from '../stats/io.js';
+import { updateProgressBar, predictedFlowExpected } from './progress-bar.ts';
+import {
+  sessionHasMergedTickets, scheduleDocumentatorRun, clearDocumentatorTimer,
+} from './documentator-spawn.js';
 
 const AGENT_DISPATCH_TOOLS = new Set(['Agent', 'Task']);
 
+function emitDispatchPromptEvent(runtime, tool) {
+  const target = tool.input.name || tool.input.subagent_type;
+  broadcast(runtime, {
+    type: 'debug',
+    tool: 'agent_output',
+    input: { agent: `→ ${target}`, text: tool.input.prompt },
+    agent: 'orchestrator',
+  });
+}
+
 export async function processMessage(runtime, prompt) {
   if (!runtime) return;
+
+  // The user is back — cancel any pending documentator run scheduled at the
+  // tail of the previous turn. Keyed on sessionId (not runtime) so it survives
+  // runtime release/recreate between turns. We'll re-arm it when this turn
+  // completes.
+  if (runtime.session?.id) clearDocumentatorTimer(runtime.session.id);
 
   // Reset per-turn agent step counters so the progress bar reflects only
   // work initiated by *this* prompt. Send the initial 0/1 (orchestrator
@@ -24,11 +44,8 @@ export async function processMessage(runtime, prompt) {
     agentsCompleted: 0,
     flowExpected: 0,
     dispatchedSubagentTypes: [],
-    dispatchedSubagentStartedAt: [],
-    turnStartedAt: Date.now(),
-    lastProgressSent: null,
   };
-  sendProgress(runtime);
+  updateProgressBar(runtime);
 
   // Claude (re)starts → session is active again.
   transitionState(runtime, 'in_progress');
@@ -58,6 +75,9 @@ export async function processMessage(runtime, prompt) {
         if (event.session_id) {
           runtime.claudeSessionId = event.session_id;
           runtime.session?.setClaudeSessionId(event.session_id).catch(() => {});
+          // Main stream only carries subagent tool_uses — their text and
+          // SendMessage content live in per-subagent transcripts on disk.
+          startSubagentTailer(runtime).catch((e) => console.error('[subagent-tail]', e));
         }
 
         // Always send raw event to debug
@@ -82,7 +102,12 @@ export async function processMessage(runtime, prompt) {
 
         let dispatchedThisEvent = false;
         for (const tool of extractToolUses(event)) {
+          // stream-json can emit the same tool_use across two assistant events
+          // (initial + post-stream). Use toolMap as the dedup gate so we count
+          // and broadcast each dispatch exactly once.
+          const alreadySeen = toolMap.has(tool.id);
           toolMap.set(tool.id, tool);
+          if (alreadySeen) continue;
           // Count orchestrator Agent/Task dispatches eagerly (the tool_use
           // event lands before the runtime fires task_started), so the bar
           // shows "1/3" right away for SIMPLE instead of growing 1/2 → 2/3.
@@ -91,11 +116,18 @@ export async function processMessage(runtime, prompt) {
               runtime.stats.flowExpected = predictedFlowExpected(tool.input.subagent_type);
             }
             runtime.stats.dispatchedSubagentTypes.push(tool.input.subagent_type);
-            runtime.stats.dispatchedSubagentStartedAt.push(Date.now());
             dispatchedThisEvent = true;
+            // Mirror orchestrator → agent dispatches into the debug pane so
+            // the prompt sits next to the agent's tailed reply. Subagent-
+            // emitted dispatches (rare) are skipped to avoid double-attribution.
+            if (event.parent_tool_use_id == null && tool.input?.prompt) {
+              emitDispatchPromptEvent(runtime, tool);
+            }
           }
         }
-        if (dispatchedThisEvent) sendProgress(runtime);
+        if (dispatchedThisEvent) {
+          updateProgressBar(runtime);
+        }
 
         if (event.type === 'rate_limit_event' && event.rate_limit_info?.status === 'blocked') {
           rateLimit = event.rate_limit_info;
@@ -124,7 +156,7 @@ export async function processMessage(runtime, prompt) {
             runtime.stats.activeAgents = runtime.stats.activeAgentIds.size;
             runtime.stats.agentsCompleted++;
             sendStats(runtime);
-            sendProgress(runtime);
+            updateProgressBar(runtime);
           }
         }
 
@@ -158,15 +190,26 @@ export async function processMessage(runtime, prompt) {
           runtime.stats.activeAgents = 0;
           runtime.stats.activeAgentIds.clear();
           sendStats(runtime);
+          // `result` is always the terminal event — break immediately so a
+          // zombie subagent keeping stdout open doesn't stall the loop forever.
+          break;
         }
       } catch {}
     }
+    // Give the process up to 30 s to exit cleanly after emitting `result`.
+    // If it hangs (e.g. zombie subagent holding the pipe open), kill it so
+    // `busy` is never left stuck at true.
     exitCode = await Promise.race([
       new Promise((resolve) => proc.on('close', resolve)),
       spawnError.then((err) => {
         stderrBuf += `\n${err?.message || err}`;
         return -1;
       }),
+      new Promise((resolve) => setTimeout(() => {
+        try { proc.kill('SIGTERM'); } catch {}
+        setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 5_000);
+        resolve(1);
+      }, 30_000)),
     ]);
     if (runtime.stopping) {
       const stopText = '⏹ Session stopped.';
@@ -186,6 +229,9 @@ export async function processMessage(runtime, prompt) {
       await runtime.session?.recordMessage('assistant', errText).catch(() => {});
     }
   } finally {
+    // Awaited so the trailing scan (which catches subagent writes between the
+    // last poll tick and the CLI exit) finishes before the turn settles.
+    await stopSubagentTailer(runtime).catch(() => {});
     // Commit this spawn's cumulative cost and tokens into the runtime totals,
     // reset for next spawn (each new spawn starts fresh at 0).
     runtime.stats.costUsd += runtime.stats.costUsdCurrentSpawn;
@@ -227,7 +273,10 @@ export async function processMessage(runtime, prompt) {
     runtime.stopping = false;
     if (!wasStopped && runtime.queue.length > 0) {
       const next = runtime.queue.shift();
-      processMessage(runtime, next);
+      // The head of the queue is now running, not waiting — tabs need this to
+      // drop the ⏳ badge / × button on the bubble whose data-queue-id matches.
+      broadcast(runtime, { type: 'queue_updated', queuedIds: runtime.queue.map((q) => q.id) });
+      processMessage(runtime, next.content);
     } else {
       if (wasStopped) runtime.queue = [];
       runtime.busy = false;
@@ -241,6 +290,19 @@ export async function processMessage(runtime, prompt) {
       const asksQuestion = !wasStopped && !turnErrored && endsWithQuestion(lastAssistantText);
       const nextState = wasStopped ? 'cancelled' : asksQuestion ? 'waiting' : 'completed';
       await transitionState(runtime, nextState);
+      // Schedule the documentator (Mode 2) once the turn lands on 'completed'
+      // and at least one ticket has been merged in this session. Debounced so
+      // a follow-up user message within DOCUMENTATOR_DEBOUNCE_MS cancels it
+      // (processMessage clears the timer at the top of the next turn). Timer
+      // state is keyed on sessionId in documentator-spawn.js so it survives
+      // runtime release between turns.
+      if (nextState === 'completed' && !turnErrored) {
+        const sessionId = runtime.session?.id;
+        const sessionDir = sessionId ? `${LOG_DIR}/${sessionId}` : null;
+        if (sessionDir && await sessionHasMergedTickets(sessionDir)) {
+          scheduleDocumentatorRun(sessionId, runtimes);
+        }
+      }
       // If no client is currently viewing this session, release the runtime
       // now that the turn is done. A later reconnect will re-open it.
       if (runtime.clients.size === 0) {
@@ -255,9 +317,8 @@ export async function processMessage(runtime, prompt) {
 
 async function snapshotClaudeSession(claudeSessionId, sessionId) {
   if (!claudeSessionId || !sessionId) return;
-  const slug = CWD.replace(/\//g, '-');
-  const projectDir = join(CLAUDE_HOME, '.claude', 'projects', slug);
-  const srcDir = join(projectDir, claudeSessionId);
+  const projectDir = claudeProjectDir();
+  const srcDir = claudeSessionDir(claudeSessionId);
   const destDir = join(LOG_DIR, sessionId, 'claude');
 
   await mkdir(destDir, { recursive: true });

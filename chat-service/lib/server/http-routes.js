@@ -118,10 +118,11 @@ async function handleDownloadZipRequest(req, res) {
 async function checkSupabaseReady() {
   try {
     const ctrl = new AbortController();
-    const tid = setTimeout(() => ctrl.abort(), 800);
-    await fetch('http://localhost:54321', { signal: ctrl.signal });
+    const tid = setTimeout(() => ctrl.abort(), 2000);
+    const res = await fetch('http://localhost:54321/rest/v1/', { signal: ctrl.signal });
     clearTimeout(tid);
-    return true;
+    // 200 or 401 (auth required) both mean PostgREST + Postgres are up
+    return res.status === 200 || res.status === 401;
   } catch {
     return false;
   }
@@ -316,8 +317,13 @@ export function createRequestHandler({ publicDir }) {
       return;
     }
     try {
-      const data = await readFile(filePath);
+      let data = await readFile(filePath);
       const mime = MIME_TYPES[extname(filePath)] || 'text/plain';
+      if (urlPath === '/index.html' && process.env.PORT_CRM) {
+        data = Buffer.from(
+          data.toString().replace('localhost:5173', `localhost:${process.env.PORT_CRM}`)
+        );
+      }
       res.writeHead(200, { 'Content-Type': mime });
       res.end(data);
     } catch {

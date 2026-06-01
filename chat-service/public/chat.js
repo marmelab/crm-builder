@@ -1,6 +1,4 @@
-import {
-  el, formatTokens, tokenBreakdownText, setupCostTip,
-} from './lib/dom.js';
+import { el, formatTokens } from './lib/dom.js';
 import { renderStatsPanel, initStatsRefresh } from './lib/stats/index.js';
 import { initConnection, initDisplay, initHistory, openConfirmModal, initRecentPopup } from './lib/sessions/index.js';
 import { renderInlineMarkdown } from './lib/markdown.js';
@@ -83,6 +81,7 @@ const TOOL_LABELS = {
   Bash:         '⚡ Running command',
   Glob:         '🔍 Searching files',
   Grep:         '🔍 Searching code',
+  SendMessage:  '✉️  Message',
   system:       '🔌 Session started',
   result:       '✅ Turn complete',
 };
@@ -277,17 +276,34 @@ function renderProgressSegments(bar) {
   const steps = progressSteps.length
     ? progressSteps
     : fallbackEqualSteps(progressTotal, progressDone);
-  // Cheap key — only rebuild when shape or statuses actually change.
-  const key = steps.map((s) => `${s.durationMs}:${s.status}`).join('|');
-  if (bar._stepsKey === key) return;
-  bar._stepsKey = key;
-  bar.replaceChildren(...steps.map((step) => {
-    const seg = document.createElement('div');
-    seg.className = `msg-working-progress-step is-${step.status}`;
-    seg.style.flexGrow = String(Math.max(1, step.durationMs));
-    seg.title = `${step.role} · ${Math.round(step.durationMs / 1000)}s`;
-    return seg;
-  }));
+
+  if (bar.children.length !== steps.length) {
+    bar.replaceChildren(...steps.map(makeStepEl));
+  }
+
+  steps.forEach((step, i) => {
+    updateStepEl(bar.children[i], step);
+  });
+}
+
+function makeStepEl() {
+  const seg = document.createElement('div');
+  seg.className = 'msg-working-progress-step';
+  const mask = document.createElement('div');
+  mask.className = 'msg-working-progress-step-mask';
+  seg.appendChild(mask);
+  return seg;
+}
+
+// Step-driven only: status maps to a class, CSS handles the mask transition.
+// pending/in_progress → mask fully covers the segment (scaleX(1) by default);
+// done → mask collapses (scaleX(0) via `.is-done` rule). No wall-clock fill.
+function updateStepEl(seg, step) {
+  seg.style.flexGrow = String(Math.max(1, step.durationMs));
+  seg.title = `${step.role} · ${Math.round(step.durationMs / 1000)}s`;
+  if (seg.dataset.status === step.status) return;
+  seg.dataset.status = step.status;
+  seg.className = `msg-working-progress-step is-${step.status}`;
 }
 
 function fallbackEqualSteps(total, done) {
@@ -349,18 +365,28 @@ function handleWsMessage(event) {
         ];
     // Tail user messages still in the queue: walk the timeline backwards and
     // mark the last N user-message items as queued (queue holds user-only).
-    const queuedIdx = new Set();
-    let remaining = msg.queuedCount || 0;
+    // queuedIds[i] pairs with the i-th queued tail message in chronological
+    // order, so the bubble carries the server id its cancel button needs.
+    const queuedIds = Array.isArray(msg.queuedIds) ? msg.queuedIds : [];
+    const queuedCount = queuedIds.length || msg.queuedCount || 0;
+    const queueIdByTimelineIdx = new Map();
+    let remaining = queuedCount;
     for (let i = timeline.length - 1; i >= 0 && remaining > 0; i--) {
       const it = timeline[i];
       if (it.kind === 'message' && it.role === 'user') {
-        queuedIdx.add(i);
         remaining--;
+        const id = queuedIds[remaining];
+        queueIdByTimelineIdx.set(i, id != null ? id : null);
       }
     }
     timeline.forEach((it, i) => {
       if (it.kind === 'message') {
-        appendMessage(it.role, it.content, { queued: queuedIdx.has(i), subtype: it.subtype, ts: it.ts });
+        const opts = { subtype: it.subtype, ts: it.ts };
+        if (queueIdByTimelineIdx.has(i)) {
+          opts.queued = true;
+          opts.queuedId = queueIdByTimelineIdx.get(i);
+        }
+        appendMessage(it.role, it.content, opts);
         return;
       }
       // Debug event — buffer it so a later debug-toggle ON can replay it,
@@ -418,11 +444,9 @@ function handleWsMessage(event) {
       remainingTimeMsAtReceipt = 0;
       remainingTimeReceivedAt = 0;
       startRemainingTimeTicker();
-      const oldestQueued = messages.querySelector('.msg-queued');
-      if (oldestQueued) {
-        oldestQueued.classList.remove('msg-queued');
-        oldestQueued.querySelector('.queued-badge')?.remove();
-      }
+      // The queued-chrome stripping for the bubble that just moved into
+      // processing is now driven by the server's `queue_updated` event,
+      // which arrives just before this status transition.
     } else if (wasWorking && !working) {
       stopRemainingTimeTicker();
       remainingTimeMsAtReceipt = 0;
@@ -435,6 +459,11 @@ function handleWsMessage(event) {
 
   if (msg.type === 'choices') {
     appendChoices(msg.content, msg.options);
+    return;
+  }
+
+  if (msg.type === 'queue_updated') {
+    applyQueueState(msg.queuedIds, msg.cancelledId);
     return;
   }
 
@@ -452,13 +481,16 @@ function handleWsMessage(event) {
 
   if (msg.type === 'mode_changed') {
     const prevMode = modeToggleBtn.dataset.mode || 'demo';
-    const prevStarting = modeToggleBtn.classList.contains('mode-starting');
+    const prevReady = modeToggleBtn.dataset.supabaseReady === '1';
     updateModeBtn(msg.mode, msg.supabaseReady ?? false);
-    // Reload the CRM iframe when the mode actually changes, or when Supabase
-    // transitions from starting to ready (so the app connects with a live DB).
-    const modeChanged = msg.mode !== prevMode;
-    const justReady = msg.mode === 'full' && prevStarting && (msg.supabaseReady ?? false);
-    if (modeChanged || justReady) {
+    const supabaseReady = msg.supabaseReady ?? false;
+    // Reload iframe only when: Supabase just became ready (full+not-ready → full+ready),
+    // first switch to full+ready from demo (orchestrator path), or switched back to demo.
+    // Never reload when switching to full before Supabase is ready.
+    const justReady = msg.mode === 'full' && !prevReady && supabaseReady;
+    const switchedToReadyFull = msg.mode === 'full' && supabaseReady && prevMode !== 'full';
+    const switchedToDemo = msg.mode === 'demo' && prevMode === 'full';
+    if (justReady || switchedToReadyFull || switchedToDemo) {
       const frame = document.getElementById('crm-frame');
       if (frame) frame.src = frame.src;
     }
@@ -469,37 +501,7 @@ function handleWsMessage(event) {
     const agents = msg.activeAgents || 0;
     const agentsPart = agents > 0 ? `🤖 ${agents} · ` : '';
     const total = (typeof msg.tokensTotal === 'number') ? msg.tokensTotal : msg.tokensUsed;
-    // CSS-styled hover tooltips: tokens host shows the 4-way breakdown,
-    // cost host shows the per-model table. Both flip UPWARD (`.tk-tip-above`)
-    // because the ticker sits at the bottom of the chat panel.
-    stats.replaceChildren();
-    stats.removeAttribute('title');
-    if (agentsPart) stats.appendChild(document.createTextNode(agentsPart));
-
-    // Tooltips on the ticker need both modifiers: `tk-tip-above` because the
-    // ticker sits at the bottom of the chat widget, and `tk-tip-anchor-right`
-    // because the ticker text is right-aligned so the host is near the right
-    // edge — extending leftward keeps the tooltip on-screen.
-    const tipCls = 'tk-tip tk-tip-above tk-tip-anchor-right';
-
-    const hasTokenTip = !!msg.tokensBreakdown;
-    const tokensHost = el('span', { className: hasTokenTip ? 'tk-host' : null }, `${formatTokens(total)} tokens`);
-    if (hasTokenTip) {
-      const tip = el('span', { className: tipCls });
-      tip.textContent = tokenBreakdownText(msg.tokensBreakdown, { totalLabel: 'total' });
-      tokensHost.appendChild(tip);
-    }
-    stats.appendChild(tokensHost);
-    stats.appendChild(document.createTextNode(' · '));
-
-    const hasCostTip = msg.tokensByModel && msg.tokensByModel.length > 0;
-    const costHost = el('span', { className: hasCostTip ? 'tk-host tk-cost-host' : null }, `$${msg.costUsd.toFixed(2)}`);
-    if (hasCostTip) {
-      const tip = el('span', { className: tipCls });
-      setupCostTip(tip, msg.tokensByModel, msg.costUsd);
-      costHost.appendChild(tip);
-    }
-    stats.appendChild(costHost);
+    stats.textContent = `${agentsPart}${formatTokens(total)} tokens · $${msg.costUsd.toFixed(2)}`;
 
     if (statsMode) statsRefresh.schedule();
     return;
@@ -625,6 +627,94 @@ function markStaleWorkingMessages() {
   }
 }
 
+// Paint a user bubble as "still in the server queue": dim it, append the
+// ⏳ badge, and (when we know the server's queue id) wire up the × cancel
+// button. Idempotent — calling it twice on the same element is harmless.
+function markQueued(el, queuedId) {
+  el.classList.add('msg-queued');
+  if (queuedId != null) el.setAttribute('data-queue-id', String(queuedId));
+  else el.removeAttribute('data-queue-id');
+  let badge = el.querySelector('.queued-badge');
+  if (!badge) {
+    badge = document.createElement('span');
+    badge.className = 'queued-badge';
+    badge.textContent = '⏳ waiting';
+    el.appendChild(badge);
+  }
+  if (queuedId != null && !el.querySelector('.queued-cancel')) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'queued-cancel';
+    btn.title = 'Cancel this message';
+    btn.setAttribute('aria-label', 'Cancel this message');
+    btn.textContent = '×';
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      cancelQueuedMessage(el);
+    });
+    el.appendChild(btn);
+  }
+}
+
+function unmarkQueued(el) {
+  el.classList.remove('msg-queued');
+  el.querySelector('.queued-badge')?.remove();
+  el.querySelector('.queued-cancel')?.remove();
+  el.removeAttribute('data-queue-id');
+}
+
+function cancelQueuedMessage(el) {
+  const idAttr = el.getAttribute('data-queue-id');
+  if (!idAttr) return;
+  const id = Number(idAttr);
+  if (!connection.safeSend({ type: 'cancel_queued', id })) return;
+  // Optimistic: drop the bubble immediately. If the server already shifted it
+  // (race with turn end), the upcoming `queue_updated` will re-render the
+  // current truth — but the message is then running, not cancellable anymore,
+  // so the bubble's disappearance is acceptable UX in either case.
+  el.remove();
+}
+
+// Reconcile the DOM with the server's current queue. Walks all tagged user
+// bubbles; any whose id is gone from the queue had to be either cancelled
+// (then explicitly named via `cancelledId` → remove the bubble) or moved into
+// processing (just drop the queued chrome). Then assigns ids to fresh tail
+// bubbles that haven't been tagged yet (e.g. just-submitted messages).
+function applyQueueState(queuedIds, cancelledId) {
+  const wantSet = new Set((queuedIds || []).map((n) => String(n)));
+  for (const el of [...messages.querySelectorAll('.msg-user[data-queue-id]')]) {
+    const id = el.getAttribute('data-queue-id');
+    if (wantSet.has(id)) continue;
+    if (cancelledId != null && id === String(cancelledId)) el.remove();
+    else unmarkQueued(el);
+  }
+  // Now sync new submissions: the last K queued ids that aren't yet bound to
+  // a DOM node attach to the most recent untagged user bubbles, in order.
+  const boundIds = new Set(
+    [...messages.querySelectorAll('.msg-user[data-queue-id]')].map((n) => n.getAttribute('data-queue-id')),
+  );
+  const unboundIds = (queuedIds || []).filter((id) => !boundIds.has(String(id)));
+  if (unboundIds.length === 0) return;
+  const userMsgs = [...messages.querySelectorAll('.msg-user')];
+  const untaggedTail = [];
+  for (let i = userMsgs.length - 1; i >= 0 && untaggedTail.length < unboundIds.length; i--) {
+    if (!userMsgs[i].hasAttribute('data-queue-id')) untaggedTail.push(userMsgs[i]);
+  }
+  // untaggedTail is bottom→top; unboundIds is chronological (oldest first)
+  // — so the bottom-most untagged bubble pairs with the last unbound id.
+  for (let i = 0; i < untaggedTail.length; i++) {
+    const id = unboundIds[unboundIds.length - 1 - i];
+    if (id == null) break;
+    markQueued(untaggedTail[i], id);
+  }
+  // Leftover bubbles that the client optimistically marked queued (working
+  // was true at submit) but the server didn't actually queue (it processed
+  // the message directly) — unmark them so the ⏳ badge doesn't stick.
+  for (const el of messages.querySelectorAll('.msg-user.msg-queued:not([data-queue-id])')) {
+    unmarkQueued(el);
+  }
+}
+
 function appendMessage(role, content, seqOrOpts = ++seqCounter) {
   const opts = typeof seqOrOpts === 'object' && seqOrOpts !== null ? seqOrOpts : {};
   const seq = typeof seqOrOpts === 'number' ? seqOrOpts : (opts.seq ?? ++seqCounter);
@@ -653,10 +743,7 @@ function appendMessage(role, content, seqOrOpts = ++seqCounter) {
     el.textContent = content;
   }
   if (queued) {
-    const badge = document.createElement('span');
-    badge.className = 'queued-badge';
-    badge.textContent = '⏳ waiting';
-    el.appendChild(badge);
+    markQueued(el, opts.queuedId);
   }
   const stamp = formatMessageTime(opts.ts);
   if (stamp) {
@@ -684,21 +771,36 @@ function toolDetail(toolName, input) {
     case 'Bash':  return short(input.command, 80);
     case 'Grep':  return `"${input.pattern}"${input.path ? ' in ' + input.path : ''}`;
     case 'Glob':  return input.pattern;
+    case 'SendMessage': {
+      const to = input.to ? `→ ${input.to}` : '→ ?';
+      const body = (input.content || '').replace(/\s+/g, ' ').trim();
+      return body ? `${to}: ${body.length > 200 ? body.slice(0, 200) + '…' : body}` : to;
+    }
     default:      return null;
   }
 }
 
+// Substring-match fallback in agentColor() means longer keys must come first
+// (`simple-developer` before `developer`, `quality-reviewer` before `reviewer`).
 const AGENT_COLORS = {
-  planner:    '#34d399',
-  developer:  '#f97316',
+  'simple-developer': '#fb923c',
+  'quality-reviewer': '#a78bfa',
   'code-reviewer':    '#a78bfa',
   'security-reviewer':'#f43f5e',
   'test-validator':   '#38bdf8',
+  architect:          '#c084fc',
+  orchestrator:       '#fbbf24',
+  planner:            '#34d399',
+  developer:          '#f97316',
+  merger:             '#2dd4bf',
+  documentator:       '#facc15',
+  devops:             '#94a3b8',
 };
 
 function agentColor(label) {
   if (!label) return null;
   const key = label.toLowerCase();
+  if (AGENT_COLORS[key]) return AGENT_COLORS[key];
   for (const [name, color] of Object.entries(AGENT_COLORS)) {
     if (key.includes(name)) return color;
   }
@@ -1000,24 +1102,28 @@ let modePollingTimer = null;
 function updateModeBtn(mode, supabaseReady) {
   const label = modeToggleBtn.querySelector('.mode-toggle-label');
   modeToggleBtn.dataset.mode = mode;
-  if (mode === 'full') {
-    if (label) label.textContent = supabaseReady ? 'Real data' : 'Real data ↻';
-    modeToggleBtn.classList.toggle('mode-full', true);
-    modeToggleBtn.classList.toggle('mode-starting', !supabaseReady);
+  modeToggleBtn.dataset.supabaseReady = supabaseReady ? '1' : '0';
+  if (mode === 'full' && supabaseReady) {
+    if (label) label.textContent = 'Real data';
+    modeToggleBtn.classList.add('mode-full');
+    modeToggleBtn.classList.remove('mode-starting');
+    modeToggleBtn.disabled = false;
+    modeToggleBtn.title = 'Using your real database — click to switch to demo';
+    if (modePollingTimer) { clearInterval(modePollingTimer); modePollingTimer = null; }
+  } else {
+    // demo mode, or full+not-yet-ready (brief transition): show "Demo" disabled
+    if (label) label.textContent = 'Demo';
+    modeToggleBtn.classList.remove('mode-full', 'mode-starting');
+    modeToggleBtn.disabled = !supabaseReady;
     modeToggleBtn.title = supabaseReady
-      ? 'Using your real database — click to switch to demo'
-      : 'Connecting to your database… click to switch back to demo';
+      ? 'Using sample data — click to switch to real data'
+      : 'Connecting to your database… will activate when ready';
     if (!supabaseReady && !modePollingTimer) {
       modePollingTimer = setInterval(pollMode, 4000);
     } else if (supabaseReady && modePollingTimer) {
       clearInterval(modePollingTimer);
       modePollingTimer = null;
     }
-  } else {
-    if (label) label.textContent = 'Demo';
-    modeToggleBtn.classList.remove('mode-full', 'mode-starting');
-    modeToggleBtn.title = 'Using sample data — click to switch to your real database';
-    if (modePollingTimer) { clearInterval(modePollingTimer); modePollingTimer = null; }
   }
 }
 
@@ -1033,7 +1139,7 @@ async function pollMode() {
 modeToggleBtn.addEventListener('click', async () => {
   const currentMode = modeToggleBtn.dataset.mode || 'demo';
   const nextMode = currentMode === 'demo' ? 'full' : 'demo';
-  updateModeBtn(nextMode, false);
+  modeToggleBtn.disabled = true;
   try {
     const res = await fetch('/api/mode', {
       method: 'POST',
@@ -1041,7 +1147,7 @@ modeToggleBtn.addEventListener('click', async () => {
       body: JSON.stringify({ mode: nextMode }),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    // App.tsx is already swapped server-side — reload the CRM iframe now
+    // App.tsx is swapped synchronously server-side before the response — safe to reload
     const frame = document.getElementById('crm-frame');
     if (frame) frame.src = frame.src;
     await pollMode();
