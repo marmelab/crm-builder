@@ -5,8 +5,6 @@ import { runtimes, createRuntime, setSessionState, persistAssistantMessage } fro
 import { openSession } from './session-store.js';
 import { processMessage } from './turn.js';
 
-const SHORT_ID_RE = /^[0-9a-f]{8}$/i;
-
 const execFileAsync = promisify(execFile);
 const GIT_BUF = { maxBuffer: 4 * 1024 * 1024 };
 
@@ -61,19 +59,20 @@ async function listActiveSessionCommits(sessionId) {
   const session = runtimes.get(sessionId)?.session || await openSession(sessionId);
   if (!session) return { session: null, commits: [] };
   const shortId = sessionId.split('-')[0];
-  let stdout = '';
-  try {
-    ({ stdout } = await execFileAsync(
+  const [logResult, reverted] = await Promise.all([
+    execFileAsync(
       'git',
       ['-C', CWD, 'log', '--ancestry-path', '--merges',
         '--format=%H\t%s', `session/${shortId}..HEAD`],
       GIT_BUF,
-    ));
-  } catch (err) {
-    console.warn('[rollback] listActiveSessionCommits git log failed:', err.message);
-    return { session, commits: [] };
-  }
-  const reverted = await findRevertedFullShas();
+    ).catch((err) => {
+      console.warn('[rollback] listActiveSessionCommits git log failed:', err.message);
+      return null;
+    }),
+    findRevertedFullShas(),
+  ]);
+  if (!logResult) return { session, commits: [] };
+  const { stdout } = logResult;
   const commits = stdout.trim().split('\n').filter(Boolean).map((line) => {
     const tab = line.indexOf('\t');
     return { sha: line.slice(0, tab), subject: line.slice(tab + 1) };
@@ -206,10 +205,12 @@ export async function handleSessionRollbackRequest(req, res, sessionId) {
 
     if (conflictAt) {
       const chatMessage = "Undoing your changes is taking a little longer than usual — an assistant is finishing it for you. You'll see a confirmation here when it's done.";
-      await setSessionState(sessionId, 'in_progress');
-      await persistAssistantMessage(sessionId, chatMessage, { subtype: 'rollback' })
-        .catch((e) => console.warn('[rollback] persist failed:', e.message));
-      await handOffToOrchestrator(sessionId, conflictAt);
+      await Promise.all([
+        setSessionState(sessionId, 'in_progress'),
+        persistAssistantMessage(sessionId, chatMessage, { subtype: 'rollback' })
+          .catch((e) => console.warn('[rollback] persist failed:', e.message)),
+        handOffToOrchestrator(sessionId, conflictAt),
+      ]);
       res.writeHead(202, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         ok: true,
