@@ -320,7 +320,10 @@ export function createRequestHandler({ publicDir }) {
           data.toString().replace('localhost:5173', `localhost:${process.env.PORT_CRM}`)
         );
       }
-      res.writeHead(200, { 'Content-Type': mime });
+      // No cache-busting hash on these assets (`<script src="/chat.js">`), and
+      // they're rebaked on every image rebuild — without this header the browser
+      // serves a stale module after a redeploy and the new behaviour never shows.
+      res.writeHead(200, { 'Content-Type': mime, 'Cache-Control': 'no-store' });
       res.end(data);
     } catch {
       res.writeHead(404);
