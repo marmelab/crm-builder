@@ -106,13 +106,27 @@ The orchestrator parses this line by regex. Any other format is treated as `FAIL
 
 **Trigger**: either `MODE: promote` (COMPLEX, run once per request after every ticket has merged into the session branch) or automatically after Stage A in the SIMPLE flow.
 
+**Promotion ALWAYS targets the repository's default branch** — never trust
+`/app`'s current HEAD. If `/app` has drifted onto a previous session's branch
+(it can, and nothing else resets it), merging into the current HEAD silently
+piles every session onto that branch while the default branch never advances.
+So the lock block checks out the default branch first, then merges.
+
 ```bash
 cd /app && flock /app/.promote.lock bash -c '
-  git reset --hard HEAD && /entrypoint-helpers/apply-app-variant.sh
+  DEFAULT=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed "s@^origin/@@")
+  [ -z "$DEFAULT" ] && { git show-ref --verify --quiet refs/heads/master && DEFAULT=master || DEFAULT=main; }
+  git reset --hard HEAD                       # drop working-tree debris on whatever branch we are on
+  git checkout "$DEFAULT" || exit 1           # promotion target is the default branch, NOT /app HEAD
+  /entrypoint-helpers/apply-app-variant.sh    # checkout reverts App.tsx variant — re-apply it
   git merge --no-ff session/<SESSION_SHORT_ID> -m "merge(session): <SESSION_SHORT_ID>" \
     || { git merge --abort; exit 1; }
 '
 ```
+
+After this block `/app` is left on the default branch (with the promotion
+merged in), which also keeps the next session's `setup-worktree` fork base
+correct.
 
 - Success → capture the short SHA (`cd /app && git rev-parse --short HEAD`) and emit:
   - promotion-only: `DONE: PROMOTE commit=<short_sha>`
