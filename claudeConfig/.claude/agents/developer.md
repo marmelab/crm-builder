@@ -34,12 +34,12 @@ Output format: `.claude/rules/agent-output-format.md`.
 1. **Read ticket** at `TICKET_FILE`, then `/app/MEMORY.md` (project domain vocabulary, custom-field semantics, workflow constraints — small by design, read whole), then past ADRs for the same domain (`ls /app/adr/`).
 2. **Implement** in the worktree — Edit / Write / Bash. Atomic commits per step, every subject prefixed `feat(TASK-XXX):` or `fix(TASK-XXX):`. See _Implementation rules_ below.
 3. **Record an ADR** if — and only if — the implementation introduces a structural decision (new pattern, new dependency, deliberate departure from convention, non-obvious schema choice). Skip by default. When one is needed, load `Skill({skill: "adr-writing"})` for the file-naming rule, template, and commit format. The ADR lands inside your worktree (the merger ships it to `/app/adr/` like any other change).
-4. **Rebase onto current main before review** — other tasks may have merged while you were implementing:
+4. **Rebase onto the session branch before review** — sibling tasks merge into `session/<SESSION_SHORT_ID>` (not main) while you work, so rebase onto it. Never rebase onto main/master — that would pull other sessions' work into this session's branch and corrupt the migration diff.
    ```bash
-   cd <WORKTREE_PATH> && git fetch origin main --quiet && git rebase origin/main
+   cd <WORKTREE_PATH> && git rebase session/<SESSION_SHORT_ID>
    ```
    Resolve any conflicts, then `git add` + `git rebase --continue`. Commit the result if needed.
-   Only proceed once `git status` shows a clean tree on top of the latest `origin/main`.
+   Only proceed once `git status` shows a clean tree on top of the latest `session/<SESSION_SHORT_ID>`.
 5. **Request review** (both at once):
    - `SendMessage(quality-reviewer-TASK-XXX, "ready, please review")`
    - `SendMessage(test-validator-TASK-XXX, "ready, please validate")`
@@ -49,9 +49,9 @@ Output format: `.claude/rules/agent-output-format.md`.
    - `APPROVED` → `approvals_received++`
    - `APPROVED WITH RESERVATIONS` → `approvals_received++`. For each issue: fix inline if small and clearly correct, otherwise skip.
    - `BLOCKED: …` → `approvals_received = 0`, fix the blocking issues, commit, **re-notify ALL reviewers** (the diff changed). Loop.
-7. **Rebase onto current main before merger** — reviews may have taken time; other tasks may have merged since step 4:
+7. **Rebase onto the session branch before merger** — reviews may have taken time; sibling tasks may have merged into `session/<SESSION_SHORT_ID>` since step 4:
    ```bash
-   cd <WORKTREE_PATH> && git fetch origin main --quiet && git rebase origin/main
+   cd <WORKTREE_PATH> && git rebase session/<SESSION_SHORT_ID>
    ```
    Resolve any conflicts, commit, verify `git status` is clean. If the rebase introduces regressions, fix them and re-request reviews (back to step 5).
 8. **Hand off to merger**:
@@ -102,28 +102,11 @@ Domain skills — load on demand with `Skill({skill: "..."})` when your task nee
 Always produce the runtime artefacts the project needs:
 
 - TypeScript types + fake-data generators (what the FakeRest demo serves).
-- A SQL migration when the ticket flag `requires_supabase_migration: true`
-  is set (see _Supabase-migration flag_ below).
 
-Never run `supabase` CLI commands yourself. The orchestrator promotes and
-applies migrations after the user explicitly agrees.
-
-## Supabase-migration flag on the ticket
-
-The ticket's `requires_supabase_migration` field is set by the planner.
-Treat it as your contract:
-
-- `true` → write the SQL migration to
-  `supabase/migrations-pending/<YYYYMMDDHHMMSS>_<SESSION_SHORT_ID>_<TASK-XXX>_<short-slug>.sql`
-  (e.g. `20260518091200_46bc14c5_TASK-001_add_invoices.sql`).
-  `SESSION_SHORT_ID` = first segment of `WORKTREE_PATH` (e.g. `/app/worktrees/46bc14c5/TASK-001` → `46bc14c5`).
-  Use `date -u +%Y%m%d%H%M%S` for the timestamp. Keep the `TASK-XXX` hyphen; only `<short-slug>` uses underscores.
-  The `SESSION_SHORT_ID` scopes the migration to this session so the deploy script doesn't promote a refused migration from another session.
-- `false` → do not touch `supabase/migrations*/`.
-
-**View update rule** — when a migration adds or removes a column, check `supabase/schemas/03_views.sql` for any view selecting from that table. If one exists, recreate it with `CREATE OR REPLACE VIEW`, new column appended at the **absolute end** of the SELECT list — after all existing columns, including computed AS aliases. PostgreSQL rejects any ordinal shift (error 42P16). PostgREST queries the view, not the table — a missing update makes the column invisible to the app.
-
-If the planner's flag is wrong (you can avoid the migration, or you discover you need one), flip it in `${TICKETS_DIR}/TASK-XXX.json` before requesting review — the only field you may change besides `status`.
+**Never write SQL migrations.** Migrations are generated on demand at deploy
+time by a dedicated migration round (see the `writing-migrations` skill), not
+during feature tickets. Never run `supabase` CLI commands. Never touch
+`supabase/migrations*/`.
 
 ---
 

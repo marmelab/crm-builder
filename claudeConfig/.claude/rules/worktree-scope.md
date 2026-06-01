@@ -14,12 +14,20 @@ Each ticket gets its own git worktree at `/app/worktrees/<SESSION_SHORT_ID>/TASK
 2. Incorrect — `/app` is on the base branch, missing the ticket's changes
 3. Dangerous — editing `/app/src/App.tsx` pollutes the base branch with changes outside the ticket's scope. This happened in a past session and left 20+ files uncommitted on `master`.
 
+## Session-branch topology
+
+Each session owns an integration branch `session/<SESSION_SHORT_ID>` (forked from main at session start) and a fixed anchor ref `session-base/<SESSION_SHORT_ID>`. Task worktrees fork from `session/<SESSION_SHORT_ID>`. The merger merges task branches into the session branch inside the dedicated `/app/worktrees/<SESSION_SHORT_ID>/_session` worktree, then promotes `session/<SESSION_SHORT_ID>` into main once per request under `/app/.promote.lock`.
+
+- Developers rebase onto `session/<SESSION_SHORT_ID>`, never onto main/master.
+- The `_session` worktree is the merger's; developers/reviewers never touch it.
+- Only a `promotion-conflict-resolver` developer may edit `/app` on main, and only to resolve a `session->main` merge conflict under the lock.
+
 ## Allowed paths
 
 | Path prefix | Read | Write/Edit | Bash cwd |
 |---|---|---|---|
 | `<WORKTREE_PATH>/**` (i.e. `/app/worktrees/<SESSION_SHORT_ID>/TASK-XXX/`) | ✅ | ✅ | ✅ |
-| `${TICKETS_DIR}/TASK-XXX.json` (per-session folder, e.g. `/chat-service/logs/<uuid>/TASK-XXX.json`) | ✅ (ticket source of truth) | ⚠️ merger writes the `status` field; developer may flip `requires_supabase_migration` if the planner was wrong — no other writes | — |
+| `${TICKETS_DIR}/TASK-XXX.json` (per-session folder, e.g. `/chat-service/logs/<uuid>/TASK-XXX.json`) | ✅ (ticket source of truth) | ⚠️ merger writes the `status` field — no other writes | — |
 | `/app/adr/**` | ✅ (learn from past structural decisions) | ❌ (developer writes ADRs inside the worktree at `<WORKTREE_PATH>/adr/`; the merger ships them to `/app/adr/`) | — |
 | `/home/developer/.claude/**` | ✅ (skills, rules) | ❌ | — |
 

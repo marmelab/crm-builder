@@ -95,12 +95,12 @@ Component exports:
 - `src/components/atomic-crm/[entity]/index.ts` exports the resource config?
 - All referenced components actually created?
 
-Migration sanity (only when the ticket has `requires_supabase_migration: true`):
-- A new file is present in `supabase/migrations-pending/` matching this
-  ticket's session + TASK id (`<timestamp>_<SESSION_SHORT_ID>_TASK-XXX_*.sql`)?
-- The file is NOT in `supabase/migrations/` yet — the orchestrator's
-  post-dev deploy offer promotes it to that folder, not the developer.
+Renaming sanity:
 - If a table was renamed: no lingering `.from("<old_name>")` in `src/` or `e2e/`?
+
+Migrations are NOT a developer concern: SQL is generated at deploy time from
+`git diff session-base/<SESSION_SHORT_ID>..session/<SESSION_SHORT_ID>` by a
+dedicated migration round. Do not look for migration files in this worktree.
 
 Any failure → RED or blocking issue.
 

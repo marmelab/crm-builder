@@ -39,7 +39,7 @@ Tests: `cd chat-service && npm test` — uses glob `'test/**/*.test.js'` (direct
 |---|---|---|
 | chat-orchestrator | sonnet | User-facing, routes, narrates. SIMPLE flow dispatches simple-developer + merger directly (no team). |
 | planner | sonnet | Decomposes → tickets JSON with waves + file hints. |
-| developer | opus | Implements + commits in worktree. Also writes ADRs in `adr/` when the change introduces a structural decision. |
+| developer | opus | Implements + commits in worktree. Also writes ADRs in `adr/` when the change introduces a structural decision. Never writes SQL migrations — deploy-time only. |
 | simple-developer | sonnet | 1-file cosmetic OR 1 single-field change on an existing entity (schema + view + type + form + show) OR 1 list filter reusing existing components (no new custom React component). No team, no review, never writes ADRs — SubagentStop hooks validate. POST-DEV runs if a migration was written. |
 | quality-reviewer | sonnet | Semantic code + security review only. Never re-runs validation. |
 | test-validator | haiku | Integration wiring + e2e presence. |
@@ -63,7 +63,11 @@ Team layout (`agent-team` skill): one `TeamCreate` per wave, `3×N + 1` members 
 
 ### Worktree scope (critical)
 
-Every ticket agent works in `/app/worktrees/TASK-XXX/`. Never read/edit `/app/src/` when you have a worktree — that's the base branch. Every Bash call must `cd /app/worktrees/TASK-XXX && …` (shell state is stateless between calls).
+Every ticket agent works in `/app/worktrees/<SESSION_SHORT_ID>/TASK-XXX/`. Never read/edit `/app/src/` when you have a worktree — that's the base branch. Every Bash call must `cd /app/worktrees/<SESSION_SHORT_ID>/TASK-XXX && …` (shell state is stateless between calls).
+
+Each session works on `session/<SESSION_SHORT_ID>` (forked from main at session start, with a fixed anchor ref `session-base/<SESSION_SHORT_ID>`). Task branches fork from and merge into `session/<id>` inside a dedicated `_session` worktree; the session branch is promoted to main once per request under `/app/.promote.lock`.
+
+Branch naming: `<SESSION_SHORT_ID>/TASK-XXX` (COMPLEX), `<SESSION_SHORT_ID>/simple` (SIMPLE). All work branches use the session ID as prefix. Merge path: `<ID>/TASK-XXX` or `<ID>/simple` → `session/<ID>` (Stage A, in `_session` worktree) → `main` (Stage B, under `flock`). `session-base/<ID>` never moves — used to compute the migration diff at deploy time.
 
 ## Development
 
@@ -88,3 +92,4 @@ Hot-reload bind-mounts (dev only, remove before release): `claudeConfig/.claude`
 - `total_cost_usd` is cumulative within a spawn — never sum it event-by-event (massive inflation).
 - `git reset --hard HEAD` on `/app` silently reverts App.tsx — merger re-applies variant via `/entrypoint-helpers/apply-app-variant.sh`.
 - Cold cache is expensive (~$0.17 for a "Hi!") — keep `enabledPlugins` minimal in `settings.json`.
+- Migrations are generated at deploy time from `git diff session-base/<SESSION_SHORT_ID>..session/<SESSION_SHORT_ID>`; the developer never writes them. Diffing against main would pull in other sessions' schema work — always diff against `session-base/<id>`.

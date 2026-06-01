@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help build build-instance up up-full up-instance down down-instance wipe restart restart-full logs shell claude test test-unit test-smoke bench bench-update clean-sessions reset \
+.PHONY: help build build-instance up up-full up-instance down down-instance wipe wipe-supabase restart restart-full logs shell claude test test-unit test-smoke bench bench-update clean-sessions reset \
         start demo full stop kill image log tail bash exec tests smoke clean archive reload
 
 # Resolve the target container for claude/shell. Prefer INSTANCE=<name>;
@@ -69,6 +69,10 @@ down-instance: ## Stop a named instance: make down-instance INSTANCE=feat-x
 
 wipe: ## Stop container AND remove all volumes (wipes crm checkout, deps, sessions)
 	./scripts/down.sh -v
+
+wipe-supabase: ## Remove Supabase data volumes only (preserves claude-auth, crm-app, sessions)
+	./scripts/down.sh
+	@docker volume ls -q | grep "_atomic-crm-demo$$" | xargs -r docker volume rm && echo "Supabase volumes removed." || echo "No Supabase volumes found."
 
 restart: down up ## Restart the demo stack
 

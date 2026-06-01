@@ -324,10 +324,11 @@ async function handleDownloadZipRequest(req, res) {
 async function checkSupabaseReady() {
   try {
     const ctrl = new AbortController();
-    const tid = setTimeout(() => ctrl.abort(), 800);
-    await fetch('http://localhost:54321', { signal: ctrl.signal });
+    const tid = setTimeout(() => ctrl.abort(), 2000);
+    const res = await fetch('http://localhost:54321/rest/v1/', { signal: ctrl.signal });
     clearTimeout(tid);
-    return true;
+    // 200 or 401 (auth required) both mean PostgREST + Postgres are up
+    return res.status === 200 || res.status === 401;
   } catch {
     return false;
   }

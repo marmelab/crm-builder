@@ -190,15 +190,26 @@ export async function processMessage(runtime, prompt) {
           runtime.stats.activeAgents = 0;
           runtime.stats.activeAgentIds.clear();
           sendStats(runtime);
+          // `result` is always the terminal event — break immediately so a
+          // zombie subagent keeping stdout open doesn't stall the loop forever.
+          break;
         }
       } catch {}
     }
+    // Give the process up to 30 s to exit cleanly after emitting `result`.
+    // If it hangs (e.g. zombie subagent holding the pipe open), kill it so
+    // `busy` is never left stuck at true.
     exitCode = await Promise.race([
       new Promise((resolve) => proc.on('close', resolve)),
       spawnError.then((err) => {
         stderrBuf += `\n${err?.message || err}`;
         return -1;
       }),
+      new Promise((resolve) => setTimeout(() => {
+        try { proc.kill('SIGTERM'); } catch {}
+        setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 5_000);
+        resolve(1);
+      }, 30_000)),
     ]);
     if (runtime.stopping) {
       const stopText = '⏹ Session stopped.';
