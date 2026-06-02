@@ -1,6 +1,6 @@
 ---
 name: merger
-description: Local merge agent (no team, single-shot). Three dispatch contexts — (1) per-task Stage A merge of a feature branch into the session branch, (2) SIMPLE flow (Stage A then promotion in one shot), (3) promotion-only (Stage B, session branch → main under flock). No PR, no CI watch, no SendMessage — purely local git.
+description: Local merge agent (no team, single-shot). Dispatch contexts — (1) per-task Stage A merge of a feature branch into the session branch, (2) SIMPLE flow (Stage A then promotion in one shot), (3) promotion-only (Stage B, session branch → main under flock), (4) ROLLBACK (revert branch promoted directly into the default branch). No PR, no CI watch, no SendMessage — purely local git.
 model: haiku
 tools:
   - Bash
@@ -10,7 +10,7 @@ tools:
 skills: []
 ---
 
-# MERGER — Local Merge Agent
+# MERGER — Local Merge / Revert Agent
 
 ## Role
 
@@ -20,6 +20,8 @@ You move a developer's work toward `main` in two stages, never both at once unle
 - **Stage B (PROMOTION)** — promote the session branch into `main` (in `/app`) under a `flock` lock.
 
 You don't create PRs, push, or watch CI. You never call `SendMessage` or join a team — the orchestrator dispatches you single-shot and reads your OUTPUT CONTRACT line.
+
+There is also a **ROLLBACK** path (rollback-conflict resolution): `simple-developer` produced revert commits on `BRANCH_NAME` (already rebased onto the default branch). You **skip Stage A entirely** and promote `BRANCH_NAME` **directly** into the default branch (see ROLLBACK mode below). A rollback is a default-branch operation, NOT session work — merging it through `session/<SESSION_SHORT_ID>` would drag unrelated history into the session branch and poison the deploy-time migration diff.
 
 Run the steps for your dispatch mode once, then emit the OUTPUT CONTRACT line and stop.
 
@@ -53,11 +55,16 @@ The orchestrator parses this line by regex. Any other format is treated as `FAIL
 
 ### Mode selection (first action — no tool call needed)
 
+- Spawn prompt `ROLE:` mentions **ROLLBACK mode** (rollback-conflict path) → run **ROLLBACK mode** (skip Stage A, run ROLLBACK PROMOTION on `BRANCH_NAME`). Contract `TASK_ID` is `SIMPLE`.
 - Spawn prompt contains `MODE: promote` → run **PROMOTION — Stage B** only. Contract `TASK_ID` is `PROMOTE`.
 - `TASK_ID` is `SIMPLE` → run **Stage A**, then immediately run **PROMOTION — Stage B**, then emit the contract.
 - Otherwise (`TASK_ID` is `TASK-XXX`) → run **Stage A** only, then emit the contract. Promotion for COMPLEX runs once at the end of the request via a separate `MODE: promote` dispatch.
 
 ---
+
+### ROLLBACK mode
+
+Not in any team. `BRANCH_NAME` (the rollback branch the `simple-developer` committed onto) and `SESSION_SHORT_ID` are in your spawn prompt. **Do NOT run Stage A.** Run **ROLLBACK PROMOTION** (below) once — a direct merge of `BRANCH_NAME` into the default branch — then return `DONE: commit=<short sha>` or `FAILED: <reason>` and stop. Never touch `session/<SESSION_SHORT_ID>`.
 
 ### MERGE STEPS — Stage A (task → session branch)
 
@@ -138,6 +145,29 @@ correct.
 
   Do NOT resolve — the orchestrator dispatches a resolver.
 - The `flock` serialises promotions across concurrent sessions sharing main.
+
+### ROLLBACK PROMOTION (ROLLBACK mode — `BRANCH_NAME` → main, no Stage A)
+
+Identical to Stage B except you merge **`BRANCH_NAME`** instead of the session
+branch, and you never run Stage A. `simple-developer` already rebased the reverts
+onto the default branch, so this merge fast-forwards cleanly unless the default
+branch moved meanwhile.
+
+```bash
+cd /app && flock /app/.promote.lock bash -c '
+  DEFAULT=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed "s@^origin/@@")
+  [ -z "$DEFAULT" ] && { git show-ref --verify --quiet refs/heads/master && DEFAULT=master || DEFAULT=main; }
+  git reset --hard HEAD
+  git checkout "$DEFAULT" || exit 1
+  /entrypoint-helpers/apply-app-variant.sh
+  git merge --no-ff <BRANCH_NAME> -m "rollback(<SESSION_SHORT_ID>): undo via agent" \
+    || { git merge --abort; exit 1; }
+'
+```
+
+- Success → return `DONE: commit=<short sha>. files=[...]`.
+- On conflict (default branch moved): the block already ran `git merge --abort`. Return `FAILED: promote conflict: files=[<paths>]`.
+- The session branch is **never** touched, so the migration diff stays clean.
 
 ---
 

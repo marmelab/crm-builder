@@ -70,7 +70,8 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
   transition: color .15s, background .15s; border-radius: 6px;
 }
 #chat-debug:hover,
-#chat-restore-btn:hover { color: #fff; }
+#chat-restore-btn:not(:disabled):hover { color: #fff; }
+#chat-restore-btn:disabled { opacity: .35; cursor: not-allowed; }
 #chat-debug.debug-active { color: #3b82f6; background: rgba(59,130,246,.15); }
 #chat-debug svg,
 #chat-restore-btn svg { display: block; }
@@ -106,7 +107,6 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
 #chat-history-panel.collapsed #chat-new .chat-new-label,
 #chat-history-panel.collapsed #history-list,
 #chat-history-panel.collapsed #history-empty,
-#chat-history-panel.collapsed .history-download-label,
 #chat-history-panel.collapsed .history-logo { display: none; }
 #chat-history-panel.collapsed #chat-new { justify-content: center; padding: 10px 0; }
 
@@ -123,6 +123,10 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
 #history-recent-btn svg { display: block; }
 #chat-history-panel.collapsed #history-recent-btn { display: flex; }
 
+#deploy-btn,
+#history-more-btn,
+#deploy-edit-btn,
+#deploy-dashboard-btn,
 #history-download-btn {
   display: flex; align-items: center; gap: 8px;
   width: 100%; padding: 10px 14px;
@@ -134,12 +138,37 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
   flex-shrink: 0;
   transition: background .15s, color .15s;
 }
+#deploy-btn { margin-top: auto; }
+/* `hidden` must win over the flex display above. */
+#deploy-edit-btn[hidden],
+#deploy-dashboard-btn[hidden] { display: none; }
+#deploy-btn:hover,
+#history-more-btn:hover,
+#deploy-edit-btn:hover,
+#deploy-dashboard-btn:hover,
 #history-download-btn:hover { background: #2c2c2e; color: #fff; }
+#deploy-btn svg,
+#history-more-btn svg,
+#deploy-edit-btn svg,
+#deploy-dashboard-btn svg,
 #history-download-btn svg { display: block; flex-shrink: 0; width: 16px; height: 16px; }
-#chat-history-panel.collapsed #history-download-btn {
+#deploy-btn.deploy-btn-running { color: #fbbf24; }
+#deploy-btn.deploy-btn-running .deploy-btn-icon { animation: deploy-spin 1.2s linear infinite; }
+#chat-history-panel.collapsed #deploy-btn .deploy-btn-label,
+#chat-history-panel.collapsed #history-more-btn .history-more-label {
+  display: none;
+}
+#chat-history-panel.collapsed #deploy-btn,
+#chat-history-panel.collapsed #history-more-btn {
   justify-content: center; padding: 10px 0;
 }
-#chat-history-panel.collapsed #history-download-btn svg { width: 20px; height: 20px; }
+#chat-history-panel.collapsed #deploy-btn svg,
+#chat-history-panel.collapsed #history-more-btn svg { width: 20px; height: 20px; }
+
+@keyframes deploy-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
 
 #history-recent-popup {
   position: fixed; z-index: 300;
@@ -169,6 +198,30 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
   padding: 18px; color: #636366; font-size: 12px; text-align: center;
 }
 #history-recent-empty[hidden] { display: none; }
+
+/* "More actions" overflow menu — same panel chrome as the recent-sessions
+   popover, but anchored by its bottom edge (JS sets `bottom`) so it opens
+   upward from the trigger pinned at the foot of the sidebar. */
+#history-more-popup {
+  position: fixed; z-index: 300;
+  left: calc(var(--sidebar-width) + 6px);
+  width: 260px; max-height: 60vh;
+  background: #1c1c1e; border: 1px solid #3a3a3c; border-radius: 10px;
+  box-shadow: 0 10px 40px rgba(0,0,0,.6);
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+#history-more-popup[hidden] { display: none; }
+#history-more-popup-header {
+  padding: 10px 14px; border-bottom: 1px solid #2c2c2e;
+  font-weight: 600; color: #f2f2f7; font-size: 13px;
+  flex-shrink: 0;
+}
+/* Inside the menu the rows read as one group under the header, so drop the
+   per-row top border the shared button styling adds. */
+#history-more-popup #deploy-edit-btn,
+#history-more-popup #deploy-dashboard-btn,
+#history-more-popup #history-download-btn { border-top: none; }
 
 /* Stop button — same shape/footprint as #chat-send, takes its place inside
    #chat-form whenever a Claude turn is in progress. */
@@ -1037,6 +1090,7 @@ details.child-row[open] > summary .child-detail {
 #chat-modal-body {
   font-size: 13px; line-height: 1.5; color: #8e8e93;
   margin-bottom: 22px;
+  white-space: pre-line;
 }
 #chat-modal-actions {
   display: flex; gap: 10px; justify-content: center;
@@ -1067,4 +1121,112 @@ details.child-row[open] > summary .child-detail {
 @keyframes modal-pop {
   from { opacity: 0; transform: translateY(8px) scale(.96); }
   to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* ── Deploy modal — wider than chat-modal because it carries a form ── */
+#deploy-modal {
+  position: fixed; inset: 0; z-index: 1000;
+  display: flex; align-items: center; justify-content: center;
+}
+#deploy-modal[hidden] { display: none; }
+.deploy-modal-backdrop {
+  position: absolute; inset: 0;
+  background: rgba(0, 0, 0, .55);
+  backdrop-filter: blur(4px);
+  animation: modal-fade .15s ease-out;
+}
+.deploy-modal-panel {
+  position: relative;
+  width: min(560px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  background: linear-gradient(160deg, #2c2c2e 0%, #1c1c1e 100%);
+  border: 1px solid #3a3a3c;
+  border-radius: 16px;
+  padding: 24px 26px 18px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, .6);
+  animation: modal-pop .18s ease-out;
+}
+.deploy-modal-close {
+  position: absolute; top: 12px; right: 12px;
+  width: 28px; height: 28px;
+  background: none; border: none;
+  color: #8e8e93; cursor: pointer;
+  font-size: 16px; line-height: 1;
+  border-radius: 6px;
+}
+.deploy-modal-close:hover { background: #3a3a3c; color: #f2f2f7; }
+#deploy-modal-title {
+  font-size: 17px; font-weight: 600; color: #f2f2f7;
+  margin-bottom: 12px;
+}
+.deploy-modal-body {
+  font-size: 13px; line-height: 1.5; color: #8e8e93;
+  margin-bottom: 16px;
+}
+.deploy-modal-body a { color: #60a5fa; text-decoration: none; }
+.deploy-modal-body a:hover { text-decoration: underline; }
+
+.deploy-form { display: flex; flex-direction: column; gap: 12px; }
+.deploy-field { display: flex; flex-direction: column; gap: 4px; }
+.deploy-field-label {
+  font-size: 12px; font-weight: 500; color: #c7c7cc;
+}
+.deploy-field-hint { color: #8e8e93; font-weight: 400; margin-left: 4px; }
+.deploy-field input {
+  padding: 8px 10px; font-size: 13px;
+  background: #1c1c1e; color: #f2f2f7;
+  border: 1px solid #3a3a3c; border-radius: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.deploy-field input:focus {
+  outline: none; border-color: #60a5fa;
+  box-shadow: 0 0 0 3px rgba(96, 165, 250, .15);
+}
+.deploy-fieldset {
+  border: 1px solid #3a3a3c; border-radius: 10px;
+  padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 8px;
+}
+.deploy-fieldset legend {
+  font-size: 12px; font-weight: 600; color: #c7c7cc;
+  padding: 0 6px;
+}
+
+.deploy-form-errors {
+  background: rgba(244, 63, 94, .12);
+  border: 1px solid rgba(244, 63, 94, .35);
+  color: #fda4af;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+.deploy-form-actions {
+  display: flex; gap: 10px; justify-content: flex-end;
+  margin-top: 6px;
+}
+
+.deploy-progress-status {
+  font-size: 14px; font-weight: 600;
+  color: #c7c7cc;
+  margin-bottom: 10px;
+}
+.deploy-progress-status.deploy-ok { color: #4ade80; }
+.deploy-progress-status.deploy-fail { color: #f87171; }
+.deploy-progress-log {
+  background: #0f0f0f;
+  border: 1px solid #2c2c2e;
+  border-radius: 8px;
+  padding: 10px 12px;
+  max-height: 50vh;
+  min-height: 200px;
+  overflow: auto;
+  color: #c7c7cc;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px; line-height: 1.45;
+  white-space: pre-wrap; word-break: break-word;
+  margin-bottom: 10px;
+}
+.deploy-progress-close[disabled] {
+  opacity: .5; cursor: not-allowed;
 }

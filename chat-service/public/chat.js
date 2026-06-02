@@ -1,8 +1,9 @@
 import { el, formatTokens } from './lib/dom.js';
 import { renderStatsPanel, initStatsRefresh } from './lib/stats/index.js';
-import { initConnection, initDisplay, initHistory, openConfirmModal, initRecentPopup } from './lib/sessions/index.js';
+import { initConnection, initDisplay, initHistory, openConfirmModal, initRecentPopup, initMorePopup } from './lib/sessions/index.js';
 import { renderInlineMarkdown } from './lib/markdown.js';
 import { initRollback } from './lib/rollback/index.js';
+import { initDeploy } from './lib/deploy/index.js';
 
 const widget   = document.getElementById('chat-widget');
 const toggle   = document.getElementById('chat-toggle');
@@ -25,7 +26,26 @@ const statsPanel = document.getElementById('chat-stats-panel');
 const statsPanelBody = document.getElementById('chat-stats-panel-body');
 const statsCloseBtn = document.getElementById('chat-stats-close');
 
+const restoreBtn = document.getElementById('chat-restore-btn');
 let working  = false;
+// Last broadcast state of the *displayed* session. A rollback that hits a
+// conflict keeps the session `in_progress` for the whole background resolution,
+// so gating the restore button on this (plus `working`) keeps it disabled until
+// the undo actually finishes — not just until the HTTP request returns.
+let displayedState = null;
+function isSessionBusy() {
+  // `rate_limited` clears runtime.busy but the session is NOT safely idle: a
+  // rollback that hits a conflict re-spawns claude (handOffToOrchestrator) and
+  // re-hits the same usage window, bypassing the server's queue-drop guard. Keep
+  // the undo button disabled until the limit clears (state flips back).
+  return working
+    || displayedState === 'in_progress'
+    || displayedState === 'pending'
+    || displayedState === 'rate_limited';
+}
+function refreshRestoreBtn() {
+  if (restoreBtn) restoreBtn.disabled = isSessionBusy();
+}
 let progressTotal = 0;
 let progressDone  = 0;
 let progressSteps = [];
@@ -123,7 +143,15 @@ const historyApi = initHistory({
   closeDiscussion,
 });
 
-initRollback({ getSessionId: () => display.getSessionId(), appendMessage });
+initRollback({
+  getSessionId: () => display.getSessionId(),
+  appendMessage,
+  isBusy: isSessionBusy,
+  refresh: refreshRestoreBtn,
+});
+// Deploy drives its own SSE stream internally (it's cross-session global state,
+// live even with no chat session open) — nothing to wire through the chat WS.
+initDeploy();
 
 const connection = initConnection({
   handleWsMessage,
@@ -143,6 +171,8 @@ function resetChatUi() {
   display.setSessionId(null);
   if (statsMode) exitStatsMode();
   working = false;
+  displayedState = null;
+  refreshRestoreBtn();
   send.hidden = false;
   send.disabled = false;
   stopBtn.hidden = true;
@@ -491,6 +521,7 @@ function renderWorkingUi() {
     // the turn is over, it becomes the user-visible "result" of the turn.
     messages.querySelectorAll('.msg-mirrored').forEach((n) => n.classList.remove('msg-mirrored'));
   }
+  refreshRestoreBtn();
 }
 
 function handleWsMessage(event) {
@@ -508,7 +539,9 @@ function handleWsMessage(event) {
       history.replaceState({}, '', url);
     }
     display.setDisplayedTitle(msg.title || 'New session');
-    display.setDisplayedState(msg.state || 'in_progress');
+    displayedState = msg.state || 'in_progress';
+    display.setDisplayedState(displayedState);
+    refreshRestoreBtn();
     clearMessageNodes();
     // Prefer the chronological timeline; fall back to the legacy split fields
     // if the server didn't send one (older deploy).
@@ -586,7 +619,9 @@ function handleWsMessage(event) {
   }
 
   if (msg.type === 'state') {
+    displayedState = msg.state;
     display.setDisplayedState(msg.state);
+    refreshRestoreBtn();
     // A turn that just settled on `error` shows the Resume bubble. (rate_limited
     // is driven by its own `rate_limited` event carrying resetsAt, so it's not
     // handled here.)
@@ -911,7 +946,7 @@ function appendMessage(role, content, seqOrOpts = ++seqCounter) {
   if (subtype === 'rollback') {
     const header = document.createElement('div');
     header.className = 'msg-rollback-header';
-    header.innerHTML = `${ROLLBACK_ICON_SVG}<span>Rollback</span>`;
+    header.innerHTML = `${ROLLBACK_ICON_SVG}<span>Undo changes</span>`;
     const body = document.createElement('div');
     body.className = 'msg-rollback-body';
     body.textContent = content;
@@ -973,7 +1008,6 @@ const AGENT_COLORS = {
   developer:          '#f97316',
   merger:             '#2dd4bf',
   documentator:       '#facc15',
-  devops:             '#94a3b8',
 };
 
 function agentColor(label) {
@@ -1201,11 +1235,15 @@ function applySidebarCollapsed(collapsed) {
 applySidebarCollapsed(localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1');
 
 const recentPopup = initRecentPopup({ renderHistoryItem: historyApi.renderHistoryItem });
+const morePopup = initMorePopup();
 
 historyCollapseBtn.addEventListener('click', () => {
   const collapsed = !historyPanel.classList.contains('collapsed');
   applySidebarCollapsed(collapsed);
   try { localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? '1' : '0'); } catch {}
+  // The popovers are anchored at open time; the sidebar width changes on
+  // collapse, so close any open one rather than leaving it misplaced.
+  morePopup.closeMorePopup();
   // Refreshes are skipped while collapsed; pull the latest list on expand.
   if (!collapsed) {
     historyApi.refreshHistory();

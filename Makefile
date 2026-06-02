@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help build build-instance up up-full up-instance down down-instance wipe-instance wipe wipe-supabase restart restart-full logs shell claude test test-unit test-smoke bench bench-update clean-sessions reset \
+.PHONY: help build build-instance up up-full up-instance down down-instance wipe-instance wipe wipe-supabase restart restart-full logs chat-logs chat-errors shell claude test test-unit test-smoke bench bench-update clean-sessions reset \
         start demo full stop kill image log tail bash exec tests smoke clean archive reload
 
 # Resolve the target container for claude/shell. Prefer INSTANCE=<name>;
@@ -13,7 +13,7 @@ define RESOLVE_CONTAINER
 			exit 1; \
 		fi; \
 	else \
-		matches=$$(docker ps --filter "name=atomic-crm" --filter "status=running" --format "{{.Names}}"); \
+		matches=$$(docker ps --filter "name=^atomic-crm" --filter "status=running" --format "{{.Names}}"); \
 		count=$$(printf "%s" "$$matches" | grep -c . || true); \
 		if [ "$$count" -eq 0 ]; then \
 			echo "Error: no atomic-crm container running. Run 'make up' first."; \
@@ -91,6 +91,14 @@ restart-full: down up-full ## Restart the full stack
 
 logs: ## Tail logs of the running stack
 	docker compose logs -f
+
+chat-logs: ## Tail the chat-service log in real time (pass INSTANCE=<name> to target a specific instance)
+	@$(RESOLVE_CONTAINER); \
+	docker exec -it $$c tail -f /var/log/chat.log
+
+chat-errors: ## Tail the chat-service error log in real time (pass INSTANCE=<name> to target a specific instance)
+	@$(RESOLVE_CONTAINER); \
+	docker exec -it $$c tail -f /var/log/chat-err.log
 
 shell: ## Open a shell inside the running container (pass INSTANCE=<name> to target a specific instance)
 	@$(RESOLVE_CONTAINER); \

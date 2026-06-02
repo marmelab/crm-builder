@@ -3,17 +3,17 @@ import { join } from 'path';
 import { fileURLToPath } from 'url';
 import { WebSocketServer } from 'ws';
 
-import { PORT, MODE_DEMO, MODE_FULL } from './lib/server/config.js';
+import { PORT, MODE_DEMO, MODE_FULL, LOG_DIR } from './lib/server/config.js';
 import {
   loadSystemPrompt, applySystemPrompt,
   loadDocumentatorPrompt, applyDocumentatorPrompt,
 } from './lib/server/system-prompt.js';
-import { openSession, deleteSession, readMessages } from './lib/server/session-store.js';
+import { openSession, deleteSession, readMessages, sessionHasTickets } from './lib/server/session-store.js';
 import { createRequestHandler, switchMode } from './lib/server/http-routes.js';
 import { runtimes, wsToRuntime, runtimeForWs, createRuntime, safeSend, killCurrentProc } from './lib/server/runtime.js';
 import { sendToWs, broadcast } from './lib/server/ws-bus.js';
 import { updateProgressBar } from './lib/server/progress-bar.ts';
-import { regenerateTitleWithHaiku, extractText, extractToolUses } from './lib/server/claude-spawn.js';
+import { regenerateTitleWithHaiku, extractText, extractToolUses, planResume } from './lib/server/claude-spawn.js';
 import { processMessage } from './lib/server/turn.js';
 import { endsWithQuestion } from './lib/server/session-store.js';
 
@@ -21,6 +21,17 @@ import { endsWithQuestion } from './lib/server/session-store.js';
 export { extractText, extractToolUses, endsWithQuestion };
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
+
+// Resolve how a resume re-enters the turn loop. Only a process-killed state
+// (error / rate_limited) with a COMPLEX wave in flight (ticket files on disk)
+// needs the fresh-session recovery path; everything else resumes normally. The
+// ticket check is the one async step, so it's confined to those states — normal
+// turns never touch the filesystem here.
+async function resolveResumePlan(sessionId, state, message) {
+  const processKilled = state === 'error' || state === 'rate_limited';
+  const hasWork = processKilled && await sessionHasTickets(`${LOG_DIR}/${sessionId}`);
+  return planResume(state, message, hasWork);
+}
 
 const httpServer = createServer(createRequestHandler({ publicDir: join(__dirname, 'public') }));
 
@@ -102,6 +113,9 @@ wss.on('connection', async (ws, req) => {
     // countdown + resume button the live tab last rendered.
     rateLimitResetsAt: runtime.session.meta.rateLimitResetsAt ?? null,
     isNew: session.isNew,
+    // Deploy progress is delivered over its own SSE channel
+    // (GET /api/deploy/events), not the chat WebSocket — it's cross-session
+    // global state and the modal must work even with no chat session open.
   });
   updateProgressBar(runtime, ws);
   // Repaint the cumulative tokens/cost ticker on (re)connect — runtime.stats
@@ -140,11 +154,16 @@ wss.on('connection', async (ws, req) => {
       // submit, second resume click) would also pass the busy guard and
       // start a concurrent processMessage on the same runtime.
       r.busy = true;
-      readMessages(r.session.id).then((msgs) => {
+      readMessages(r.session.id).then(async (msgs) => {
         const lastUser = [...msgs].reverse().find((m) => m.role === 'user');
         if (!lastUser?.content) { r.busy = false; return; }
         r.session.logWrite('in', { type: 'resume_requested' });
-        processMessage(r, lastUser.content);
+        // A crash or a usage limit both kill the process + its team. If a
+        // COMPLEX wave was in flight, --resume would reinject the dead "team is
+        // alive" belief and the orchestrator no-ops; resolveResumePlan picks a
+        // fresh recovery spawn in that case and a plain --resume otherwise.
+        const { prompt, freshSession } = await resolveResumePlan(r.session.id, st, lastUser.content);
+        processMessage(r, prompt, { freshSession });
       }).catch(() => { r.busy = false; });
       return;
     }
@@ -215,8 +234,21 @@ wss.on('connection', async (ws, req) => {
       const queuedIds = r.queue.map((q) => q.id);
       broadcast(r, { type: 'queue_updated', queuedIds, addedId: queueId });
     } else {
+      // Claim the runtime synchronously (before any await) so a second message
+      // racing in can't start a concurrent turn.
       r.busy = true;
-      processMessage(r, parsed.content);
+      const st = r.session.meta.state;
+      if (st === 'error' || st === 'rate_limited') {
+        // A message typed while the session is process-killed (e.g. the user
+        // types "resume"/"continue" instead of clicking the button) must get the
+        // same recovery treatment as the Resume button — otherwise it would
+        // --resume the dead transcript and the orchestrator no-ops.
+        resolveResumePlan(r.session.id, st, parsed.content)
+          .then(({ prompt, freshSession }) => processMessage(r, prompt, { freshSession }))
+          .catch(() => processMessage(r, parsed.content));
+      } else {
+        processMessage(r, parsed.content);
+      }
     }
   });
 

@@ -4,6 +4,7 @@ import { getSystemPrompt, getOrchestratorModel } from './system-prompt.js';
 import { broadcast } from './ws-bus.js';
 import { readMessages } from './session-store.js';
 import { buildSpawnEnv } from '../spawn-env.js';
+import { isAuthErrorStderr, isNetworkErrorStderr } from './turn-state.js';
 
 // Exported for unit testing
 export function extractText(msg) {
@@ -24,16 +25,61 @@ export function extractToolUses(msg) {
   return blocks.filter((b) => b.type === 'tool_use');
 }
 
+// Explicit `<intent>…</intent>` markers the orchestrator classifies on (see the
+// CLASSIFICATION table in chat-orchestrator.md — these literals MUST match the
+// markers that table keys on). Kept as constants so the two builders below and
+// the prompt stay in lockstep.
+export const INTENT_SETUP = '<intent>setup</intent>';
+export const INTENT_RECOVERY = '<intent>recovery</intent>';
+
 // The chat UI's "Define your business" button sends `content: 'FULL_SETUP'`.
-// We rewrite it into an explicit `<intent>setup</intent>` marker the
-// orchestrator recognises (cohérent with `<mode>` / `<session_dir>` env tags).
-// Plain-text fallback is kept so any NL detection in the orchestrator still
-// has something to chew on.
+// We rewrite it into the INTENT_SETUP marker the orchestrator recognises
+// (cohérent with `<mode>` / `<session_dir>` env tags). Plain-text fallback is
+// kept so any NL detection in the orchestrator still has something to chew on.
 export function rewriteUserMessage(userMessage) {
   if (userMessage === 'FULL_SETUP') {
-    return '<intent>setup</intent>\nUser clicked "Define your business" — start the project setup interview.';
+    return `${INTENT_SETUP}\nUser clicked "Define your business" — start the project setup interview.`;
   }
   return userMessage;
+}
+
+// Replayed (instead of the verbatim request) when a resume must rebuild from
+// scratch — i.e. the previous run was interrupted (a crash OR a usage limit)
+// while a COMPLEX wave was in flight. The killed process and every team/agent/
+// subagent it spawned are gone, but its CLI transcript still ends on "team
+// dispatched, work in progress". Resuming that transcript (--resume) reinjects
+// that stale belief, so replaying the original request reads as user impatience
+// → the orchestrator no-ops with "already in progress" while nothing actually
+// runs. This directive instead carries only the INTENT_RECOVERY marker (which
+// routes to STATE RECOVERY in the orchestrator, spawned FRESH with no --resume)
+// plus the original request for context. The procedure and constraints —
+// "assume nothing survived, rebuild from disk, never say already-in-progress" —
+// live solely in STATE RECOVERY (chat-orchestrator.md) to avoid drift.
+export function buildRecoveryPrompt(originalMessage) {
+  return [
+    INTENT_RECOVERY,
+    'The previous run was interrupted; follow STATE RECOVERY.',
+    '',
+    'Original request (for context):',
+    originalMessage,
+  ].join('\n');
+}
+
+// Decide how a resume re-enters the turn loop. A crash or a usage limit both
+// kill the orchestrator process and every subagent it dispatched, so the
+// distinguishing signal is NOT error-vs-rate_limited but whether a COMPLEX wave
+// was actually in flight (hasDispatchedWork — ticket files on disk):
+//   - process killed WITH a wave in flight → the transcript's "team is running"
+//     belief is now false. Spawn a FRESH session (freshSession) with a recovery
+//     directive so that misleading context isn't reinjected via --resume.
+//   - otherwise (interview, SIMPLE, plain Q&A, or limit hit before any dispatch)
+//     → a plain --resume legitimately preserves the conversation and continues.
+export function planResume(state, message, hasDispatchedWork) {
+  const processKilled = state === 'error' || state === 'rate_limited';
+  if (processKilled && hasDispatchedWork) {
+    return { prompt: buildRecoveryPrompt(message), freshSession: true };
+  }
+  return { prompt: message, freshSession: false };
 }
 
 export function spawnClaude(userMessage, claudeSessionId, sessionDir) {
@@ -56,14 +102,15 @@ export function spawnClaude(userMessage, claudeSessionId, sessionDir) {
   if (orchestratorModel) args.push('--model', orchestratorModel);
   if (claudeSessionId) args.push('--resume', claudeSessionId);
   args.push('-p', prompt);
+  const baseEnv = {
+    ...process.env,
+    HOME: CLAUDE_HOME,
+    CLAUDE_PROJECT_DIR: CWD,
+    CHAT_SESSION_DIR: sessionDir,
+    MODE: mode,
+  };
   return spawn('claude', args, {
-    env: buildSpawnEnv({
-      ...process.env,
-      HOME: CLAUDE_HOME,
-      CLAUDE_PROJECT_DIR: CWD,
-      CHAT_SESSION_DIR: sessionDir,
-      MODE: mode,
-    }, claudeSessionId),
+    env: buildSpawnEnv(baseEnv, claudeSessionId),
     cwd: CWD,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -129,10 +176,10 @@ export function friendlyError({ exitCode, stderr, rateLimit, resultError }) {
     const minutes = Math.max(1, Math.ceil((rateLimit.resetsAt * 1000 - Date.now()) / 60000));
     return `Usage limit reached. You can try again in about ${minutes} minute(s).`;
   }
-  if (/invalid[_ ]api[_ ]key|authentication|unauthori[sz]ed|401/i.test(stderr)) {
+  if (isAuthErrorStderr(stderr)) {
     return "Access has expired. Please contact your administrator to renew the session.";
   }
-  if (/network|ECONNREFUSED|ENOTFOUND|ETIMEDOUT/i.test(stderr)) {
+  if (isNetworkErrorStderr(stderr)) {
     return "Unable to reach the service right now. Check your connection and try again.";
   }
   if (resultError) {
