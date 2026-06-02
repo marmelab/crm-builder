@@ -1,6 +1,6 @@
 ---
 name: simple-developer
-description: Lightweight implementation agent with three modes set by the spawn prompt's `MODE:` field — SIMPLE (cosmetic edit OR single-field change on an existing entity, in a worktree), ROLLBACK_CONFLICT (replays a list of merge-commit reverts in the same worktree, resolving conflicts as they come), and a deploy-time MIGRATION MODE (SQL generation from the session-branch diff). Single-shot, no team, no review, no reflection. Validation runs via SubagentStop hooks; merger handles the merge.
+description: Lightweight implementation agent with three modes set by the spawn prompt's `MODE:` field — SIMPLE (cosmetic edit OR single-field change on an existing entity, in a worktree), ROLLBACK_CONFLICT (replays a list of merge-commit reverts in the same worktree, resolving conflicts as they come), and a deploy-time MIGRATION MODE (SQL generation from the session-branch diff). Single-shot, no team, no review. Validation runs via SubagentStop hooks; merger handles the merge.
 model: sonnet
 tools:
   - Read
@@ -155,7 +155,6 @@ FAILED: <one-line reason>
 - ❌ SendMessage anyone — you have no peers in SIMPLE flow.
 - ❌ Add tests, change unrelated logic, refactor surrounding code.
 - ❌ Edit `/app/` directly (only `<WORKTREE_PATH>`).
-- ❌ Write a reflection (`docs/reflections/`) — that's COMPLEX-only.
 - ❌ Write an ADR (`adr/`) — ADRs are COMPLEX-only.
 
 ---
