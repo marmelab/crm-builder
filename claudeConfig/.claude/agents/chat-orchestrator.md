@@ -112,6 +112,7 @@ SETUP:       STATE SETUP-INTERVIEW (turn N..N+K)
 MODE-SWITCH: STATE MS-RUN (turn N)   →  STATE MS-DONE (turn N+1)
 MEMORY:      STATE M-DOC (turn N)    →  STATE M-DONE (turn N+1)
 SIMPLE:      STATE S-DEV (turn N)    →  (STATE S-REVIEW if diff touched supabase/)
+                                      →  (BLOCKED: → STATE S-FIX → S-REVIEW, ≤2 silent retries)
                                       →  STATE S-MERGE
                                       →  STATE S-DONE
                                       →  (if schema diff: STATE PD-RESPOND → PD-MIG-DEV → … → PD-DONE)
@@ -342,7 +343,30 @@ Only entered when the simple-developer's diff touched `supabase/` (raw SQL, migr
 
 **End this turn.** The reviewer reads the worktree diff and returns text.
 
-→ Enter STATE S-MERGE on next turn if `APPROVED`. If `BLOCKED:` reply to the user with a plain-language version of the issues (no file paths, no SQL) and enter STATE DONE — do NOT merge.
+→ On next turn:
+- `APPROVED` → STATE S-MERGE.
+- `BLOCKED:` → **STATE S-FIX** — the user must NEVER see a schema-shape / migration issue. Feed it back to the developer; do NOT merge, do NOT surface it to the user.
+
+---
+
+### STATE S-FIX — feed the review back to the developer (next turn)
+
+Entered only from STATE S-REVIEW on `BLOCKED:`. A database-shape problem (view column order, RLS, raw-SQL injection…) is the developer's to fix, not the user's to arbitrate — the loop stays silent.
+
+1. **Attempt cap.** Look back in your own context and count how many times you have already entered S-FIX in *this* request (each prior *"Adjusting the database change..."* line + its following `BLOCKED:` review = one attempt). If you have **already made 2 fix attempts and the reviewer is still `BLOCKED:`**, give up the silent loop: reply to the user in plain language (*"Something didn't work with this change. Want me to try a different approach?"* — no file paths, no SQL) and enter STATE DONE — do NOT merge.
+2. Otherwise re-dispatch the **same** `simple-developer` in the **same** worktree (the `setup-worktree` hook will `SKIP already registered`) with the reviewer's findings:
+   ```
+   Agent({
+     subagent_type: "simple-developer",
+     description: "Fix DB review findings: <one-line summary>",
+     prompt: "ROLE: simple-developer\nMODE: SIMPLE\nWORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/simple\nBRANCH_NAME: <SESSION_SHORT_ID>/simple\n\nFIX — the database review found problems in your previous commit. Address every point below and commit the fix in the same worktree (amend or new commit, your call). Do NOT change anything else.\n<paste the reviewer's BLOCKED: list verbatim>"
+   })
+   ```
+3. One text line in the user's language, neutral — e.g. *"Adjusting the database change..."* (never expose the technical reason).
+
+**End this turn.** The developer fixes + commits; the `simple-developer` SubagentStop hooks (typecheck, prettier, unit, e2e) run automatically.
+
+→ Enter STATE S-REVIEW again on next turn to re-review the fix. The diff still touches `supabase/`, so the review re-fires — the loop is S-REVIEW ⇄ S-FIX, bounded by the attempt cap in step 1.
 
 ---
 
@@ -351,7 +375,7 @@ Only entered when the simple-developer's diff touched `supabase/` (raw SQL, migr
 The dev's (or reviewer's) final response is in your context.
 
 1. If dev returned `FAILED: <reason>` → skip merge, go to STATE S-DONE with failure.
-2. If reviewer returned `BLOCKED:` → already handled in STATE S-REVIEW (you should not be here).
+2. If reviewer returned `BLOCKED:` → you should not be here: a `BLOCKED:` routes to STATE S-FIX (silent dev loop), and only reaches the user after 2 failed fix attempts. Never merge a `BLOCKED:` change.
 3. If dev returned `DONE: branch=<X>...` and (review skipped OR review `APPROVED`) → dispatch merger (no `team_name`, no SendMessage). Use the **ROLLBACK merger template** when the original user turn was `<intent>rollback-conflict</intent>`, otherwise the **SIMPLE merger template**:
    ```
    Bash("touch /tmp/notified-merger-<SESSION_SHORT_ID>-simple")
