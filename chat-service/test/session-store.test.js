@@ -1,6 +1,27 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { digestLog } from '../lib/server/session-store.js';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { digestLog, sessionHasTickets } from '../lib/server/session-store.js';
+
+test('sessionHasTickets: true when TASK-NNN.json files exist (COMPLEX wave dispatched)', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sess-tickets-'));
+  await writeFile(join(dir, 'meta.json'), '{}');
+  await writeFile(join(dir, 'TASK-001.json'), '{"status":"in_progress"}');
+  assert.equal(await sessionHasTickets(dir), true);
+});
+
+test('sessionHasTickets: false for a session dir with no ticket files (interview/SIMPLE/Q&A)', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sess-tickets-'));
+  await writeFile(join(dir, 'meta.json'), '{}');
+  await writeFile(join(dir, 'log.jsonl'), '');
+  assert.equal(await sessionHasTickets(dir), false);
+});
+
+test('sessionHasTickets: false (not throw) when the session dir does not exist', async () => {
+  assert.equal(await sessionHasTickets(join(tmpdir(), 'definitely-missing-xyz')), false);
+});
 
 // Helpers — keep fixtures inline so each test is self-describing.
 const userMessage = (content, ts = '2026-04-30T12:00:00.000Z') =>

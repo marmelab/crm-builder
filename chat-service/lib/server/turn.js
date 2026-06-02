@@ -28,7 +28,7 @@ function emitDispatchPromptEvent(runtime, tool) {
   });
 }
 
-export async function processMessage(runtime, prompt) {
+export async function processMessage(runtime, prompt, opts = {}) {
   if (!runtime) return;
 
   // The user is back — cancel any pending documentator run scheduled at the
@@ -77,6 +77,14 @@ export async function processMessage(runtime, prompt) {
       // into `rateLimit` below and wrongly settle a clean retry as rate_limited).
       runtime.pendingRateLimit = null;
       let staleResume = false;
+      // freshSession (set by a recovery resume) starts a brand-new claude session
+      // instead of --resume-ing the killed transcript: that transcript ends
+      // believing a team is still running, and reinjecting it makes the
+      // orchestrator no-op. Null the id NOW (only on attempt 0 — a staleResume
+      // retry already nulled it before `continue`) so a fresh spawn that dies
+      // before its own session_id event doesn't make the finally-block snapshot
+      // copy the dead session's transcript/subagents into this session's dir.
+      if (attempt === 0 && opts.freshSession) runtime.claudeSessionId = null;
       const proc = spawnClaude(prompt, runtime.claudeSessionId, `${LOG_DIR}/${runtime.session.id}`);
       runtime.currentProc = proc; // expose for the stop handler
       // Prevent unhandled 'error' from crashing the process (e.g. claude binary missing).

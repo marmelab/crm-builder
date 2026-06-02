@@ -7,6 +7,22 @@ import {
   costFromBreakdown,
 } from '../stats/io.js';
 
+// True when COMPLEX ticket files (TASK-NNN.json) exist in the session dir — i.e.
+// the planner produced a wave and the orchestrator dispatched (or was about to
+// dispatch) a team. Resume routing uses this: if a wave was in flight when the
+// process was killed, --resume would reinject the dead "team is running" belief,
+// so the resume must spawn fresh and re-evaluate real state instead. Takes the
+// session dir (not an id) so it's testable without LOG_DIR coupling — mirrors
+// sessionHasMergedTickets in documentator-spawn.js.
+export async function sessionHasTickets(sessionDir) {
+  try {
+    const entries = await readdir(sessionDir);
+    return entries.some((e) => /^TASK-\d+\.json$/i.test(e));
+  } catch {
+    return false;
+  }
+}
+
 // ─── Session persistence ──────────────────────────────────────
 // Single source of truth = log.jsonl (append-only stream of ws in/out events).
 // meta.json holds only lightweight metadata (title, timestamps, counts,
