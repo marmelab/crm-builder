@@ -15,8 +15,39 @@ import { updateProgressBar, predictedFlowExpected } from './progress-bar.ts';
 import {
   sessionHasMergedTickets, scheduleDocumentatorRun, clearDocumentatorTimer,
 } from './documentator-spawn.js';
+import {
+  decideAutoContinue, readTicketStatuses,
+  AUTO_CONTINUE_DELAY_MS, AUTO_CONTINUE_NUDGE,
+} from './auto-continue.js';
 
 const AGENT_DISPATCH_TOOLS = new Set(['Agent', 'Task']);
+
+// Session-keyed timers for the auto-continue driver (see auto-continue.js).
+// Keyed on sessionId — not the runtime — so they survive runtime release
+// between turns, mirroring the documentator timer.
+const autoContinueTimers = new Map();
+
+function clearAutoContinueTimer(sessionId) {
+  const t = autoContinueTimers.get(sessionId);
+  if (t) { clearTimeout(t); autoContinueTimers.delete(sessionId); }
+}
+
+// Re-arm the orchestrator after AUTO_CONTINUE_DELAY_MS with a synthetic nudge,
+// unless the runtime is gone or a turn is already running by then. Sets `busy`
+// before re-spawning (mirrors server.js's call sites) so a racing user message
+// queues behind it instead of starting a concurrent spawn.
+function scheduleAutoContinue(sessionId, runtimes) {
+  clearAutoContinueTimer(sessionId);
+  const t = setTimeout(() => {
+    autoContinueTimers.delete(sessionId);
+    const current = runtimes.get(sessionId);
+    if (!current || current.busy) return;
+    current.busy = true;
+    processMessage(current, AUTO_CONTINUE_NUDGE, { auto: true })
+      .catch(() => { current.busy = false; });
+  }, AUTO_CONTINUE_DELAY_MS);
+  autoContinueTimers.set(sessionId, t);
+}
 
 function emitDispatchPromptEvent(runtime, tool) {
   const target = tool.input.name || tool.input.subagent_type;
@@ -28,14 +59,21 @@ function emitDispatchPromptEvent(runtime, tool) {
   });
 }
 
-export async function processMessage(runtime, prompt) {
+export async function processMessage(runtime, prompt, opts = {}) {
   if (!runtime) return;
+  const isAutoContinue = opts.auto === true;
 
   // The user is back — cancel any pending documentator run scheduled at the
   // tail of the previous turn. Keyed on sessionId (not runtime) so it survives
   // runtime release/recreate between turns. We'll re-arm it when this turn
   // completes.
-  if (runtime.session?.id) clearDocumentatorTimer(runtime.session.id);
+  if (runtime.session?.id) {
+    clearDocumentatorTimer(runtime.session.id);
+    // A real user message supersedes any pending auto-continue and resets the
+    // per-wave counters; an auto-continue turn keeps them (it IS the loop).
+    clearAutoContinueTimer(runtime.session.id);
+    if (!isAutoContinue) runtime.autoContinue = { count: 0, noProgress: 0, prevSig: null };
+  }
 
   // Reset per-turn agent step counters so the progress bar reflects only
   // work initiated by *this* prompt. Send the initial 0/1 (orchestrator
@@ -326,8 +364,38 @@ export async function processMessage(runtime, prompt) {
       if (nextState === 'completed' && !turnErrored) {
         const sessionId = runtime.session?.id;
         const sessionDir = sessionId ? `${LOG_DIR}/${sessionId}` : null;
-        if (sessionDir && await sessionHasMergedTickets(sessionDir)) {
-          scheduleDocumentatorRun(sessionId, runtimes);
+        if (sessionDir) {
+          // Drive the no-team wave forward: if tickets are still pending, the
+          // orchestrator idled before finishing — auto-resume it. Only once the
+          // wave is genuinely done (or stalled) do we fall through to the
+          // documentator. See auto-continue.js for the rationale + bounds.
+          const { total, pendingCount, pendingSig } = await readTicketStatuses(sessionDir);
+          const ac = runtime.autoContinue || { count: 0, noProgress: 0, prevSig: null };
+          const decision = decideAutoContinue({
+            nextState, turnErrored,
+            totalTickets: total, pendingCount, pendingSig,
+            prevPendingSig: ac.prevSig,
+            autoContinueCount: ac.count,
+            noProgressCount: ac.noProgress,
+          });
+          if (decision.go) {
+            runtime.autoContinue = {
+              count: ac.count + 1,
+              noProgress: decision.noProgressCount ?? 0,
+              prevSig: pendingSig,
+            };
+            scheduleAutoContinue(sessionId, runtimes);
+          } else {
+            if (decision.stalled) {
+              const stallText = "I couldn't finish every piece automatically — some work is still pending. Say \"continue\" and I'll pick it back up.";
+              broadcast(runtime, { type: 'message', role: 'assistant', content: stallText, ts: new Date().toISOString() });
+              await runtime.session?.recordMessage('assistant', stallText).catch(() => {});
+            }
+            runtime.autoContinue = { count: 0, noProgress: 0, prevSig: null };
+            if (await sessionHasMergedTickets(sessionDir)) {
+              scheduleDocumentatorRun(sessionId, runtimes);
+            }
+          }
         }
       }
       // If no client is currently viewing this session, release the runtime

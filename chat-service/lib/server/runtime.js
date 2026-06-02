@@ -34,6 +34,10 @@ export function createRuntime(session) {
     // loop reconciles it into the local `rateLimit` so a subagent-triggered
     // limit settles the session on `rate_limited` instead of hanging forever.
     pendingRateLimit: null,
+    // Per-wave auto-continue state (see auto-continue.js). count = consecutive
+    // auto-resumes; noProgress = consecutive resumes with an unchanged pending
+    // set; prevSig = last pending-ticket signature. Reset by any real user msg.
+    autoContinue: { count: 0, noProgress: 0, prevSig: null },
     clients: new Set(),
     // Subagent-transcript tailer state. Lives on the runtime so it survives
     // across turns: a long-running session re-dispatches the same subagent
