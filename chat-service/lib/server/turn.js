@@ -61,12 +61,18 @@ export async function processMessage(runtime, prompt, opts = {}) {
   let lastAssistantText = '';
   let exitCode = null;
   try {
-    // freshSession (set by a resume-after-error) starts a brand-new claude
-    // session instead of --resume-ing the crashed transcript: that transcript
-    // ends believing a team is still running, and reinjecting it makes the
+    // freshSession (set by a recovery resume) starts a brand-new claude session
+    // instead of --resume-ing the killed transcript: that transcript ends
+    // believing a team is still running, and reinjecting it makes the
     // orchestrator no-op. The new session_id event below rebinds
     // runtime.claudeSessionId so later turns resume this fresh session.
     const resumeSessionId = opts.freshSession ? null : runtime.claudeSessionId;
+    if (opts.freshSession) {
+      // Abandon the dead session's id NOW. If this fresh spawn dies before
+      // emitting its own session_id, the finally-block snapshot would otherwise
+      // copy the dead session's transcript/subagents into this session's dir.
+      runtime.claudeSessionId = null;
+    }
     const proc = spawnClaude(prompt, resumeSessionId, `${LOG_DIR}/${runtime.session.id}`);
     runtime.currentProc = proc; // expose for the stop handler
     let stderrBuf = '';

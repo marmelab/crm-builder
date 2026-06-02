@@ -36,44 +36,49 @@ export function rewriteUserMessage(userMessage) {
   return userMessage;
 }
 
-// Replayed (instead of the verbatim request) when the user clicks "Resume"
-// after a crash — i.e. the session stranded in `error`. The previous claude
-// process died mid-turn; every team/agent/subagent it spawned died with it, but
-// its CLI transcript still ends on "team dispatched, work in progress". Resuming
-// that transcript (--resume) reinjects that stale belief, so replaying the
-// original request reads as user impatience → the orchestrator no-ops with
-// "already in progress" while nothing actually runs. This directive instead
-// tells a FRESH session (no --resume) to rebuild its understanding from disk and
-// either continue the uncommitted work or re-dispatch — never assume liveness.
+// Replayed (instead of the verbatim request) when a resume must rebuild from
+// scratch — i.e. the previous run was interrupted (a crash OR a usage limit)
+// while a COMPLEX wave was in flight. The killed process and every team/agent/
+// subagent it spawned are gone, but its CLI transcript still ends on "team
+// dispatched, work in progress". Resuming that transcript (--resume) reinjects
+// that stale belief, so replaying the original request reads as user impatience
+// → the orchestrator no-ops with "already in progress" while nothing actually
+// runs. This directive instead tells a FRESH session (no --resume) to rebuild
+// its understanding from disk and either continue the uncommitted work or
+// re-dispatch — never assume liveness.
 export function buildRecoveryPrompt(originalMessage) {
   return [
     '<intent>recovery</intent>',
-    'The previous run crashed mid-execution. Any teams, agents, or subagents ' +
-      'started before this point are DEAD — do not assume any are still running. ' +
+    'The previous run was interrupted (a crash or a usage limit) mid-execution ' +
+      'and its process was killed. Any teams, agents, or subagents started ' +
+      'before this point are DEAD — do not assume any are still running. ' +
       'This is a fresh process with no memory of the prior run: rebuild your ' +
       'understanding from disk (git history on the session branch, worktree ' +
       'contents, task branches, ticket files), not from the conversation. Then ' +
       'either continue the uncommitted work that already exists or re-dispatch ' +
-      'cleanly. Never report that work is "already in progress" — after a crash, ' +
-      'nothing runs until you start it.',
+      'cleanly. Never report that work is "already in progress" — after the ' +
+      'interruption, nothing runs until you start it.',
     '',
     'Original request (for context):',
     originalMessage,
   ].join('\n');
 }
 
-// Decide how a Resume click re-enters the turn loop, given the state the session
-// stranded in (already narrowed to 'error' | 'rate_limited' by the caller):
-//   - error       → the process crashed; its team context is now false. Spawn a
-//                   FRESH session (freshSession) with a recovery directive so the
-//                   misleading transcript isn't reinjected via --resume.
-//   - rate_limited → the process was killed mid-turn but its context is still
-//                   valid; a plain --resume legitimately continues it.
-export function planResume(state, lastUserContent) {
-  if (state === 'error') {
-    return { prompt: buildRecoveryPrompt(lastUserContent), freshSession: true };
+// Decide how a resume re-enters the turn loop. A crash or a usage limit both
+// kill the orchestrator process and every subagent it dispatched, so the
+// distinguishing signal is NOT error-vs-rate_limited but whether a COMPLEX wave
+// was actually in flight (hasDispatchedWork — ticket files on disk):
+//   - process killed WITH a wave in flight → the transcript's "team is running"
+//     belief is now false. Spawn a FRESH session (freshSession) with a recovery
+//     directive so that misleading context isn't reinjected via --resume.
+//   - otherwise (interview, SIMPLE, plain Q&A, or limit hit before any dispatch)
+//     → a plain --resume legitimately preserves the conversation and continues.
+export function planResume(state, message, hasDispatchedWork) {
+  const processKilled = state === 'error' || state === 'rate_limited';
+  if (processKilled && hasDispatchedWork) {
+    return { prompt: buildRecoveryPrompt(message), freshSession: true };
   }
-  return { prompt: lastUserContent, freshSession: false };
+  return { prompt: message, freshSession: false };
 }
 
 export function spawnClaude(userMessage, claudeSessionId, sessionDir) {

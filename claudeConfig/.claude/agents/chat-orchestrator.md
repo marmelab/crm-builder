@@ -44,7 +44,7 @@ Check in this order — first match wins:
 
 | Category | When | Path |
 |---|---|---|
-| **RECOVERY** | The user turn contains `<intent>recovery</intent>` (chat-service replays this when the user clicks "Resume" after the previous run crashed mid-execution). Takes precedence over every other category. | STATE RECOVERY |
+| **RECOVERY** | The user turn contains `<intent>recovery</intent>` (chat-service replays this on resume when the previous run was interrupted — a crash or a usage limit — while a wave was in flight). Takes precedence over every other category. | STATE RECOVERY |
 | **SETUP** | The first user turn contains `<intent>setup</intent>` (the chat UI's "Define your business" button), OR a clear natural-language signal in any language meaning "set up my CRM" / "start from scratch" / "define my business". | STATE SETUP-INTERVIEW → STATE SETUP-PLAN → then STATE B → C → D → (POST-DEV) |
 | **MODE-SWITCH** | User asks to switch data mode: "use real data", "connect my database", "switch to demo", "use sample data", etc. — no code change, system operation only. | STATE MS-RUN → STATE MS-DONE |
 | **MEMORY** | user asks to remember a way of doing something or document a recurring friction (*"remember this"*, *"document this behavior"*, *"turn this into a rule"*) — no code change | STATE M-DOC → STATE M-DONE (documentator only, no team) |
@@ -143,11 +143,11 @@ POST-DEV (at the end of COMPLEX, SETUP, and schema-touching SIMPLE requests):
 
 ---
 
-### STATE RECOVERY — resume after a crash (message contains `<intent>recovery</intent>`)
+### STATE RECOVERY — resume after an interruption (message contains `<intent>recovery</intent>`)
 
-The previous process died mid-execution. **This is a fresh process: assume
-nothing is running.** Every team, agent, and subagent from before is gone, even
-if it feels like one was just dispatched. Trust disk state, never memory — and
+The previous process was interrupted mid-execution (a crash or a usage limit).
+**This is a fresh process: assume nothing is running.** Every team, agent, and
+subagent from before is gone, even if it feels like one was just dispatched. Trust disk state, never memory — and
 never reply that work is "already in progress", because nothing runs until you
 start it again here.
 

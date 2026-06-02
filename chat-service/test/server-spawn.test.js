@@ -61,17 +61,33 @@ test('buildRecoveryPrompt states the prior team is dead and forbids no-op', () =
   assert.match(out, /do not assume/i);
 });
 
-test('planResume after error uses a fresh session with a recovery prompt', () => {
+test('planResume: error WITH a wave in flight uses a fresh recovery session', () => {
   const original = 'Add a priority field to deals';
-  const plan = planResume('error', original);
-  assert.equal(plan.freshSession, true, 'error resume must drop --resume');
-  assert.notEqual(plan.prompt, original, 'error resume must not replay the verbatim request');
+  const plan = planResume('error', original, true);
+  assert.equal(plan.freshSession, true, 'must drop --resume when a team was dispatched');
+  assert.notEqual(plan.prompt, original, 'must not replay the verbatim request');
   assert.match(plan.prompt, /<intent>recovery<\/intent>/);
 });
 
-test('planResume after rate limit replays the request verbatim under --resume', () => {
+test('planResume: rate_limited WITH a wave in flight also recovers (same no-op risk as a crash)', () => {
   const original = 'Add a priority field to deals';
-  const plan = planResume('rate_limited', original);
-  assert.equal(plan.freshSession, false, 'rate-limit resume legitimately continues the turn');
-  assert.equal(plan.prompt, original, 'rate-limit resume replays the request unchanged');
+  const plan = planResume('rate_limited', original, true);
+  assert.equal(plan.freshSession, true, 'a limit that struck mid-wave must not --resume the stale team belief');
+  assert.match(plan.prompt, /<intent>recovery<\/intent>/);
+});
+
+test('planResume: process-killed but NO wave in flight resumes verbatim (preserve interview/SIMPLE context)', () => {
+  const original = 'I sell bakery products';
+  for (const state of ['error', 'rate_limited']) {
+    const plan = planResume(state, original, false);
+    assert.equal(plan.freshSession, false, `${state} without tickets must keep --resume`);
+    assert.equal(plan.prompt, original, `${state} without tickets must replay unchanged`);
+  }
+});
+
+test('planResume: a non-killed state never recovers, even with tickets present', () => {
+  const original = 'Add a priority field to deals';
+  const plan = planResume('completed', original, true);
+  assert.equal(plan.freshSession, false);
+  assert.equal(plan.prompt, original);
 });
