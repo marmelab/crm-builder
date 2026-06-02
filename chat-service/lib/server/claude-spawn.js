@@ -4,6 +4,7 @@ import { getSystemPrompt, getOrchestratorModel } from './system-prompt.js';
 import { broadcast } from './ws-bus.js';
 import { readMessages } from './session-store.js';
 import { buildSpawnEnv } from '../spawn-env.js';
+import { isAuthErrorStderr, isNetworkErrorStderr } from './turn-state.js';
 
 // Exported for unit testing
 export function extractText(msg) {
@@ -175,10 +176,10 @@ export function friendlyError({ exitCode, stderr, rateLimit, resultError }) {
     const minutes = Math.max(1, Math.ceil((rateLimit.resetsAt * 1000 - Date.now()) / 60000));
     return `Usage limit reached. You can try again in about ${minutes} minute(s).`;
   }
-  if (/invalid[_ ]api[_ ]key|authentication|unauthori[sz]ed|401/i.test(stderr)) {
+  if (isAuthErrorStderr(stderr)) {
     return "Access has expired. Please contact your administrator to renew the session.";
   }
-  if (/network|ECONNREFUSED|ENOTFOUND|ETIMEDOUT/i.test(stderr)) {
+  if (isNetworkErrorStderr(stderr)) {
     return "Unable to reach the service right now. Check your connection and try again.";
   }
   if (resultError) {
