@@ -66,6 +66,19 @@
                         "command": "/home/developer/.claude/hooks/block-migration-writes.sh"
                     }
                 ]
+            },
+            {
+                "matcher": "Agent",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "/home/developer/.claude/hooks/block-merger-without-review.sh"
+                    },
+                    {
+                        "type": "command",
+                        "command": "/home/developer/.claude/hooks/enforce-dev-dispatch.sh"
+                    }
+                ]
             }
         ],
         "SubagentStart": [
@@ -90,6 +103,16 @@
                         "command": "/home/developer/.claude/hooks/cleanup-worktree.sh",
                         "timeout": 30,
                         "statusMessage": "Cleaning up worktree..."
+                    }
+                ]
+            },
+            {
+                "matcher": "quality-reviewer|test-validator",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "/home/developer/.claude/hooks/record-review-verdict.sh",
+                        "timeout": 15
                     }
                 ]
             },

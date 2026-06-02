@@ -71,6 +71,15 @@ if [ -z "$TASK_ID" ]; then
   TASK_ID=$(echo "$AGENT_TYPE" | grep -oE 'TASK-[0-9]+' || echo "")
 fi
 
+# A (re)starting developer means the diff will change — invalidate any prior
+# review verdicts for this ticket so stale APPROVED flags can't let the merger
+# through before the new attempt is re-reviewed (see record-review-verdict.sh /
+# block-merger-without-review.sh).
+if [ -n "$TASK_ID" ]; then
+  rm -f "/tmp/review-${SESSION_SHORT}-${TASK_ID}-quality-reviewer" \
+        "/tmp/review-${SESSION_SHORT}-${TASK_ID}-test-validator" 2>/dev/null || true
+fi
+
 # Derive WORKTREE_PATH and BRANCH_NAME: prefer values from prompt if present
 WORKTREE_PATH=$(node -e 'try{const i=JSON.parse(process.argv[1]||"{}");const m=(i.prompt||"").match(/WORKTREE_PATH:\s*(\S+)/);process.stdout.write(m?m[1]:"")}catch{process.stdout.write("")}' "$STDIN" 2>/dev/null || echo "")
 BRANCH_NAME=$(node -e 'try{const i=JSON.parse(process.argv[1]||"{}");const m=(i.prompt||"").match(/BRANCH_NAME:\s*(\S+)/);process.stdout.write(m?m[1]:"")}catch{process.stdout.write("")}' "$STDIN" 2>/dev/null || echo "")
