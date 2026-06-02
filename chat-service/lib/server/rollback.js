@@ -28,26 +28,30 @@ export async function withMainBranchLock(fn) {
   }
 }
 
-// `git revert` writes `This reverts commit <full sha>` in the body. Scanning all
-// reachable commits for that marker tells us which promotion commits have already
-// been undone, so multiple rollbacks on the same session never revert the same
-// commit twice. Two marker shapes exist: single-parent reverts end the line with
-// `.`; merge reverts (`-m 1` — all our cases) continue with `, reversing changes
-// made to <parent>.`. A bare slice would capture the `, reversing` tail and never
-// match a 40-hex SHA, so extract the SHA directly. Our batched revert below writes
-// the same marker (one line per commit) so both code paths stay idempotent.
-async function findRevertedFullShas() {
+// `git revert` writes `This reverts commit <full sha>` in the body. Scanning the
+// default branch (the promotion target — passed in as `ref`) for that marker tells
+// us which promotion commits have already been undone, so multiple rollbacks on the
+// same session never revert the same commit twice. We scan ONLY the default branch
+// on purpose: a revert that still lives on an unpromoted session branch or a worktree
+// hasn't taken effect, so it must not mark a promotion as already-undone. Two marker
+// shapes exist: single-parent reverts end the line with `.`; merge reverts (`-m 1` —
+// all our cases) continue with `, reversing changes made to <parent>.`. The SHA is
+// always the 40 chars right after the prefix, so slice them off and ignore the
+// trailing punctuation. Our batched revert below writes the same marker (one line per
+// commit) so both code paths stay idempotent.
+async function findRevertedFullShas(ref) {
+  const MARKER = 'This reverts commit ';
   try {
     const { stdout } = await execFileAsync(
       'git',
-      ['-C', CWD, 'log', '--all', '--grep=This reverts commit', '--format=%B'],
+      ['-C', CWD, 'log', ref, '--grep=This reverts commit', '--format=%B'],
       GIT_BUF,
     );
-    const reverted = new Set();
-    const re = /This reverts commit ([0-9a-f]{40})/g;  // fresh per call — /g lastIndex is stateful
-    let m;
-    while ((m = re.exec(stdout)) !== null) reverted.add(m[1]);
-    return reverted;
+    return new Set(
+      stdout.split('\n')
+        .filter((line) => line.startsWith(MARKER))
+        .map((line) => line.slice(MARKER.length, MARKER.length + 40)),
+    );
   } catch (err) {
     console.warn('[rollback] findRevertedFullShas failed:', err.message);
     return new Set();
@@ -129,7 +133,7 @@ async function listSessionPromotions(sessionId, tipRef) {
     // Every commit reachable from the session tip. A promotion's 2nd parent is
     // always in this set; another session's promotion 2nd parent is not.
     execFileAsync('git', ['-C', CWD, 'rev-list', sessionRef], GIT_BUF).catch(() => ({ stdout: '' })),
-    findRevertedFullShas(),
+    findRevertedFullShas(tipRef),
   ]);
   if (!logResult) return [];
   const onSession = new Set(sessionRevs.stdout.split('\n').filter(Boolean));
