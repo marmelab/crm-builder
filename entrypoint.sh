@@ -101,6 +101,14 @@ fi
 # Fix ownership — credentials written during bootstrap run as root
 chown -R developer:developer /home/developer/.claude 2>/dev/null || true
 
+# Supabase remote-deploy config dir (mounted as a named volume — see
+# docker-compose.yml). On fresh volumes the mount-point is root-owned; chown
+# so the chat-service (running as developer) can write config.json. Mode 700
+# because only the developer user needs access — never world-readable.
+mkdir -p /var/lib/atomic-crm/supabase-deploy 2>/dev/null || true
+chown developer:developer /var/lib/atomic-crm/supabase-deploy 2>/dev/null || true
+chmod 700 /var/lib/atomic-crm/supabase-deploy 2>/dev/null || true
+
 # Chat-service logs dir (bind-mounted in dev, needs developer write access)
 mkdir -p /chat-service/logs 2>/dev/null || true
 chmod 777 /chat-service/logs 2>/dev/null || true
@@ -317,6 +325,14 @@ if [ -S /var/run/docker.sock ]; then
   echo -e "${GREEN}✓  Docker socket available (GID=${DOCKER_GID})${NC}"
 fi
 
+# The Supabase CLI's scratch dirs (supabase/.temp, supabase/.branches) must be
+# writable by `developer`: that's the user supervisord runs the chat-service —
+# and therefore the remote deploy (`supabase link/db push/...`) — as. Earlier
+# image versions ran `supabase start` as root, leaving these root-owned, which
+# made `supabase link` fail with "permission denied: supabase/.temp/...". Clean
+# up any such legacy ownership; the starts below now run as developer too.
+chown -R developer:developer /app/supabase 2>/dev/null || true
+
 # ── Start Supabase when MODE=full ─────────────────────────────
 if [ "$MODE" = "full" ]; then
   if [ ! -S /var/run/docker.sock ]; then
@@ -332,7 +348,7 @@ if [ "$MODE" = "full" ]; then
   echo ""
   echo -e "${BOLD}Starting Supabase...${NC}"
   echo -e "${YELLOW}(First run: ~2 min to pull images)${NC}"
-  supabase start 2>&1 | grep -E "✓|✗|Error|Started|API URL" || true
+  su developer -c 'cd /app && supabase start' 2>&1 | grep -E "✓|✗|Error|Started|API URL" || true
 
   echo -e "${BOLD}Waiting for Supabase API (localhost:54321)...${NC}"
   RETRIES=60
@@ -386,7 +402,7 @@ echo ""
 if [ -S /var/run/docker.sock ]; then
   (
     until curl -s --max-time 2 -o /dev/null http://localhost:5173; do sleep 3; done
-    cd /app && supabase start > /var/log/supabase-prewarm.log 2>&1
+    su developer -c 'cd /app && supabase start' > /var/log/supabase-prewarm.log 2>&1
   ) &
 fi
 
@@ -396,7 +412,7 @@ fi
 _stop() {
   if [ "$MODE" = "full" ]; then
     echo -e "${YELLOW}Stopping Supabase before shutdown...${NC}"
-    supabase stop --no-backup 2>/dev/null || true
+    su developer -c 'cd /app && supabase stop --no-backup' 2>/dev/null || true
   fi
   kill "$SUPERVISOR_PID" 2>/dev/null || true
 }

@@ -102,6 +102,9 @@ wss.on('connection', async (ws, req) => {
     // countdown + resume button the live tab last rendered.
     rateLimitResetsAt: runtime.session.meta.rateLimitResetsAt ?? null,
     isNew: session.isNew,
+    // Deploy progress is delivered over its own SSE channel
+    // (GET /api/deploy/events), not the chat WebSocket — it's cross-session
+    // global state and the modal must work even with no chat session open.
   });
   updateProgressBar(runtime, ws);
   // Repaint the cumulative tokens/cost ticker on (re)connect — runtime.stats
