@@ -13,7 +13,7 @@ import { createRequestHandler, switchMode } from './lib/server/http-routes.js';
 import { runtimes, wsToRuntime, runtimeForWs, createRuntime, safeSend, killCurrentProc } from './lib/server/runtime.js';
 import { sendToWs, broadcast } from './lib/server/ws-bus.js';
 import { updateProgressBar } from './lib/server/progress-bar.ts';
-import { regenerateTitleWithHaiku, extractText, extractToolUses } from './lib/server/claude-spawn.js';
+import { regenerateTitleWithHaiku, extractText, extractToolUses, planResume } from './lib/server/claude-spawn.js';
 import { processMessage } from './lib/server/turn.js';
 import { endsWithQuestion } from './lib/server/session-store.js';
 
@@ -147,7 +147,12 @@ wss.on('connection', async (ws, req) => {
         const lastUser = [...msgs].reverse().find((m) => m.role === 'user');
         if (!lastUser?.content) { r.busy = false; return; }
         r.session.logWrite('in', { type: 'resume_requested' });
-        processMessage(r, lastUser.content);
+        // resume-after-error and resume-after-rate_limit share this path but
+        // need different treatment: a crash invalidates the orchestrator's
+        // "team is alive" context, so it must restart fresh and re-evaluate real
+        // state; a rate limit only paused a still-valid turn. planResume picks.
+        const { prompt, freshSession } = planResume(st, lastUser.content);
+        processMessage(r, prompt, { freshSession });
       }).catch(() => { r.busy = false; });
       return;
     }

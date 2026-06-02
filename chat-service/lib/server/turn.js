@@ -28,7 +28,7 @@ function emitDispatchPromptEvent(runtime, tool) {
   });
 }
 
-export async function processMessage(runtime, prompt) {
+export async function processMessage(runtime, prompt, opts = {}) {
   if (!runtime) return;
 
   // The user is back — cancel any pending documentator run scheduled at the
@@ -61,7 +61,13 @@ export async function processMessage(runtime, prompt) {
   let lastAssistantText = '';
   let exitCode = null;
   try {
-    const proc = spawnClaude(prompt, runtime.claudeSessionId, `${LOG_DIR}/${runtime.session.id}`);
+    // freshSession (set by a resume-after-error) starts a brand-new claude
+    // session instead of --resume-ing the crashed transcript: that transcript
+    // ends believing a team is still running, and reinjecting it makes the
+    // orchestrator no-op. The new session_id event below rebinds
+    // runtime.claudeSessionId so later turns resume this fresh session.
+    const resumeSessionId = opts.freshSession ? null : runtime.claudeSessionId;
+    const proc = spawnClaude(prompt, resumeSessionId, `${LOG_DIR}/${runtime.session.id}`);
     runtime.currentProc = proc; // expose for the stop handler
     let stderrBuf = '';
     // Prevent unhandled 'error' from crashing the process (e.g. claude binary missing).

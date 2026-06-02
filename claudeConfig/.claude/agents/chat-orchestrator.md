@@ -44,6 +44,7 @@ Check in this order — first match wins:
 
 | Category | When | Path |
 |---|---|---|
+| **RECOVERY** | The user turn contains `<intent>recovery</intent>` (chat-service replays this when the user clicks "Resume" after the previous run crashed mid-execution). Takes precedence over every other category. | STATE RECOVERY |
 | **SETUP** | The first user turn contains `<intent>setup</intent>` (the chat UI's "Define your business" button), OR a clear natural-language signal in any language meaning "set up my CRM" / "start from scratch" / "define my business". | STATE SETUP-INTERVIEW → STATE SETUP-PLAN → then STATE B → C → D → (POST-DEV) |
 | **MODE-SWITCH** | User asks to switch data mode: "use real data", "connect my database", "switch to demo", "use sample data", etc. — no code change, system operation only. | STATE MS-RUN → STATE MS-DONE |
 | **MEMORY** | user asks to remember a way of doing something or document a recurring friction (*"remember this"*, *"document this behavior"*, *"turn this into a rule"*) — no code change | STATE M-DOC → STATE M-DONE (documentator only, no team) |
@@ -103,6 +104,7 @@ anything. Simply relay the last pending question and end the turn.
 ## STATE MACHINE — one state per turn
 
 ```
+RECOVERY:    STATE RECOVERY (one turn)  →  re-enters the flow the real state implies
 SETUP:       STATE SETUP-INTERVIEW (turn N..N+K)
                                      →  STATE SETUP-PLAN (turn N+K+1, then enters STATE B)
                                      →  STATE B → C → D (normal team flow on scaffolding tickets)
@@ -138,6 +140,32 @@ POST-DEV (at the end of COMPLEX, SETUP, and schema-touching SIMPLE requests):
 ```
 
 **Do not skip states. Do not combine states.**
+
+---
+
+### STATE RECOVERY — resume after a crash (message contains `<intent>recovery</intent>`)
+
+The previous process died mid-execution. **This is a fresh process: assume
+nothing is running.** Every team, agent, and subagent from before is gone, even
+if it feels like one was just dispatched. Trust disk state, never memory — and
+never reply that work is "already in progress", because nothing runs until you
+start it again here.
+
+**ONE assistant message. Do exactly this:**
+
+1. Derive `SESSION_SHORT_ID` and `TICKETS_DIR` from `<session_dir>` (see Environment).
+2. Re-evaluate the real state (read-only Bash; same kind of inspection STATE S-DEV already does):
+   - `ls ${TICKETS_DIR}/TASK-*.json 2>/dev/null` — were COMPLEX tickets ever created?
+   - For each ticket found, `Read` it and note its `status` (planned / in_progress / merged).
+   - `git -C /app log --oneline session-base/<SESSION_SHORT_ID>..session/<SESSION_SHORT_ID>` — what's already merged on the session branch.
+   - `ls /app/worktrees/<SESSION_SHORT_ID>/ 2>/dev/null` — which task worktrees exist; for each, `git -C /app/worktrees/<SESSION_SHORT_ID>/TASK-XXX status --porcelain` (uncommitted work) and `git -C /app/worktrees/<SESSION_SHORT_ID>/TASK-XXX log --oneline session/<SESSION_SHORT_ID>..HEAD` (committed-but-unmerged work).
+3. Decide from what you found:
+   - **No ticket files and no worktrees** → nothing was started. Treat the quoted original request as a brand-new request: re-enter CLASSIFICATION with it (it may be SIMPLE, COMPLEX, etc.).
+   - **Tickets exist, at least one not `merged`** → resume the COMPLEX flow. `TeamCreate({team_name: "tickets-<SESSION_SHORT_ID>"})` (a PreToolUse hook wipes any orphan team of the same name from the dead run — do not assume the old team survived). Then for each non-merged ticket re-dispatch the full trio + the shared merger exactly as STATE B does, adding to each developer's `GO`: `RESUME: a worktree may already hold partial work — check for uncommitted changes and existing commits and continue from there; do not restart from scratch.` Then re-enter STATE C.
+   - **All tickets `merged` but the session branch was never promoted** → go straight to STATE D (promotion).
+4. One text line to the user in their language: e.g. *"Picking your changes back up where they stopped."*
+
+**End the turn.** Re-enter the normal flow on the next turn.
 
 ---
 
@@ -468,8 +496,17 @@ Translate every internal event into a business milestone. Never expose what happ
 
 ### Resume trigger — user sends "resume" / "continue" (or equivalent) in STATE C
 
-Agents may have died mid-work due to a rate limit. The `tickets-<SESSION_SHORT_ID>` team still exists
-(TeamDelete was never called). Re-use it — no TeamCreate needed.
+This is the *warm* resume path: your process is still the one that dispatched
+the wave (e.g. a rate limit paused you mid-flow), so the `tickets-<SESSION_SHORT_ID>`
+team is likely intact (TeamDelete was never called). Re-use it.
+
+(A *crash* takes a different route: chat-service replays `<intent>recovery</intent>`
+into a fresh process, which lands in STATE RECOVERY instead — there you assume
+nothing survived and rebuild from disk.)
+
+If a re-dispatch below errors because the team is gone, fall back to STATE
+RECOVERY's approach: `TeamCreate({team_name: "tickets-<SESSION_SHORT_ID>"})` (the
+orphan-wipe hook makes this safe) and continue.
 
 **ONE assistant message:**
 

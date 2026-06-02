@@ -36,6 +36,46 @@ export function rewriteUserMessage(userMessage) {
   return userMessage;
 }
 
+// Replayed (instead of the verbatim request) when the user clicks "Resume"
+// after a crash — i.e. the session stranded in `error`. The previous claude
+// process died mid-turn; every team/agent/subagent it spawned died with it, but
+// its CLI transcript still ends on "team dispatched, work in progress". Resuming
+// that transcript (--resume) reinjects that stale belief, so replaying the
+// original request reads as user impatience → the orchestrator no-ops with
+// "already in progress" while nothing actually runs. This directive instead
+// tells a FRESH session (no --resume) to rebuild its understanding from disk and
+// either continue the uncommitted work or re-dispatch — never assume liveness.
+export function buildRecoveryPrompt(originalMessage) {
+  return [
+    '<intent>recovery</intent>',
+    'The previous run crashed mid-execution. Any teams, agents, or subagents ' +
+      'started before this point are DEAD — do not assume any are still running. ' +
+      'This is a fresh process with no memory of the prior run: rebuild your ' +
+      'understanding from disk (git history on the session branch, worktree ' +
+      'contents, task branches, ticket files), not from the conversation. Then ' +
+      'either continue the uncommitted work that already exists or re-dispatch ' +
+      'cleanly. Never report that work is "already in progress" — after a crash, ' +
+      'nothing runs until you start it.',
+    '',
+    'Original request (for context):',
+    originalMessage,
+  ].join('\n');
+}
+
+// Decide how a Resume click re-enters the turn loop, given the state the session
+// stranded in (already narrowed to 'error' | 'rate_limited' by the caller):
+//   - error       → the process crashed; its team context is now false. Spawn a
+//                   FRESH session (freshSession) with a recovery directive so the
+//                   misleading transcript isn't reinjected via --resume.
+//   - rate_limited → the process was killed mid-turn but its context is still
+//                   valid; a plain --resume legitimately continues it.
+export function planResume(state, lastUserContent) {
+  if (state === 'error') {
+    return { prompt: buildRecoveryPrompt(lastUserContent), freshSession: true };
+  }
+  return { prompt: lastUserContent, freshSession: false };
+}
+
 export function spawnClaude(userMessage, claudeSessionId, sessionDir) {
   const mode = process.env.MODE || MODE_DEMO;
   const env = `<mode>${mode}</mode>\n<session_dir>${sessionDir}</session_dir>`;
