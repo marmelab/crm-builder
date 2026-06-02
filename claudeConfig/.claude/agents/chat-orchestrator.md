@@ -352,13 +352,13 @@ The dev's (or reviewer's) final response is in your context.
 
 1. If dev returned `FAILED: <reason>` → skip merge, go to STATE S-DONE with failure.
 2. If reviewer returned `BLOCKED:` → already handled in STATE S-REVIEW (you should not be here).
-3. If dev returned `DONE: branch=<X>...` and (review skipped OR review `APPROVED`) → dispatch merger (no `team_name`, no SendMessage):
+3. If dev returned `DONE: branch=<X>...` and (review skipped OR review `APPROVED`) → dispatch merger (no `team_name`, no SendMessage). Use the **ROLLBACK merger template** when the original user turn was `<intent>rollback-conflict</intent>`, otherwise the **SIMPLE merger template**:
    ```
    Bash("touch /tmp/notified-merger-<SESSION_SHORT_ID>-simple")
    Agent({
      subagent_type: "merger",
-     description: "Merge SIMPLE branch <X>",
-     prompt: "<SIMPLE merger protocol — see below>"
+     description: "Merge SIMPLE branch <X>",   // or "Promote rollback branch <X>"
+     prompt: "<SIMPLE or ROLLBACK merger protocol — see below>"
    })
    ```
 4. One text line: *"Wrapping up..."*
@@ -381,6 +381,21 @@ Output: "DONE: commit=<short sha>. files=[<paths>]" OR "FAILED: <reason>"
 ```
 
 The SIMPLE merger does Stage A (branch → session branch) then PROMOTION (Stage B: session branch → main) in one shot, so its `DONE` sha is the promotion commit on main. No separate `promote:` handshake is needed for SIMPLE.
+
+#### ROLLBACK merger prompt template (rollback-conflict path only)
+
+```
+ROLE: merger (ROLLBACK mode — single-shot, no team)
+SESSION_SHORT_ID: <SESSION_SHORT_ID>
+BRANCH_NAME: <SESSION_SHORT_ID>/simple
+
+Follow the ROLLBACK mode in your agent file (merger.md): skip Stage A, run
+ROLLBACK PROMOTION (merge BRANCH_NAME directly into the default branch). Never
+touch session/<SESSION_SHORT_ID>.
+Output: "DONE: commit=<short sha>. files=[<paths>]" OR "FAILED: <reason>"
+```
+
+The ROLLBACK merger merges the resolved revert branch **straight into main**, leaving the session branch untouched — a rollback is a default-branch operation, not session work.
 
 ---
 

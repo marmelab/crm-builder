@@ -1,5 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { mkdir } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import { CWD, UUID_RE } from './config.js';
 import { runtimes, createRuntime, setSessionState, persistAssistantMessage } from './runtime.js';
 import { openSession } from './session-store.js';
@@ -243,15 +245,57 @@ async function handOffToOrchestrator(sessionId, { failedCommit, remaining, base 
   return true;
 }
 
-// Unmerged paths left by a failed `git revert`. A genuine merge conflict leaves
-// `UU`/`AA`/`DD`/… entries; an operational failure (dirty tree, lock, bad object,
-// "nothing to commit") leaves none. Must be read BEFORE `revert --abort` clears
-// the conflicted state.
-async function listUnmergedConflictPaths() {
+// Unmerged paths left by a failed `git revert` in `dir`. A genuine merge conflict
+// leaves `UU`/`AA`/`DD`/… entries; an operational failure (dirty tree, lock, bad
+// object, "nothing to commit") leaves none. Must be read BEFORE `revert --abort`
+// clears the conflicted state.
+async function listUnmergedConflictPaths(dir) {
   try {
-    const { stdout } = await execFileAsync('git', ['-C', CWD, 'status', '--porcelain'], GIT_BUF);
+    const { stdout } = await execFileAsync('git', ['-C', dir, 'status', '--porcelain'], GIT_BUF);
     return stdout.split('\n').filter((l) => /^(UU|AA|DD|AU|UA|DU|UD) /.test(l)).map((l) => l.slice(3));
   } catch { return []; }
+}
+
+// Throwaway worktree forked from `base`, used to compute the reverts WITHOUT
+// touching /app (the tree Vite serves) — so a conflict never flashes half-applied
+// files at the user. Pure git: no node_modules, nothing is built here. Clears any
+// stale registration/dir/branch from a previous rollback first.
+async function prepareRollbackWorktree(wt, branch, base) {
+  await execFileAsync('git', ['-C', CWD, 'worktree', 'remove', '--force', wt], GIT_BUF).catch(() => {});
+  await execFileAsync('git', ['-C', CWD, 'worktree', 'prune'], GIT_BUF).catch(() => {});
+  await execFileAsync('git', ['-C', CWD, 'branch', '-D', branch], GIT_BUF).catch(() => {});
+  await mkdir(dirname(wt), { recursive: true });
+  await execFileAsync('git', ['-C', CWD, 'worktree', 'add', wt, '-b', branch, base], GIT_BUF);
+}
+
+async function cleanupRollbackWorktree(wt, branch) {
+  await execFileAsync('git', ['-C', CWD, 'worktree', 'remove', '--force', wt], GIT_BUF).catch(() => {});
+  await execFileAsync('git', ['-C', CWD, 'worktree', 'prune'], GIT_BUF).catch(() => {});
+  await execFileAsync('git', ['-C', CWD, 'branch', '-D', branch], GIT_BUF).catch(() => {});
+}
+
+// Promote the rollback branch straight into the default branch — never via
+// session/<id>, so the session branch (and the deploy-time migration diff that
+// reads session-base/<id>..session/<id>) stays free of unrelated history. Mirrors
+// the merger's Stage B: realign /app onto the default branch, then merge under the
+// promote flock (cross-process mutual exclusion with the merger's own promotions).
+// Args are passed as bash positionals — never interpolated — so nothing is
+// shell-injectable. Returns false on merge conflict (the default branch moved
+// under us) so the caller can escalate to the agent.
+async function promoteBranchToDefault(branch, def, message) {
+  await ensureOnDefaultBranch(def);
+  try {
+    await execFileAsync('flock', [
+      '/app/.promote.lock', 'bash', '-c',
+      'cd "$1" && git merge --no-ff "$2" -m "$3" || { git merge --abort; exit 1; }',
+      '_', CWD, branch, message,
+    ], GIT_BUF);
+  } catch {
+    return false;
+  }
+  await execFileAsync('/entrypoint-helpers/apply-app-variant.sh', [], { cwd: CWD })
+    .catch((e) => console.warn('[rollback] apply-app-variant failed:', e.message));
+  return true;
 }
 
 export async function handleSessionRollbackRequest(req, res, sessionId) {
@@ -306,38 +350,43 @@ export async function handleSessionRollbackRequest(req, res, sessionId) {
         throw e;
       }
       if (commits.length === 0) { noCommits = true; return; }
-      // Only now realign /app onto the default branch (this drops working-tree
-      // debris, like the merger does) — we've confirmed there is work to revert.
-      await ensureOnDefaultBranch(def);
-      // Batch every revert into ONE working-tree pass + ONE commit. /app is the
-      // bind-mounted tree Vite watches: committing each revert separately flips
-      // it through N intermediate trees, any of which may fail to compile and
-      // flash a Vite error overlay at the user. `--no-commit` stages all reverts
-      // in sequence; a single commit seals them so /app settles once, on the
-      // final state. All session commits are merges (merger uses --no-ff) → `-m 1`.
+      // Never revert on /app (the tree Vite serves): a conflict would flash
+      // half-applied / marker-laden files at the user. Compute the reverts in a
+      // throwaway worktree forked from the default branch; /app only ever changes
+      // via the clean promotion merge below (one hot-reload, a state that compiles).
+      // All session commits are merges (merger uses --no-ff) → `-m 1`.
       const shas = commits.map((c) => c.sha);
+      const short = sessionId.split('-')[0];
+      const rbBranch = `${short}/rollback`;
+      const rbWorktree = `${CWD}/worktrees/${short}/_rollback`;
       try {
-        await execFileAsync('git', ['-C', CWD, 'revert', '--no-commit', '-m', '1', ...shas], GIT_BUF);
-        // Hand-build the message so every revert keeps its `This reverts commit`
-        // marker (a plain commit keeps only the last). findRevertedFullShas reads
-        // these markers to make a second rollback idempotent.
+        await prepareRollbackWorktree(rbWorktree, rbBranch, def);
+        try {
+          await execFileAsync('git', ['-C', rbWorktree, 'revert', '--no-commit', '-m', '1', ...shas], GIT_BUF);
+        } catch (err) {
+          // Genuine merge conflict (unmerged paths) → hand to the agent. Any other
+          // failure (bad object, lock) → surface as an error rather than a false
+          // conflict that the agent would "resolve" against a clean base.
+          const conflictFiles = await listUnmergedConflictPaths(rbWorktree);
+          await execFileAsync('git', ['-C', rbWorktree, 'revert', '--abort'], GIT_BUF).catch(() => {});
+          if (conflictFiles.length === 0) throw err;
+          conflictAt = { failedCommit: commits[0], remaining: commits, base: def };
+          return;
+        }
+        // Seal the reverts into ONE commit carrying every `This reverts commit`
+        // marker (a plain commit keeps only the last; findRevertedFullShas reads
+        // them to make a second rollback idempotent), then promote straight into
+        // the default branch — never via session/<id>.
         const body = shas.map((sha) => `This reverts commit ${sha}.`).join('\n');
-        const subject = `Revert ${shas.length} session commit${shas.length > 1 ? 's' : ''} (rollback ${sessionId.split('-')[0]})`;
-        await execFileAsync('git', ['-C', CWD, 'commit', '-m', `${subject}\n\n${body}`], GIT_BUF);
-        reverted.push(...shas);
-      } catch (err) {
-        // Distinguish a genuine merge conflict (unmerged paths) from an operational
-        // failure (dirty tree, lock, bad object, "nothing to commit"). Read the
-        // conflicted state BEFORE aborting. A non-conflict failure is re-thrown and
-        // surfaced as an error — NOT handed to the agent, which would reset onto a
-        // clean base and silently produce a different result than /app's real state.
-        const conflictFiles = await listUnmergedConflictPaths();
-        await execFileAsync('git', ['-C', CWD, 'revert', '--abort'], GIT_BUF).catch(() => {});
-        if (conflictFiles.length === 0) throw err;
-        // `--no-commit` doesn't report which SHA conflicted; hand the whole list to
-        // the agent, which resets onto BASE_BRANCH and replays all of them.
-        conflictAt = { failedCommit: commits[0], remaining: commits, base: def };
-        return;
+        const subject = `Revert ${shas.length} session commit${shas.length > 1 ? 's' : ''} (rollback ${short})`;
+        await execFileAsync('git', ['-C', rbWorktree, 'commit', '-m', `${subject}\n\n${body}`], GIT_BUF);
+        const promoted = await promoteBranchToDefault(rbBranch, def, subject);
+        if (promoted) reverted.push(...shas);
+        // Promote conflict means the default branch moved under us — escalate to
+        // the agent, which resets onto the *current* default branch and resolves.
+        else conflictAt = { failedCommit: commits[0], remaining: commits, base: def };
+      } finally {
+        await cleanupRollbackWorktree(rbWorktree, rbBranch);
       }
     });
     if (busyRace) {

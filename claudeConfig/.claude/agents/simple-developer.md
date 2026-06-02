@@ -225,7 +225,11 @@ Three possible outcomes — match yours below.
 
 This means a later commit on the base branch has **already removed or transformed** the lines your target commit added. Two sub-cases:
 
-- **B1 — Pure substitution** (e.g. target said `X → Y`, current main says `Z`): the user's intent — "undo X → Y" — can sometimes still be expressed as `Z → X`. Look at Step 1's `+` strings; grep current main for them; if they're absent but the file at the same location now has a different value, that's the later commit's overwrite. Edit the file to replace that later value with the original `-` strings from Step 1. Then `git add -A && git commit -m "simple: semantic revert of <sha-short>"`. Re-check with `git diff --name-only HEAD^ HEAD` — it should be non-empty now.
+- **B1 — Pure substitution** (e.g. target said `X → Y`, current main says `Z`): the user's intent — "undo X → Y" — can sometimes still be expressed as `Z → X`. Look at Step 1's `+` strings; grep current main for them; if they're absent but the file at the same location now has a different value, that's the later commit's overwrite. Edit the file to replace that later value with the original `-` strings from Step 1. Then commit **with the revert marker** so a future rollback knows this commit was already undone:
+  ```bash
+  cd <WORKTREE_PATH> && git add -A && git commit -m "simple: semantic revert of <sha-short>" -m "This reverts commit <FULL 40-char sha>."
+  ```
+  The second `-m` line is mandatory: the chat-service detects already-reverted commits by scanning for `This reverts commit <sha>`. Native `git revert` / `git revert --continue` write this marker automatically; a manual semantic revert must add it explicitly or the commit will be re-reverted on the next rollback. Re-check with `git diff --name-only HEAD^ HEAD` — it should be non-empty now.
 - **B2 — Target already fully absent** (the later commit removed the addition entirely, no equivalent value to swap): the target commit's effect is already gone from main. Nothing to revert.
   ```bash
   cd <WORKTREE_PATH> && git reset --hard HEAD^
