@@ -475,7 +475,7 @@ The rule: **once you emit the last `SendMessage(GO)`, stop.** Output the *"Worki
 - Wait for `<teammate-message>` from `merger` starting with `merged TASK-` or containing `merge failed`.
 - Count them. When count == N (tickets dispatched) → STATE D.
 
-**No tool calls, no reads, no agents — except for the resume trigger below.**
+**No tool calls, no reads, no agents.** STATE C is purely passive.
 
 **Every turn, emit one short text line — but only if the content would differ from your last visible message.** Never send the same status twice in a row.
 
@@ -494,42 +494,15 @@ Translate every internal event into a business milestone. Never expose what happ
 
 → When merger report count == N, enter STATE D.
 
-### Resume trigger — user sends "resume" / "continue" (or equivalent) in STATE C
+### Recovery is never handled from STATE C
 
-This is the *warm* resume path: your process is still the one that dispatched
-the wave (e.g. a rate limit paused you mid-flow), so the `tickets-<SESSION_SHORT_ID>`
-team is likely intact (TeamDelete was never called). Re-use it.
-
-(A *crash* takes a different route: chat-service replays `<intent>recovery</intent>`
-into a fresh process, which lands in STATE RECOVERY instead — there you assume
-nothing survived and rebuild from disk.)
-
-If a re-dispatch below errors because the team is gone, fall back to STATE
-RECOVERY's approach: `TeamCreate({team_name: "tickets-<SESSION_SHORT_ID>"})` (the
-orphan-wipe hook makes this safe) and continue.
-
-**ONE assistant message:**
-
-1. For each TASK-XXX in the current wave: `Read("${TICKETS_DIR}/TASK-XXX.json")` and
-   check `status`.
-2. Skip tickets with `status: "merged"` — already done.
-3. For each non-merged ticket, re-dispatch the full trio into the **existing** team:
-   ```
-   Agent({subagent_type: "developer",         name: "developer-TASK-XXX",        team_name: "tickets-<SESSION_SHORT_ID>", model: "opus",   description: "Resume TASK-XXX", prompt: "<same spawn prompt as original + RESUME note>"})
-   Agent({subagent_type: "quality-reviewer",  name: "quality-reviewer-TASK-XXX", team_name: "tickets-<SESSION_SHORT_ID>", model: "sonnet", description: "Resume review TASK-XXX", prompt: "<same spawn prompt>"})
-   Agent({subagent_type: "test-validator",    name: "test-validator-TASK-XXX",   team_name: "tickets-<SESSION_SHORT_ID>", model: "sonnet", description: "Resume validation TASK-XXX", prompt: "<same spawn prompt>"})
-   ```
-4. If any tickets are non-merged, also re-dispatch the shared merger:
-   ```
-   Agent({subagent_type: "merger", name: "merger", team_name: "tickets-<SESSION_SHORT_ID>", model: "haiku", description: "Resume wave merges", prompt: "<same spawn prompt>"})
-   ```
-5. Re-send `GO` to each new developer. Add to the GO message:
-   `RESUME: check the worktree for existing commits and continue from the latest committed state.`
-6. One text line to the user (in their language): *"Resuming — restarting the work that was interrupted."*
-
-**Do not reset the merge count** — merger reports already received still count toward N.
-
-**End this turn. Re-enter normal STATE C.**
+You will never receive a "resume"/"continue" message while genuinely mid-wave:
+your spawn is one long process, so a message typed during the wave is queued and
+only delivered after the spawn exits. If the run is interrupted (a crash or a
+usage limit), chat-service detects it on the next resume and replays
+`<intent>recovery</intent>` into a **fresh process** that lands in STATE
+RECOVERY — the single place recovery happens, where you assume nothing survived
+and rebuild from disk. Never re-dispatch or recover from here.
 
 ---
 

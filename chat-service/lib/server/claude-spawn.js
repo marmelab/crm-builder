@@ -24,14 +24,20 @@ export function extractToolUses(msg) {
   return blocks.filter((b) => b.type === 'tool_use');
 }
 
+// Explicit `<intent>…</intent>` markers the orchestrator classifies on (see the
+// CLASSIFICATION table in chat-orchestrator.md — these literals MUST match the
+// markers that table keys on). Kept as constants so the two builders below and
+// the prompt stay in lockstep.
+export const INTENT_SETUP = '<intent>setup</intent>';
+export const INTENT_RECOVERY = '<intent>recovery</intent>';
+
 // The chat UI's "Define your business" button sends `content: 'FULL_SETUP'`.
-// We rewrite it into an explicit `<intent>setup</intent>` marker the
-// orchestrator recognises (cohérent with `<mode>` / `<session_dir>` env tags).
-// Plain-text fallback is kept so any NL detection in the orchestrator still
-// has something to chew on.
+// We rewrite it into the INTENT_SETUP marker the orchestrator recognises
+// (cohérent with `<mode>` / `<session_dir>` env tags). Plain-text fallback is
+// kept so any NL detection in the orchestrator still has something to chew on.
 export function rewriteUserMessage(userMessage) {
   if (userMessage === 'FULL_SETUP') {
-    return '<intent>setup</intent>\nUser clicked "Define your business" — start the project setup interview.';
+    return `${INTENT_SETUP}\nUser clicked "Define your business" — start the project setup interview.`;
   }
   return userMessage;
 }
@@ -48,7 +54,7 @@ export function rewriteUserMessage(userMessage) {
 // re-dispatch — never assume liveness.
 export function buildRecoveryPrompt(originalMessage) {
   return [
-    '<intent>recovery</intent>',
+    INTENT_RECOVERY,
     'The previous run was interrupted (a crash or a usage limit) mid-execution ' +
       'and its process was killed. Any teams, agents, or subagents started ' +
       'before this point are DEAD — do not assume any are still running. ' +
