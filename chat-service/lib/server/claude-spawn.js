@@ -49,21 +49,15 @@ export function rewriteUserMessage(userMessage) {
 // dispatched, work in progress". Resuming that transcript (--resume) reinjects
 // that stale belief, so replaying the original request reads as user impatience
 // → the orchestrator no-ops with "already in progress" while nothing actually
-// runs. This directive instead tells a FRESH session (no --resume) to rebuild
-// its understanding from disk and either continue the uncommitted work or
-// re-dispatch — never assume liveness.
+// runs. This directive instead carries only the INTENT_RECOVERY marker (which
+// routes to STATE RECOVERY in the orchestrator, spawned FRESH with no --resume)
+// plus the original request for context. The procedure and constraints —
+// "assume nothing survived, rebuild from disk, never say already-in-progress" —
+// live solely in STATE RECOVERY (chat-orchestrator.md) to avoid drift.
 export function buildRecoveryPrompt(originalMessage) {
   return [
     INTENT_RECOVERY,
-    'The previous run was interrupted (a crash or a usage limit) mid-execution ' +
-      'and its process was killed. Any teams, agents, or subagents started ' +
-      'before this point are DEAD — do not assume any are still running. ' +
-      'This is a fresh process with no memory of the prior run: rebuild your ' +
-      'understanding from disk (git history on the session branch, worktree ' +
-      'contents, task branches, ticket files), not from the conversation. Then ' +
-      'either continue the uncommitted work that already exists or re-dispatch ' +
-      'cleanly. Never report that work is "already in progress" — after the ' +
-      'interruption, nothing runs until you start it.',
+    'The previous run was interrupted; follow STATE RECOVERY.',
     '',
     'Original request (for context):',
     originalMessage,

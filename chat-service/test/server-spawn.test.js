@@ -53,12 +53,11 @@ test('buildRecoveryPrompt embeds the original request for context', () => {
   assert.ok(out.includes(original), 'recovery prompt should quote the original request');
 });
 
-test('buildRecoveryPrompt states the prior team is dead and forbids no-op', () => {
+test('buildRecoveryPrompt delegates the procedure to STATE RECOVERY (single source of truth)', () => {
   const out = buildRecoveryPrompt('whatever');
-  // The whole point: signal that nothing from the crashed process survives, so
-  // the orchestrator re-evaluates real state instead of trusting its memory.
-  assert.match(out, /dead/i);
-  assert.match(out, /do not assume/i);
+  // The constraints/procedure live in STATE RECOVERY (chat-orchestrator.md); the
+  // directive only triggers it via the marker + points at it, no duplicated prose.
+  assert.match(out, /STATE RECOVERY/);
 });
 
 test('planResume: error WITH a wave in flight uses a fresh recovery session', () => {
