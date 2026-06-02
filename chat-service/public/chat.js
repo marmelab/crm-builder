@@ -1,8 +1,9 @@
 import { el, formatTokens } from './lib/dom.js';
 import { renderStatsPanel, initStatsRefresh } from './lib/stats/index.js';
-import { initConnection, initDisplay, initHistory, openConfirmModal, initRecentPopup } from './lib/sessions/index.js';
+import { initConnection, initDisplay, initHistory, openConfirmModal, initRecentPopup, initMorePopup } from './lib/sessions/index.js';
 import { renderInlineMarkdown } from './lib/markdown.js';
 import { initRollback } from './lib/rollback/index.js';
+import { initDeploy } from './lib/deploy/index.js';
 
 const widget   = document.getElementById('chat-widget');
 const toggle   = document.getElementById('chat-toggle');
@@ -148,6 +149,9 @@ initRollback({
   isBusy: isSessionBusy,
   refresh: refreshRestoreBtn,
 });
+// Deploy drives its own SSE stream internally (it's cross-session global state,
+// live even with no chat session open) — nothing to wire through the chat WS.
+initDeploy();
 
 const connection = initConnection({
   handleWsMessage,
@@ -1004,7 +1008,6 @@ const AGENT_COLORS = {
   developer:          '#f97316',
   merger:             '#2dd4bf',
   documentator:       '#facc15',
-  devops:             '#94a3b8',
 };
 
 function agentColor(label) {
@@ -1232,11 +1235,15 @@ function applySidebarCollapsed(collapsed) {
 applySidebarCollapsed(localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1');
 
 const recentPopup = initRecentPopup({ renderHistoryItem: historyApi.renderHistoryItem });
+const morePopup = initMorePopup();
 
 historyCollapseBtn.addEventListener('click', () => {
   const collapsed = !historyPanel.classList.contains('collapsed');
   applySidebarCollapsed(collapsed);
   try { localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? '1' : '0'); } catch {}
+  // The popovers are anchored at open time; the sidebar width changes on
+  // collapse, so close any open one rather than leaving it misplaced.
+  morePopup.closeMorePopup();
   // Refreshes are skipped while collapsed; pull the latest list on expand.
   if (!collapsed) {
     historyApi.refreshHistory();

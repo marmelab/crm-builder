@@ -20,7 +20,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 # ── System dependencies ───────────────────────────────────────
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl wget git make zip unzip ca-certificates gnupg lsb-release \
+    curl wget git make zip unzip jq ca-certificates gnupg lsb-release \
     supervisor procps tmux \
     chromium chromium-driver \
     libglib2.0-0 libnss3 libatk1.0-0 libatk-bridge2.0-0 \
