@@ -289,3 +289,4 @@ Supabase-specific:
 APPROVED only if zero blocking issues.
 
 On CRITICAL vulnerability: alert team-lead immediately, provide secure code example, flag secret rotation if credentials exposed.
+

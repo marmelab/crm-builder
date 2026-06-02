@@ -45,6 +45,7 @@ Check in this order — first match wins:
 | Category | When | Path |
 |---|---|---|
 | **RECOVERY** | The user turn contains `<intent>recovery</intent>` (chat-service replays this on resume when the previous run was interrupted — a crash or a usage limit — while a wave was in flight). Takes precedence over every other category. | STATE RECOVERY |
+| **ROLLBACK-CONFLICT** | The user turn starts with `<intent>rollback-conflict</intent>` — injected by the chat-service when its automatic `git revert` on `/app`'s base branch hit a merge conflict it couldn't resolve. Never typed by a human. Carries `COMMITS_TO_REVERT` (the failed commit + everything still to revert). | STATE S-DEV (rollback variant) → STATE S-MERGE → STATE S-DONE (rollback variant) |
 | **SETUP** | The first user turn contains `<intent>setup</intent>` (the chat UI's "Define your business" button), OR a clear natural-language signal in any language meaning "set up my CRM" / "start from scratch" / "define my business". | STATE SETUP-INTERVIEW → STATE SETUP-PLAN → then STATE B → C → D → (POST-DEV) |
 | **MODE-SWITCH** | User asks to switch data mode: "use real data", "connect my database", "switch to demo", "use sample data", etc. — no code change, system operation only. | STATE MS-RUN → STATE MS-DONE |
 | **MEMORY** | user asks to remember a way of doing something or document a recurring friction (*"remember this"*, *"document this behavior"*, *"turn this into a rule"*) — no code change | STATE M-DOC → STATE M-DONE (documentator only, no team) |
@@ -113,10 +114,14 @@ SETUP:       STATE SETUP-INTERVIEW (turn N..N+K)
 MODE-SWITCH: STATE MS-RUN (turn N)   →  STATE MS-DONE (turn N+1)
 MEMORY:      STATE M-DOC (turn N)    →  STATE M-DONE (turn N+1)
 SIMPLE:      STATE S-DEV (turn N)    →  (STATE S-REVIEW if diff touched supabase/)
+                                      →  (BLOCKED: → STATE S-FIX → S-REVIEW, ≤2 silent retries)
                                       →  STATE S-MERGE
                                       →  STATE S-DONE
                                       →  (if schema diff: STATE PD-RESPOND → PD-MIG-DEV → … → PD-DONE)
                                       →  (if cosmetic only: STATE DONE)
+                                      (ROLLBACK-CONFLICT uses the same S-* path
+                                      with a rollback-specific prompt and always
+                                      skips POST-DEV — see STATE S-DEV / S-DONE below.)
 COMPLEX:     STATE A (turn N)        →  STATE B (turn N+1)
                                       →  STATE C (turns N+2..N+M)
                                       →  STATE D (turn N+M+1)
@@ -305,9 +310,16 @@ Reply to user in plain language, in their language:
 
 ### STATE S-DEV — SIMPLE dispatch simple-developer (ONE assistant message)
 
-For SIMPLE only. No team, no planner, no skill on the orchestrator's side.
+For SIMPLE and ROLLBACK-CONFLICT. No team, no planner, no skill on the orchestrator's side.
+
+The user turn determines which prompt template to use:
+
+- **Regular SIMPLE** (cosmetic change): use the CHANGE_REQUEST template below.
+- **ROLLBACK-CONFLICT** (user turn starts with `<intent>rollback-conflict</intent>`): use the ROLLBACK_CONFLICT template below. Copy `BASE_BRANCH`, `FAILED_COMMIT`, and the `COMMITS_TO_REVERT` block verbatim from the user turn.
 
 1. Dispatch ONE `simple-developer` agent (no `team_name`):
+
+   **SIMPLE template**:
    ```
    Agent({
      subagent_type: "simple-developer",
@@ -315,8 +327,21 @@ For SIMPLE only. No team, no planner, no skill on the orchestrator's side.
      prompt: "ROLE: simple-developer\nCHANGE_REQUEST: <user's request, verbatim>\nWORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/simple\nBRANCH_NAME: <SESSION_SHORT_ID>/simple\nTICKETS_DIR: <absolute per-session path>"
    })
    ```
+
+   **ROLLBACK_CONFLICT template**:
+   ```
+   Agent({
+     subagent_type: "simple-developer",
+     description: "Resolve rollback conflict",
+     prompt: "ROLE: simple-developer\nMODE: ROLLBACK_CONFLICT\nWORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/simple\nBRANCH_NAME: <SESSION_SHORT_ID>/simple\nBASE_BRANCH: <copied from user turn>\nFAILED_COMMIT: <copied from user turn>\nCOMMITS_TO_REVERT:\n<the block copied verbatim from the user turn>"
+   })
+   ```
+
    The worktree and branch are fixed per session — the `setup-worktree` hook creates them automatically before the agent starts.
-3. One text line: *"Working on it..."*
+
+2. One text line in the user's language:
+   - SIMPLE: *"Working on it..."*
+   - ROLLBACK_CONFLICT: *"Finishing the rollback..."*
 
 **End this turn.** The simple-developer runs setup + edit + commit, then stops. SubagentStop hooks (typecheck, prettier, unit tests, e2e — wired with matcher `simple-developer`) run automatically; failures come back as stderr that the agent fixes on its own internal turns. When the agent's stop is finally accepted, control returns to you.
 
@@ -346,7 +371,30 @@ Only entered when the simple-developer's diff touched `supabase/` (raw SQL, migr
 
 **End this turn.** The reviewer reads the worktree diff and returns text.
 
-→ Enter STATE S-MERGE on next turn if `APPROVED`. If `BLOCKED:` reply to the user with a plain-language version of the issues (no file paths, no SQL) and enter STATE DONE — do NOT merge.
+→ On next turn:
+- `APPROVED` → STATE S-MERGE.
+- `BLOCKED:` → **STATE S-FIX** — the user must NEVER see a schema-shape / migration issue. Feed it back to the developer; do NOT merge, do NOT surface it to the user.
+
+---
+
+### STATE S-FIX — feed the review back to the developer (next turn)
+
+Entered only from STATE S-REVIEW on `BLOCKED:`. A database-shape problem (view column order, RLS, raw-SQL injection…) is the developer's to fix, not the user's to arbitrate — the loop stays silent.
+
+1. **Attempt cap.** Look back in your own context and count how many times you have already entered S-FIX in *this* request (each prior *"Adjusting the database change..."* line + its following `BLOCKED:` review = one attempt). If you have **already made 2 fix attempts and the reviewer is still `BLOCKED:`**, give up the silent loop: reply to the user in plain language (*"Something didn't work with this change. Want me to try a different approach?"* — no file paths, no SQL) and enter STATE DONE — do NOT merge.
+2. Otherwise re-dispatch the **same** `simple-developer` in the **same** worktree (the `setup-worktree` hook will `SKIP already registered`) with the reviewer's findings:
+   ```
+   Agent({
+     subagent_type: "simple-developer",
+     description: "Fix DB review findings: <one-line summary>",
+     prompt: "ROLE: simple-developer\nMODE: SIMPLE\nWORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/simple\nBRANCH_NAME: <SESSION_SHORT_ID>/simple\n\nFIX — the database review found problems in your previous commit. Address every point below and commit the fix in the same worktree (amend or new commit, your call). Do NOT change anything else.\n<paste the reviewer's BLOCKED: list verbatim>"
+   })
+   ```
+3. One text line in the user's language, neutral — e.g. *"Adjusting the database change..."* (never expose the technical reason).
+
+**End this turn.** The developer fixes + commits; the `simple-developer` SubagentStop hooks (typecheck, prettier, unit, e2e) run automatically.
+
+→ Enter STATE S-REVIEW again on next turn to re-review the fix. The diff still touches `supabase/`, so the review re-fires — the loop is S-REVIEW ⇄ S-FIX, bounded by the attempt cap in step 1.
 
 ---
 
@@ -355,14 +403,14 @@ Only entered when the simple-developer's diff touched `supabase/` (raw SQL, migr
 The dev's (or reviewer's) final response is in your context.
 
 1. If dev returned `FAILED: <reason>` → skip merge, go to STATE S-DONE with failure.
-2. If reviewer returned `BLOCKED:` → already handled in STATE S-REVIEW (you should not be here).
-3. If dev returned `DONE: branch=<X>...` and (review skipped OR review `APPROVED`) → dispatch merger (no `team_name`, no SendMessage):
+2. If reviewer returned `BLOCKED:` → you should not be here: a `BLOCKED:` routes to STATE S-FIX (silent dev loop), and only reaches the user after 2 failed fix attempts. Never merge a `BLOCKED:` change.
+3. If dev returned `DONE: branch=<X>...` and (review skipped OR review `APPROVED`) → dispatch merger (no `team_name`, no SendMessage). Use the **ROLLBACK merger template** when the original user turn was `<intent>rollback-conflict</intent>`, otherwise the **SIMPLE merger template**:
    ```
    Bash("touch /tmp/notified-merger-<SESSION_SHORT_ID>-simple")
    Agent({
      subagent_type: "merger",
-     description: "Merge SIMPLE branch <X>",
-     prompt: "<SIMPLE merger protocol — see below>"
+     description: "Merge SIMPLE branch <X>",   // or "Promote rollback branch <X>"
+     prompt: "<SIMPLE or ROLLBACK merger protocol — see below>"
    })
    ```
 4. One text line: *"Wrapping up..."*
@@ -386,12 +434,38 @@ Output: "DONE: commit=<short sha>. files=[<paths>]" OR "FAILED: <reason>"
 
 The SIMPLE merger does Stage A (branch → session branch) then PROMOTION (Stage B: session branch → main) in one shot, so its `DONE` sha is the promotion commit on main. No separate `promote:` handshake is needed for SIMPLE.
 
+#### ROLLBACK merger prompt template (rollback-conflict path only)
+
+```
+ROLE: merger (ROLLBACK mode — single-shot, no team)
+SESSION_SHORT_ID: <SESSION_SHORT_ID>
+BRANCH_NAME: <SESSION_SHORT_ID>/simple
+
+Follow the ROLLBACK mode in your agent file (merger.md): skip Stage A, run
+ROLLBACK PROMOTION (merge BRANCH_NAME directly into the default branch). Never
+touch session/<SESSION_SHORT_ID>.
+Output: "DONE: commit=<short sha>. files=[<paths>]" OR "FAILED: <reason>"
+```
+
+The ROLLBACK merger merges the resolved revert branch **straight into main**, leaving the session branch untouched — a rollback is a default-branch operation, not session work.
+
 ---
 
 ### STATE S-DONE — SIMPLE report + POST-DEV check (next turn)
 
 The merger's final response (or dev's failure) is in your context.
 
+**First branch on the original user turn**: a `<intent>rollback-conflict</intent>`
+turn follows the ROLLBACK_CONFLICT path (no POST-DEV); anything else is a regular
+SIMPLE request.
+
+### ROLLBACK_CONFLICT
+Reply to user in plain language, then enter STATE DONE — a full session rollback
+never triggers a forward migration, so POST-DEV is always skipped:
+- `DONE` → *"All changes from this session have been undone."*
+- `FAILED` → *"We couldn't fully undo your changes. Some of them may still be in place — please ask your administrator for help."*
+
+### Regular SIMPLE
 1. If dev or merger returned `FAILED` → reply to user in plain language
    (*"Something didn't work. Want me to try a different approach?"*) and enter STATE DONE.
 2. On `DONE` → run POST-DEV detection:

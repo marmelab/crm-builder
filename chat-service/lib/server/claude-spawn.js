@@ -101,14 +101,15 @@ export function spawnClaude(userMessage, claudeSessionId, sessionDir) {
   if (orchestratorModel) args.push('--model', orchestratorModel);
   if (claudeSessionId) args.push('--resume', claudeSessionId);
   args.push('-p', prompt);
+  const baseEnv = {
+    ...process.env,
+    HOME: CLAUDE_HOME,
+    CLAUDE_PROJECT_DIR: CWD,
+    CHAT_SESSION_DIR: sessionDir,
+    MODE: mode,
+  };
   return spawn('claude', args, {
-    env: buildSpawnEnv({
-      ...process.env,
-      HOME: CLAUDE_HOME,
-      CLAUDE_PROJECT_DIR: CWD,
-      CHAT_SESSION_DIR: sessionDir,
-      MODE: mode,
-    }, claudeSessionId),
+    env: buildSpawnEnv(baseEnv, claudeSessionId),
     cwd: CWD,
     stdio: ['ignore', 'pipe', 'pipe'],
   });

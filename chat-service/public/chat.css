@@ -70,7 +70,8 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
   transition: color .15s, background .15s; border-radius: 6px;
 }
 #chat-debug:hover,
-#chat-restore-btn:hover { color: #fff; }
+#chat-restore-btn:not(:disabled):hover { color: #fff; }
+#chat-restore-btn:disabled { opacity: .35; cursor: not-allowed; }
 #chat-debug.debug-active { color: #3b82f6; background: rgba(59,130,246,.15); }
 #chat-debug svg,
 #chat-restore-btn svg { display: block; }
@@ -1089,6 +1090,7 @@ details.child-row[open] > summary .child-detail {
 #chat-modal-body {
   font-size: 13px; line-height: 1.5; color: #8e8e93;
   margin-bottom: 22px;
+  white-space: pre-line;
 }
 #chat-modal-actions {
   display: flex; gap: 10px; justify-content: center;

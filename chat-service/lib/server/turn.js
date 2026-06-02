@@ -61,30 +61,41 @@ export async function processMessage(runtime, prompt, opts = {}) {
   let lastAssistantText = '';
   let exitCode = null;
   try {
-    // freshSession (set by a recovery resume) starts a brand-new claude session
-    // instead of --resume-ing the killed transcript: that transcript ends
-    // believing a team is still running, and reinjecting it makes the
-    // orchestrator no-op. The new session_id event below rebinds
-    // runtime.claudeSessionId so later turns resume this fresh session.
-    const resumeSessionId = opts.freshSession ? null : runtime.claudeSessionId;
-    if (opts.freshSession) {
-      // Abandon the dead session's id NOW. If this fresh spawn dies before
-      // emitting its own session_id, the finally-block snapshot would otherwise
-      // copy the dead session's transcript/subagents into this session's dir.
-      runtime.claudeSessionId = null;
-    }
-    const proc = spawnClaude(prompt, resumeSessionId, `${LOG_DIR}/${runtime.session.id}`);
-    runtime.currentProc = proc; // expose for the stop handler
     let stderrBuf = '';
-    // Prevent unhandled 'error' from crashing the process (e.g. claude binary missing).
-    const spawnError = new Promise((resolve) => proc.once('error', resolve));
-    proc.stderr.on('data', (d) => {
-      stderrBuf += d.toString();
-      console.error('[claude]', d.toString().trim());
-    });
+    // A `--resume` whose target conversation no longer exists (e.g. the container
+    // was recreated, wiping ~/.claude/projects) makes claude exit instantly with
+    // `error_during_execution` / "No conversation found". Drop the stale id and
+    // respawn fresh once, rather than surfacing a hard error to the user.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      receivedText = false;
+      rateLimit = null;
+      resultError = false;
+      toolMap.clear();
+      stderrBuf = '';
+      // Per-attempt, not just pre-loop: a limit the subagent tailer flagged
+      // during attempt 0 must not leak into attempt 1's outcome (it would fold
+      // into `rateLimit` below and wrongly settle a clean retry as rate_limited).
+      runtime.pendingRateLimit = null;
+      let staleResume = false;
+      // freshSession (set by a recovery resume) starts a brand-new claude session
+      // instead of --resume-ing the killed transcript: that transcript ends
+      // believing a team is still running, and reinjecting it makes the
+      // orchestrator no-op. Null the id NOW (only on attempt 0 — a staleResume
+      // retry already nulled it before `continue`) so a fresh spawn that dies
+      // before its own session_id event doesn't make the finally-block snapshot
+      // copy the dead session's transcript/subagents into this session's dir.
+      if (attempt === 0 && opts.freshSession) runtime.claudeSessionId = null;
+      const proc = spawnClaude(prompt, runtime.claudeSessionId, `${LOG_DIR}/${runtime.session.id}`);
+      runtime.currentProc = proc; // expose for the stop handler
+      // Prevent unhandled 'error' from crashing the process (e.g. claude binary missing).
+      const spawnError = new Promise((resolve) => proc.once('error', resolve));
+      proc.stderr.on('data', (d) => {
+        stderrBuf += d.toString();
+        console.error('[claude]', d.toString().trim());
+      });
 
-    const rl = createInterface({ input: proc.stdout, crlfDelay: Infinity });
-    for await (const line of rl) {
+      const rl = createInterface({ input: proc.stdout, crlfDelay: Infinity });
+      for await (const line of rl) {
       if (!line.trim()) continue;
       try {
         const event = JSON.parse(line);
@@ -183,6 +194,11 @@ export async function processMessage(runtime, prompt, opts = {}) {
 
         if (event.type === 'result') {
           if (event.is_error) resultError = true;
+          if (event.subtype === 'error_during_execution'
+            && Array.isArray(event.errors)
+            && event.errors.some((e) => /no conversation found/i.test(String(e)))) {
+            staleResume = true;
+          }
           // tokens: derived from modelUsage which is cumulative within the spawn
           // and includes sub-agent token consumption. Replace, don't add — the
           // value is the running spawn total. (Falling back to result.usage
@@ -232,6 +248,21 @@ export async function processMessage(runtime, prompt, opts = {}) {
         resolve(1);
       }, 30_000)),
     ]);
+      // Stale --resume target → forget it and respawn fresh once. The new spawn
+      // re-populates runtime.claudeSessionId from its own `session_id` event.
+      if (staleResume && attempt === 0 && !runtime.stopping && runtime.claudeSessionId) {
+        console.error('[claude] resume target missing — respawning without --resume');
+        // Attempt 0 started a tailer bound to the now-dead session's dir. Stop it
+        // here (not just in the post-loop finally) so attempt 1's startSubagentTailer
+        // can claim the slot and bind to the fresh session — otherwise its start
+        // no-ops and the dead-dir interval keeps polling, losing all subagent
+        // narration and never catching a subagent rate-limit on the retry.
+        await stopSubagentTailer(runtime);
+        runtime.claudeSessionId = null;
+        continue;
+      }
+      break;
+    }
     // A limit hit by a subagent lands in its transcript, not the main stream —
     // the tailer flags it on runtime.pendingRateLimit and kills the spawn. Fold
     // it in here so the turn settles on `rate_limited` like a main-stream limit.
