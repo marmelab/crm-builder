@@ -6,7 +6,7 @@ import { broadcast, sendStats } from './ws-bus.js';
 import { runtimes, transitionState, noteRateLimit } from './runtime.js';
 import { spawnClaude, extractText, extractToolUses, friendlyError } from './claude-spawn.js';
 import { endsWithQuestion } from './session-store.js';
-import { decideNextState } from './turn-state.js';
+import { decideNextState, turnFailedFrom } from './turn-state.js';
 import { startSubagentTailer, stopSubagentTailer } from './subagent-tail.js';
 import {
   emptyBreakdown, addBreakdown, breakdownFromModelUsage, costFromBreakdown,
@@ -60,8 +60,13 @@ export async function processMessage(runtime, prompt, opts = {}) {
   let resultError = false;
   let lastAssistantText = '';
   let exitCode = null;
+  // Raw stream facts read again in the finally block (a separate scope), so they
+  // live at function scope alongside the other outcome flags. `sawResult` = the
+  // CLI emitted its terminal `result` event (Claude's loop ran to completion);
+  // `stderrBuf` accumulates the spawn's stderr.
+  let sawResult = false;
+  let stderrBuf = '';
   try {
-    let stderrBuf = '';
     // A `--resume` whose target conversation no longer exists (e.g. the container
     // was recreated, wiping ~/.claude/projects) makes claude exit instantly with
     // `error_during_execution` / "No conversation found". Drop the stale id and
@@ -70,6 +75,7 @@ export async function processMessage(runtime, prompt, opts = {}) {
       receivedText = false;
       rateLimit = null;
       resultError = false;
+      sawResult = false;
       toolMap.clear();
       stderrBuf = '';
       // Per-attempt, not just pre-loop: a limit the subagent tailer flagged
@@ -193,6 +199,7 @@ export async function processMessage(runtime, prompt, opts = {}) {
         }
 
         if (event.type === 'result') {
+          sawResult = true;
           if (event.is_error) resultError = true;
           if (event.subtype === 'error_during_execution'
             && Array.isArray(event.errors)
@@ -271,7 +278,7 @@ export async function processMessage(runtime, prompt, opts = {}) {
       const stopText = '⏹ Session stopped.';
       broadcast(runtime, { type: 'message', role: 'assistant', content: stopText, ts: new Date().toISOString() });
       await runtime.session?.recordMessage('assistant', stopText).catch(() => {});
-    } else if (exitCode !== 0 || !receivedText || resultError || rateLimit) {
+    } else if (turnFailedFrom({ resultError, stderr: stderrBuf, sawResult, exitCode }) || !receivedText || rateLimit) {
       const errText = friendlyError({ exitCode, stderr: stderrBuf, rateLimit, resultError });
       broadcast(runtime, { type: 'message', role: 'assistant', content: errText, ts: new Date().toISOString() });
       // Await: the finally block below writes meta.json right after; a
@@ -290,6 +297,9 @@ export async function processMessage(runtime, prompt, opts = {}) {
     }
   } catch (err) {
     if (err?.name !== 'AbortError') {
+      // An internal exception leaves exitCode null and sawResult false, so
+      // turnFailedFrom classifies it as a (resumable) failure on its own — no
+      // flag to set here. A user STOP throws AbortError, handled by wasStopped.
       const errText = "Something went wrong. Want to try again?";
       broadcast(runtime, { type: 'message', role: 'assistant', content: errText, ts: new Date().toISOString() });
       await runtime.session?.recordMessage('assistant', errText).catch(() => {});
@@ -351,12 +361,14 @@ export async function processMessage(runtime, prompt, opts = {}) {
     } else {
       if (wasStopped || rateLimit) runtime.queue = [];
       runtime.busy = false;
-      const turnErrored = exitCode !== 0 || !receivedText || resultError || rateLimit;
-      // A clean exit that produced no assistant text (e.g. a turn that only ran
-      // tool calls) isn't a failure — it completes silently, as it did before
-      // the 'error' state existed. Only a non-zero exit or an explicit result
-      // error is a resumable 'error'; a rate limit settles on its own state.
-      const turnFailed = exitCode !== 0 || resultError;
+      // Only a genuine Claude failure is a resumable 'error' (see turnFailedFrom):
+      // an API error, or a process that died before Claude finished. A hook or
+      // tool that merely exited non-zero while Claude ran to completion is NOT a
+      // failure — the session settles on 'completed' so the next message
+      // continues instead of stalling on a Resume button. A clean exit with no
+      // assistant text also completes silently; a rate limit settles on its own.
+      const turnFailed = turnFailedFrom({ resultError, stderr: stderrBuf, sawResult, exitCode });
+      const turnErrored = turnFailed || !receivedText || !!rateLimit;
       const asksQuestion = !wasStopped && !turnErrored && endsWithQuestion(lastAssistantText);
       const nextState = decideNextState({ wasStopped, rateLimit: !!rateLimit, turnFailed, asksQuestion });
       await transitionState(runtime, nextState);
