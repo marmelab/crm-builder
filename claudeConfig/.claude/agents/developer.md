@@ -50,8 +50,7 @@ The orchestrator parses this line by regex. Any other format is treated as `FAIL
    ```
    Resolve any conflicts, then `git add` + `git rebase --continue`. Commit the result if needed.
    Only proceed once `git status` shows a clean tree on top of the latest `session/<SESSION_SHORT_ID>`.
-5. **Write reflection** — after implementation is complete and committed: write `/app/docs/reflections/<SESSION_SHORT_ID>/<TASK_ID>.md` — absolute path, outside the worktree, directly on the shared volume. `SESSION_SHORT_ID` is the first segment of your session UUID (derive it from `WORKTREE_PATH`, e.g. `/app/worktrees/58c3f4c7/TASK-001` → `58c3f4c7`). Create the directory if needed. Load `Skill({skill: "reflection-writing"})` for the format. Skip on retry attempts.
-6. **Emit OUTPUT CONTRACT** — your very last line of output:
+5. **Emit OUTPUT CONTRACT** — your very last line of output:
    ```
    DONE: branch=<BRANCH_NAME> commit=<short_sha> files=[<comma-separated modified paths, relative to repo root>]
    ```
@@ -71,8 +70,6 @@ If your spawn prompt contains a `RETRY_FEEDBACK=...` block, you are on a retry a
 4. Emit the OUTPUT CONTRACT line with the new HEAD commit sha.
 
 If you cannot resolve the feedback (e.g. test infrastructure broken, missing context), emit `FAILED: <reason citing the unresolvable feedback>`.
-
-On retry attempts, skip the reflection step — write reflections only on the first successful attempt or at the orchestrator's request later.
 
 ---
 
@@ -97,7 +94,6 @@ Domain skills — load on demand with `Skill({skill: "..."})` when your task nee
 - `Skill({skill: "backend-dev"})` — Supabase/SQL/dataProvider patterns
 - `Skill({skill: "e2e-conventions"})` — e2e test conventions for this project
 - `Skill({skill: "playwright-testing"})` — Playwright API and selector patterns
-- `Skill({skill: "reflection-writing"})` — reflection format (load at WORKFLOW step 4)
 - `Skill({skill: "shadcn-customization"})` — CSS variables, OKLCH colors, theme presets (load if `"visual_customization": true`)
 
 ---
@@ -203,9 +199,3 @@ Implement the plan. Stick to ticket scope.
 - No features outside ticket scope.
 - e2e tests in `e2e/` if ticket touches UI/filters/forms/interactions, unless acceptance criteria say otherwise. Call `Skill({skill: "e2e-conventions"})` and `Skill({skill: "playwright-testing"})` before writing e2e tests. Don't run them — ship the spec, CI executes.
 - Silent mode: Playwright `--headless`, Vite without `--open`, Vitest without `browser.ui`.
-
----
-
-## Mode 2 — Reflection (after implementation is committed)
-
-The trigger and step are in the WORKFLOW section above (step 4). The reflection format is in the `reflection-writing` skill — load it with `Skill({skill: "reflection-writing"})` at that step.
