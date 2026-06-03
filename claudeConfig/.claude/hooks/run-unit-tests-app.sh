@@ -52,14 +52,17 @@ for WT in $WORKTREES; do
   # Use a temp file instead of $() -- avoids blocking if vitest worker processes
   # keep the stdout pipe open after the main process exits.
   TMPOUT=$(mktemp)
-  CI=true timeout 180 npx vitest run --config vitest.config.ts > "$TMPOUT" 2>&1
+  # Inner timeout is 150s, 30s shorter than the 180s Claude Code hook timeout,
+  # so the script can detect the failure and return exit 2 before Claude Code
+  # kills it (a timed-out hook is treated as exit 0, bypassing the gate).
+  CI=true timeout 150 npx vitest run --config vitest.config.ts > "$TMPOUT" 2>&1
   EXIT_CODE=$?
   OUTPUT=$(tail -40 "$TMPOUT")
   rm -f "$TMPOUT"
   if [ $EXIT_CODE -eq 124 ]; then
-    echo "[$(date -Iseconds)] unit-app TIMEOUT wt=$WT (180s)" >> "$LOG"
+    echo "[$(date -Iseconds)] unit-app TIMEOUT wt=$WT (150s)" >> "$LOG"
     FAILED=1
-    AGGREGATED_ERR+="=== unit-app TIMEOUT in $WT (>180s) -- vitest did not exit. Tests may be hanging. ===\n\n"
+    AGGREGATED_ERR+="=== unit-app TIMEOUT in $WT (>150s) -- vitest did not exit. Tests may be hanging. ===\n\n"
     continue
   fi
   if [ $EXIT_CODE -ne 0 ]; then
