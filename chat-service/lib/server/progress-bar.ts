@@ -81,6 +81,23 @@ export const updateProgressBar = (runtime: { stats: RuntimeStats }, targetWs: un
     renderProgressBar(runtime, steps, targetWs);
 }
 
+// Collapse consecutive same-role agents in PARALLEL_ROLES into one group.
+// Example: ['developer','developer','developer','quality-reviewer'] →
+//          [{role:'developer',count:3}, {role:'quality-reviewer',count:1}]
+// Non-parallel roles (planner, merger, …) always form groups of 1.
+function groupRoles(roles: RoleType[]): Array<{ role: RoleType; count: number }> {
+    const groups: Array<{ role: RoleType; count: number }> = [];
+    for (const role of roles) {
+        const last = groups[groups.length - 1];
+        if (last && last.role === role && PARALLEL_ROLES.has(role)) {
+            last.count++;
+        } else {
+            groups.push({ role, count: 1 });
+        }
+    }
+    return groups;
+}
+
 // Extract the steps with their status and estimated durations from the runtime stats
 function buildSteps(runtime: { stats: RuntimeStats }): Step[] {
     const { dispatchedSubagentTypes: dispatchedTypes, agentsCompleted: completed, flowExpected: expected, durationScale = 1 } = runtime.stats;
@@ -89,48 +106,60 @@ function buildSteps(runtime: { stats: RuntimeStats }): Step[] {
     const predictedNotDispatched = Math.max(0, expected - dispatched);
     const plan = FLOW_PLANS[dispatchedTypes[0]];
     // For multi-ticket COMPLEX the plan template only covers 1 ticket (5 steps).
-    // When predictedNotDispatched exceeds what remains in the template, extend
-    // with the repeating per-ticket wave pattern (dev+qr+tv) so the bar shows
-    // the correct total without capping at 6 or back-tracking between waves.
+    // Extend beyond the template with same-role blocks (all devs, then all qr's,
+    // then all tv's) so groupRoles can collapse them into single segments.
     const planSlice = plan ? plan.slice(dispatched, dispatched + predictedNotDispatched) : [];
     const overflow = predictedNotDispatched - planSlice.length;
     let upcomingAgents: RoleType[];
     if (overflow <= 0) {
         upcomingAgents = planSlice;
     } else {
-        // Multi-ticket COMPLEX: extend beyond the plan template with the repeating
-        // dev+qr+tv wave pattern. The plan may contain a 'merger' step in the middle
-        // (FLOW_PLANS['planner'] ends with merger) — pull it out and put it last so
-        // the bar never shows a lone merger segment floating between wave agents.
+        // Pull merger to the end, fill remaining slots as grouped blocks per role
+        // so consecutive-same-role grouping produces clean pending segments.
         const planWithoutMerger = planSlice.filter((r) => r !== Roles.MERGER);
         const hasMerger = planSlice.includes(Roles.MERGER);
         const slots = predictedNotDispatched - planWithoutMerger.length - (hasMerger ? 1 : 0);
+        const fullCycles = Math.floor(slots / WAVE_PATTERN.length);
+        const remainder = slots % WAVE_PATTERN.length;
+        // Group by role (all devs, then all qr's, then all tv's) so groupRoles
+        // collapses them — avoids isolated "lone developer" pending segments.
+        const overflowByRole = WAVE_PATTERN.flatMap((r) =>
+            Array<RoleType>(fullCycles + (WAVE_PATTERN.indexOf(r) < remainder ? 1 : 0)).fill(r)
+        );
         upcomingAgents = [
             ...planWithoutMerger,
-            ...Array.from({ length: Math.max(0, slots) }, (_, i) => WAVE_PATTERN[i % WAVE_PATTERN.length]),
+            ...overflowByRole,
             ...(hasMerger ? [Roles.MERGER] : []),
         ];
     }
 
-    const dur = (role: RoleType) => Math.round(durationFor(role) * durationScale);
+    const dur = (role: RoleType, count = 1) => Math.round(durationFor(role, count) * durationScale);
+
+    // Build dispatched steps — group parallel agents into single segments.
+    // A group is done when all its individual agents have completed
+    // (agentCursor tracks how many individual agents we've accounted for).
+    const dispatchedGroups = groupRoles(dispatchedTypes);
+    let agentCursor = 0;
+    const dispatchedSteps = dispatchedGroups.map(({ role, count }) => {
+        agentCursor += count;
+        return {
+            role,
+            status: agentCursor <= completedCount ? Statuses.DONE : Statuses.IN_PROGRESS,
+            durationMs: dur(role, count),
+        };
+    });
+
     return [
         {
             role: Roles.ORCHESTRATOR,
             status: dispatched > 0 ? Statuses.DONE : Statuses.IN_PROGRESS,
             durationMs: dur(Roles.ORCHESTRATOR),
         },
-        ...dispatchedTypes.map((role, i) => {
-            const inProgress = i >= completedCount;
-            return {
-                role,
-                status: inProgress ? Statuses.IN_PROGRESS : Statuses.DONE,
-                durationMs: dur(role),
-            };
-        }),
-        ...upcomingAgents.map((role) => ({
+        ...dispatchedSteps,
+        ...groupRoles(upcomingAgents).map(({ role, count }) => ({
             role,
             status: Statuses.PENDING,
-            durationMs: dur(role),
+            durationMs: dur(role, count),
         })),
     ];
 }
