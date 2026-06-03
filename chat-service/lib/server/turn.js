@@ -139,7 +139,24 @@ export async function processMessage(runtime, prompt, opts = {}) {
       });
 
       const rl = createInterface({ input: proc.stdout, crlfDelay: Infinity });
+      // Inactivity watchdog. The COMPLEX flow's autonomous team (devs → reviewers
+      // → merger) keeps working AFTER the orchestrator emits its `result`/end_turn,
+      // and that progress lands on the per-subagent transcripts (the tailer bumps
+      // `lastStreamActivityMs`), NOT the orchestrator's now-idle main stream. So we
+      // wait for the process to close on its own (team done) and only force-kill
+      // after a long stretch of TOTAL silence — main stream AND subagents — i.e. a
+      // genuine hang (e.g. a zombie holding stdout open). A flat 30 s timer after
+      // `result` (added in #54) killed live COMPLEX teams mid-merge; this replaces it.
+      const IDLE_KILL_MS = 180_000;
+      runtime.lastStreamActivityMs = Date.now();
+      const idleTimer = setInterval(() => {
+        if (Date.now() - runtime.lastStreamActivityMs < IDLE_KILL_MS) return;
+        console.error(`[claude] no activity for ${IDLE_KILL_MS}ms — killing spawn`);
+        try { proc.kill('SIGTERM'); } catch {}
+        setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 5_000);
+      }, 5_000);
       for await (const line of rl) {
+      runtime.lastStreamActivityMs = Date.now();
       if (!line.trim()) continue;
       try {
         const event = JSON.parse(line);
@@ -272,26 +289,25 @@ export async function processMessage(runtime, prompt, opts = {}) {
           runtime.stats.activeAgents = 0;
           runtime.stats.activeAgentIds.clear();
           sendStats(runtime);
-          // `result` is always the terminal event — break immediately so a
-          // zombie subagent keeping stdout open doesn't stall the loop forever.
-          break;
+          // Do NOT break here. For SIMPLE the process closes right after `result`
+          // so the loop ends on its own. For COMPLEX the autonomous team keeps
+          // working past the lead's `result`/end_turn — breaking would abandon it
+          // (and the old +30 s kill then murdered it mid-merge). We let the loop
+          // run until the process actually closes (team done), guarded by the
+          // inactivity watchdog above for the genuine-hang case.
         }
       } catch {}
     }
-    // Give the process up to 30 s to exit cleanly after emitting `result`.
-    // If it hangs (e.g. zombie subagent holding the pipe open), kill it so
-    // `busy` is never left stuck at true.
+    clearInterval(idleTimer);
+    // The loop only exits once the process closes on its own (work done) or the
+    // inactivity watchdog above killed a genuinely hung spawn — either way `close`
+    // resolves promptly, so no separate timeout is needed here.
     exitCode = await Promise.race([
       new Promise((resolve) => proc.on('close', resolve)),
       spawnError.then((err) => {
         stderrBuf += `\n${err?.message || err}`;
         return -1;
       }),
-      new Promise((resolve) => setTimeout(() => {
-        try { proc.kill('SIGTERM'); } catch {}
-        setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 5_000);
-        resolve(1);
-      }, 30_000)),
     ]);
       // Stale --resume target → forget it and respawn fresh once. The new spawn
       // re-populates runtime.claudeSessionId from its own `session_id` event.

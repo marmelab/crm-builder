@@ -145,6 +145,10 @@ async function processFile(runtime, jsonlPath, { emit }) {
   if (!result) return;
   runtime.subagentFileOffsets.set(jsonlPath, result.newOffset);
   runtime.subagentFileMtimes.set(jsonlPath, result.mtimeMs);
+  // Subagent transcript growth = the team is still working. Feed turn.js's
+  // inactivity watchdog so it never kills a live COMPLEX team whose progress
+  // shows up here rather than on the orchestrator's (idle) main stream.
+  if (emit && result.lines.length > 0) runtime.lastStreamActivityMs = Date.now();
   // Always seed uuid dedup, even in the dry pass. Skipping the loop here would
   // leave subagentSeenUuids empty, so a later truncation/rewrite (start=0)
   // would re-broadcast every prior event.

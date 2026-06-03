@@ -95,6 +95,7 @@ Domain skills — load on demand with `Skill({skill: "..."})` when your task nee
 - `Skill({skill: "e2e-conventions"})` — e2e test conventions for this project
 - `Skill({skill: "playwright-testing"})` — Playwright API and selector patterns
 - `Skill({skill: "shadcn-customization"})` — CSS variables, OKLCH colors, theme presets (load if `"visual_customization": true`)
+- `Skill({skill: "delete-initial-resource"})` — remove an initial CRM resource (contacts, companies, deals, tags, tasks) and every reference to it
 
 ---
 
