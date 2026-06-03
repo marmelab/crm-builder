@@ -333,14 +333,20 @@ function makeStepEl() {
 }
 
 // Step-driven only: status maps to a class, CSS handles the mask transition.
-// pending/in_progress → mask fully covers the segment (scaleX(1) by default);
-// done → mask collapses (scaleX(0) via `.is-done` rule). No wall-clock fill.
+// pending → mask fully covers the segment (scaleX(1) by default);
+// in_progress → mask animates slowly toward scaleX(0.05) over durationMs so the
+//   bar visually advances while the agent runs; --fill-duration drives the CSS animation.
+// done → mask collapses fully (scaleX(0) via `.is-done` rule + transition).
 function updateStepEl(seg, step) {
   seg.style.flexGrow = String(Math.max(1, step.durationMs));
   seg.title = `${step.role} · ${Math.round(step.durationMs / 1000)}s`;
   if (seg.dataset.status === step.status) return;
   seg.dataset.status = step.status;
   seg.className = `msg-working-progress-step is-${step.status}`;
+  if (step.status === 'in_progress') {
+    const mask = seg.querySelector('.msg-working-progress-step-mask');
+    if (mask) mask.style.setProperty('--fill-duration', `${step.durationMs}ms`);
+  }
 }
 
 function fallbackEqualSteps(total, done) {

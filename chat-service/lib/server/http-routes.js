@@ -209,6 +209,181 @@ async function handleModeNotify(req, res) {
   res.end(JSON.stringify({ ok: true }));
 }
 
+// Replay a recorded session log onto an active session's runtime, at N× speed.
+// All dir:'out' events (messages, debug, stats, progress, state…) are broadcast
+// to connected WS clients with their original relative timing compressed by speed.
+// Usage: GET /api/debug/replay?sessionId=<target>&source=<recordedId>&speed=20
+// `source` defaults to the built-in COMPLEX reference session.
+// Synthetic COMPLEX session — creates a fully-formed session with all event
+// types (debug_raw, message, progress, stats, state) and broadcasts them live.
+// Navigate to the returned URL right after calling to watch events arrive live;
+// navigate later to see the full history (stats panel, debug, messages all work).
+// Usage: GET /api/debug/synthetic-session?scenario=simple3&speed=20
+async function handleSyntheticSession(req, res) {
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  const scenario = url.searchParams.get('scenario') || 'simple3';
+  const speed = Math.max(1, Math.min(200, parseFloat(url.searchParams.get('speed') || '20')));
+  try {
+    const { createSyntheticSession } = await import('./synthetic-session.js');
+    const result = await createSyntheticSession({ scenario, speed });
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ...result, url: `/sessions/${result.sessionId}` }));
+  } catch (err) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: err.message }));
+  }
+}
+
+const REPLAY_DEFAULT_SOURCE = 'f055003c-ad05-4873-a068-8a8cda9ba139';
+async function handleReplay(req, res) {
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  const targetId = url.searchParams.get('sessionId');
+  const sourceId = url.searchParams.get('source') || REPLAY_DEFAULT_SOURCE;
+  const speed    = Math.max(1, Math.min(200, parseFloat(url.searchParams.get('speed') || '20')));
+
+  const runtime = targetId ? runtimes.get(targetId) : null;
+  if (!runtime) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'sessionId not found or no active runtime — open the session in the UI first' }));
+    return;
+  }
+
+  let logText;
+  try {
+    logText = await readFile(`${LOG_DIR}/${sourceId}/log.jsonl`, 'utf8');
+  } catch {
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: `source session ${sourceId} not found` }));
+    return;
+  }
+
+  const outEvents = logText.trim().split('\n')
+    .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+    .filter((e) => e && e.dir === 'out');
+
+  if (outEvents.length === 0) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'no outbound events in source session' }));
+    return;
+  }
+
+  const t0 = new Date(outEvents[0].ts).getTime();
+  const timers = [];
+  for (const event of outEvents) {
+    const delay = Math.round((new Date(event.ts).getTime() - t0) / speed);
+    // Strip log-only fields before broadcasting
+    const { ts, dir, ...payload } = event;
+    timers.push(setTimeout(() => broadcast(runtime, payload), delay));
+  }
+
+  const totalDurationMs = Math.round((new Date(outEvents[outEvents.length - 1].ts).getTime() - t0) / speed);
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({
+    ok: true,
+    source: sourceId,
+    events: outEvents.length,
+    speed,
+    totalDurationMs,
+  }));
+}
+
+// Fake COMPLEX flow for progress-bar visual testing. Injects a simulated
+// 2-wave COMPLEX sequence into an existing session's runtime without spawning
+// real Claude agents. Query params: sessionId (required), step (ms per beat,
+// default 2000). Returns { sessionId } so the caller can navigate to it.
+async function handleFakeComplex(req, res) {
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  const sessionId = url.searchParams.get('sessionId');
+  const step = Math.max(500, parseInt(url.searchParams.get('step') || '2000', 10));
+
+  const runtime = sessionId ? runtimes.get(sessionId) : null;
+  if (!runtime) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'sessionId not found or no active runtime — open the session in the UI first' }));
+    return;
+  }
+
+  const { updateProgressBar } = await import('./progress-bar.ts');
+
+  // Reset turn stats
+  runtime.stats.agentsCompleted = 0;
+  runtime.stats.flowExpected = 0;
+  runtime.stats.dispatchedSubagentTypes = [];
+  runtime.stats.activeAgentIds = new Set();
+  runtime.stats.activeAgents = 0;
+
+  // Kick off the working UI
+  broadcast(runtime, { type: 'status', working: true });
+
+  // waves: 2 waves × 3 tickets each = 6 tickets total → flowExpected = 2 + 6×3 + 1 = 21
+  const FAKE_TICKETS = 6;
+  const dispatch = (type) => {
+    runtime.stats.dispatchedSubagentTypes.push(type);
+    if (runtime.stats.flowExpected === 0) runtime.stats.flowExpected = 5; // provisional until planner done
+    updateProgressBar(runtime);
+  };
+  const complete = () => {
+    runtime.stats.agentsCompleted++;
+    // Simulate planner completion: lock flowExpected to exact ticket count
+    if (runtime.stats.agentsCompleted === 1 && runtime.stats.dispatchedSubagentTypes[0] === 'planner') {
+      runtime.stats.flowExpected = 2 + FAKE_TICKETS * 3 + 1;
+    }
+    updateProgressBar(runtime);
+  };
+
+  const S = step;
+  // Sequence: orchestrator → planner → wave1(3×dev+qr+tv) → wave2(3×dev+qr+tv) → merger
+  setTimeout(() => dispatch('planner'),          1 * S);
+  setTimeout(() => complete(),                   2 * S);   // planner done → flowExpected locked to 21
+  // Wave 1: 3 tickets in parallel (dev+qr+tv each)
+  setTimeout(() => dispatch('developer'),        2.5 * S);
+  setTimeout(() => dispatch('quality-reviewer'), 2.7 * S);
+  setTimeout(() => dispatch('test-validator'),   2.9 * S);
+  setTimeout(() => dispatch('developer'),        3.1 * S);
+  setTimeout(() => dispatch('quality-reviewer'), 3.3 * S);
+  setTimeout(() => dispatch('test-validator'),   3.5 * S);
+  setTimeout(() => dispatch('developer'),        3.7 * S);
+  setTimeout(() => dispatch('quality-reviewer'), 3.9 * S);
+  setTimeout(() => dispatch('test-validator'),   4.1 * S);
+  // Wave 1 completions
+  setTimeout(() => complete(),                   6 * S);
+  setTimeout(() => complete(),                   6.3 * S);
+  setTimeout(() => complete(),                   6.6 * S);
+  setTimeout(() => complete(),                   6.9 * S);
+  setTimeout(() => complete(),                   7.2 * S);
+  setTimeout(() => complete(),                   7.5 * S);
+  setTimeout(() => complete(),                   7.8 * S);
+  setTimeout(() => complete(),                   8.1 * S);
+  setTimeout(() => complete(),                   8.4 * S);
+  // Wave 2: 3 more tickets
+  setTimeout(() => dispatch('developer'),        8.6 * S);
+  setTimeout(() => dispatch('quality-reviewer'), 8.8 * S);
+  setTimeout(() => dispatch('test-validator'),   9.0 * S);
+  setTimeout(() => dispatch('developer'),        9.2 * S);
+  setTimeout(() => dispatch('quality-reviewer'), 9.4 * S);
+  setTimeout(() => dispatch('test-validator'),   9.6 * S);
+  setTimeout(() => dispatch('developer'),        9.8 * S);
+  setTimeout(() => dispatch('quality-reviewer'), 10.0 * S);
+  setTimeout(() => dispatch('test-validator'),   10.2 * S);
+  // Wave 2 completions
+  setTimeout(() => complete(),                   12 * S);
+  setTimeout(() => complete(),                   12.3 * S);
+  setTimeout(() => complete(),                   12.6 * S);
+  setTimeout(() => complete(),                   12.9 * S);
+  setTimeout(() => complete(),                   13.2 * S);
+  setTimeout(() => complete(),                   13.5 * S);
+  setTimeout(() => complete(),                   13.8 * S);
+  setTimeout(() => complete(),                   14.1 * S);
+  setTimeout(() => complete(),                   14.4 * S);
+  // Merger
+  setTimeout(() => dispatch('merger'),           14.6 * S);
+  setTimeout(() => complete(),                   16 * S);
+  setTimeout(() => broadcast(runtime, { type: 'status', working: false }), 16.5 * S);
+
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ ok: true, sessionId, totalDurationMs: 16.5 * S }));
+}
+
 export function createRequestHandler({ publicDir }) {
   return async (req, res) => {
     if (req.url === '/api/mode' && req.method === 'GET') return handleGetMode(req, res);
@@ -223,6 +398,9 @@ export function createRequestHandler({ publicDir }) {
     if (req.url === '/api/deploy/configure' && req.method === 'POST') return handleConfigureDeploy(req, res);
     if (req.url === '/api/deploy/run' && req.method === 'POST') return handleDeployRun(req, res);
     if (req.url?.startsWith('/api/stats')) return handleStatsRequest(req, res);
+    if (req.url?.startsWith('/api/debug/synthetic-session') && req.method === 'GET') return handleSyntheticSession(req, res);
+    if (req.url?.startsWith('/api/debug/replay') && req.method === 'GET') return handleReplay(req, res);
+    if (req.url?.startsWith('/api/debug/fake-complex') && req.method === 'GET') return handleFakeComplex(req, res);
 
     const commitsMatch = req.url?.match(/^\/api\/sessions\/([0-9a-f-]+)\/commits$/i);
     if (commitsMatch && req.method === 'GET') {

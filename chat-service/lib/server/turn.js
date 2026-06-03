@@ -45,6 +45,8 @@ export async function processMessage(runtime, prompt, opts = {}) {
     agentsCompleted: 0,
     flowExpected: 0,
     dispatchedSubagentTypes: [],
+    activeAgentIds: new Set(),
+    activeAgents: 0,
   };
   updateProgressBar(runtime);
 
@@ -210,6 +212,23 @@ export async function processMessage(runtime, prompt, opts = {}) {
             runtime.stats.activeAgentIds.delete(event.task_id);
             runtime.stats.activeAgents = runtime.stats.activeAgentIds.size;
             runtime.stats.agentsCompleted++;
+            // When the planner completes (first agent done in a COMPLEX flow),
+            // count the TASK-*.json files it produced and lock flowExpected to
+            // the exact total so the bar never backtracks between waves:
+            //   2 (orchestrator + planner) + N_tickets × 3 (dev+qr+tv) + 1 (merger)
+            if (runtime.stats.agentsCompleted === 1
+                && runtime.stats.dispatchedSubagentTypes[0] === 'planner') {
+              try {
+                const sessionDir = `${LOG_DIR}/${runtime.session.id}`;
+                const entries = await readdir(sessionDir);
+                const ticketCount = entries.filter((e) => /^TASK-\d+\.json$/i.test(e)).length;
+                if (ticketCount > 0) {
+                  // flowExpected counts only dispatched subagents (NOT orchestrator).
+                  // Formula: planner(1) + N_tickets × 3(dev+qr+tv) + 1 merger.
+                  runtime.stats.flowExpected = 1 + ticketCount * 3 + 1;
+                }
+              } catch {}
+            }
             sendStats(runtime);
             updateProgressBar(runtime);
           }
@@ -247,9 +266,12 @@ export async function processMessage(runtime, prompt, opts = {}) {
           // cost: total_cost_usd is cumulative within the current spawn — replace,
           // don't add (summing cumulative values inflates massively).
           runtime.stats.costUsdCurrentSpawn = event.total_cost_usd || 0;
-          // Reset active agents when turn ends (safety — sub-agents should all be done)
-          runtime.stats.activeAgents = 0;
-          runtime.stats.activeAgentIds.clear();
+          // Do NOT clear activeAgentIds here. In COMPLEX, `result` fires for each
+          // subagent as it finishes (not just once at the end of the turn), so
+          // clearing on every `result` wipes in-process-teammate agents before
+          // their task_notification/completed arrives — agentsCompleted then never
+          // increments past orchestrator+planner and the progress bar stalls at ~15%.
+          // Let completions drain activeAgentIds naturally via task_notification.
           sendStats(runtime);
           // Do NOT break here. For SIMPLE the process closes right after `result`
           // so the loop ends on its own. For COMPLEX the autonomous team keeps

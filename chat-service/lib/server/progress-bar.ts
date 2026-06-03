@@ -84,9 +84,30 @@ function buildSteps(runtime: { stats: RuntimeStats }): Step[] {
     const completedCount = Math.min(dispatched, completed);
     const predictedNotDispatched = Math.max(0, expected - dispatched);
     const plan = FLOW_PLANS[dispatchedTypes[0]];
-    const upcomingAgents: RoleType[] = plan
-        ? plan.slice(dispatched, dispatched + predictedNotDispatched)
-        : new Array(predictedNotDispatched).fill(Roles.UNKNOWN);
+    // For multi-ticket COMPLEX the plan template only covers 1 ticket (5 steps).
+    // When predictedNotDispatched exceeds what remains in the template, extend
+    // with the repeating per-ticket wave pattern (dev+qr+tv) so the bar shows
+    // the correct total without capping at 6 or back-tracking between waves.
+    const planSlice = plan ? plan.slice(dispatched, dispatched + predictedNotDispatched) : [];
+    const overflow = predictedNotDispatched - planSlice.length;
+    const wavePattern: RoleType[] = [Roles.DEVELOPER, Roles.QUALITY_REVIEWER, Roles.TEST_VALIDATOR];
+    let upcomingAgents: RoleType[];
+    if (overflow <= 0) {
+        upcomingAgents = planSlice;
+    } else {
+        // Multi-ticket COMPLEX: extend beyond the plan template with the repeating
+        // dev+qr+tv wave pattern. The plan may contain a 'merger' step in the middle
+        // (FLOW_PLANS['planner'] ends with merger) — pull it out and put it last so
+        // the bar never shows a lone merger segment floating between wave agents.
+        const planWithoutMerger = planSlice.filter((r) => r !== Roles.MERGER);
+        const hasMerger = planSlice.includes(Roles.MERGER);
+        const slots = predictedNotDispatched - planWithoutMerger.length - (hasMerger ? 1 : 0);
+        upcomingAgents = [
+            ...planWithoutMerger,
+            ...Array.from({ length: Math.max(0, slots) }, (_, i) => wavePattern[i % wavePattern.length]),
+            ...(hasMerger ? [Roles.MERGER] : []),
+        ];
+    }
 
     return [
         {

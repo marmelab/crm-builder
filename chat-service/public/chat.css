@@ -564,6 +564,16 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
 .msg-working-progress-step.is-done .msg-working-progress-step-mask {
   transform: scaleX(0);
 }
+/* While in_progress: slowly fill the segment toward ~95% over the estimated
+   duration, using an ease-out curve so it looks active early then gracefully
+   decelerates — never quite reaching 0 so it can't be mistaken for done.
+   When the step becomes done, the is-done rule + transition finish the last 5%. */
+.msg-working-progress-step.is-in_progress .msg-working-progress-step-mask {
+  animation: maskProgress var(--fill-duration, 60s) cubic-bezier(0.33, 1, 0.68, 1) forwards;
+}
+@keyframes maskProgress {
+  to { transform: scaleX(0.05); }
+}
 @keyframes barStripes {
   from { background-position: 0 0; }
   to   { background-position: 11.31px 0; }
