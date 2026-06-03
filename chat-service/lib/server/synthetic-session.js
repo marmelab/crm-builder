@@ -15,7 +15,7 @@ import { LOG_DIR } from './config.js';
 import { openSession } from './session-store.js';
 import { createRuntime, runtimes } from './runtime.js';
 import { broadcast } from './ws-bus.js';
-import { updateProgressBar } from './progress-bar.ts';
+import { updateProgressBar, flowExpectedForTickets, WAVE_PATTERN } from './progress-bar.ts';
 
 function uid() { return randomBytes(6).toString('hex'); }
 
@@ -99,6 +99,22 @@ function makeAgent(subagentType, ticketId, teamName) {
   return { toolUseId: 'toolu_' + uid(), taskId: uid(), subagentType, name, teamName: teamName ?? null };
 }
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function buildTicketJson(t) {
+  return {
+    ticket_id: t.id,
+    title: t.title,
+    description: `Synthetic ticket: ${t.title}`,
+    type: 'fix',
+    risk_level: 'low',
+    files_to_modify: [`src/${t.id.toLowerCase().replace('-', '_')}.tsx`],
+    dependencies: t.deps,
+    parallel_safe: t.deps.length === 0,
+    status: 'pending',
+  };
+}
+
 // ─── Scheduler ────────────────────────────────────────────────────────────────
 
 function scheduleEvents(runtime, tickets, speed, sessionDir, initialDelayMs = 3000) {
@@ -146,9 +162,7 @@ function scheduleEvents(runtime, tickets, speed, sessionDir, initialDelayMs = 30
     for (const id of ready) remaining.delete(id);
   }
 
-  // flowExpected counts dispatched subagents only (NOT orchestrator):
-  // planner(1) + N_tickets×3(dev+qr+tv) + 1 merger per wave
-  const flowExpectedValue = 1 + N * 3 + waves.length;
+  const flowExpectedValue = flowExpectedForTickets(N, waves.length);
 
   // ── Orchestrator phase (T=0–8s) ──────────────────────────────────────────
   // status:working MUST fire before the first progress event — it resets
@@ -226,47 +240,35 @@ function scheduleEvents(runtime, tickets, speed, sessionDir, initialDelayMs = 30
     const QR_WORK  = 25;
     const TV_WORK  = 40;
 
-    // Developer completions
-    devAgents.forEach((a, i) => {
-      const t = workBase + DEV_WORK + i * 8;
-      atDebug(t, taskCompletedEvent(a, { inputTokens: 18000, outputTokens: 4500, cacheCreationInputTokens: 6000, cacheReadInputTokens: 95000 }));
-      setTimeout(() => {
-        runtime.stats.activeAgentIds.delete(a.taskId);
-        runtime.stats.activeAgents = runtime.stats.activeAgentIds.size;
-        runtime.stats.agentsCompleted++;
-        updateProgressBar(runtime);
-      }, ms(t));
-      atStats(t + 1, 80000 + waveIdx * 40000 + i * 15000, allWaveAgents.length - i - 1, 0.65 + waveIdx * 0.3 + i * 0.12);
-    });
+    const completeAgents = (agents, baseT, spacing, usage) => {
+      agents.forEach((a, i) => {
+        const t = baseT + i * spacing;
+        atDebug(t, taskCompletedEvent(a, usage));
+        setTimeout(() => {
+          runtime.stats.activeAgentIds.delete(a.taskId);
+          runtime.stats.activeAgents = runtime.stats.activeAgentIds.size;
+          runtime.stats.agentsCompleted++;
+          updateProgressBar(runtime);
+        }, ms(t));
+      });
+      return baseT + (agents.length - 1) * spacing;
+    };
 
-    // QR completions (start after last dev + QR_WORK)
-    const qrBase = workBase + DEV_WORK + (devAgents.length - 1) * 8 + QR_WORK;
-    qrAgents.forEach((a, i) => {
-      const t = qrBase + i * 6;
-      atDebug(t, taskCompletedEvent(a, { inputTokens: 6500, outputTokens: 1200, cacheCreationInputTokens: 0, cacheReadInputTokens: 55000 }));
-      setTimeout(() => {
-        runtime.stats.activeAgentIds.delete(a.taskId);
-        runtime.stats.activeAgents = runtime.stats.activeAgentIds.size;
-        runtime.stats.agentsCompleted++;
-        updateProgressBar(runtime);
-      }, ms(t));
-    });
+    const devEnd = completeAgents(devAgents, workBase + DEV_WORK, 8,
+      { inputTokens: 18000, outputTokens: 4500, cacheCreationInputTokens: 6000, cacheReadInputTokens: 95000 });
+    devAgents.forEach((_, i) =>
+      atStats(workBase + DEV_WORK + i * 8 + 1, 80000 + waveIdx * 40000 + i * 15000, allWaveAgents.length - i - 1, 0.65 + waveIdx * 0.3 + i * 0.12));
 
-    // TV completions
-    const tvBase = qrBase + (qrAgents.length - 1) * 6 + TV_WORK;
-    tvAgents.forEach((a, i) => {
-      const t = tvBase + i * 6;
-      atDebug(t, taskCompletedEvent(a, { inputTokens: 4200, outputTokens: 900, cacheCreationInputTokens: 0, cacheReadInputTokens: 32000 }));
-      setTimeout(() => {
-        runtime.stats.activeAgentIds.delete(a.taskId);
-        runtime.stats.activeAgents = runtime.stats.activeAgentIds.size;
-        runtime.stats.agentsCompleted++;
-        updateProgressBar(runtime);
-      }, ms(t));
-    });
+    const qrBase = devEnd + QR_WORK;
+    const qrEnd = completeAgents(qrAgents, qrBase, 6,
+      { inputTokens: 6500, outputTokens: 1200, cacheCreationInputTokens: 0, cacheReadInputTokens: 55000 });
+
+    const tvBase = qrEnd + TV_WORK;
+    const tvEnd = completeAgents(tvAgents, tvBase, 6,
+      { inputTokens: 4200, outputTokens: 900, cacheCreationInputTokens: 0, cacheReadInputTokens: 32000 });
 
     // Merger
-    const mergerT = tvBase + (tvAgents.length - 1) * 6 + 15;
+    const mergerT = tvEnd + 15;
     atDebug(mergerT, taskCompletedEvent(mergerAgent, { inputTokens: 3200, outputTokens: 600, cacheCreationInputTokens: 0, cacheReadInputTokens: 22000 }));
     setTimeout(async () => {
       runtime.stats.activeAgentIds.delete(mergerAgent.taskId);
@@ -276,14 +278,14 @@ function scheduleEvents(runtime, tickets, speed, sessionDir, initialDelayMs = 30
       updateProgressBar(runtime);
       // Update wave tickets to 'merged' on disk so /api/stats shows them green
       if (sessionDir) {
-        for (const t of waveTickets) {
+        await Promise.all(waveTickets.map(async (t) => {
           try {
             const path = `${sessionDir}/${t.id}.json`;
             const data = JSON.parse(await readFile(path, 'utf8'));
             data.status = 'merged';
             await writeFile(path, JSON.stringify(data, null, 2));
           } catch {}
-        }
+        }));
       }
     }, ms(mergerT));
 
@@ -324,19 +326,9 @@ export async function createSyntheticSession({ scenario = 'simple3', speed = 20 
   runtimes.set(sessionId, runtime);
 
   // Write TASK-*.json files (needed by /api/stats waves section)
-  for (const t of tickets) {
-    await writeFile(`${sessionDir}/${t.id}.json`, JSON.stringify({
-      ticket_id: t.id,
-      title: t.title,
-      description: `Synthetic ticket: ${t.title}`,
-      type: 'fix',
-      risk_level: 'low',
-      files_to_modify: [`src/${t.id.toLowerCase().replace('-', '_')}.tsx`],
-      dependencies: t.deps,
-      parallel_safe: t.deps.length === 0,
-      status: 'pending',
-    }, null, 2));
-  }
+  await Promise.all(tickets.map((t) =>
+    writeFile(`${sessionDir}/${t.id}.json`, JSON.stringify(buildTicketJson(t), null, 2))));
+
 
   // Log user message (dir:'in') and update meta
   session.logWrite('in', { type: 'user_message', content: userMessage });
@@ -362,19 +354,8 @@ export async function runFakeTurn(runtime, { scenario = 'simple3', speed = 20 } 
   const sessionDir = `${LOG_DIR}/${session.id}`;
 
   // Write / overwrite TASK-*.json for this scenario
-  for (const t of tickets) {
-    await writeFile(`${sessionDir}/${t.id}.json`, JSON.stringify({
-      ticket_id: t.id,
-      title: t.title,
-      description: `Synthetic ticket: ${t.title}`,
-      type: 'fix',
-      risk_level: 'low',
-      files_to_modify: [`src/${t.id.toLowerCase().replace('-', '_')}.tsx`],
-      dependencies: t.deps,
-      parallel_safe: t.deps.length === 0,
-      status: 'pending',
-    }, null, 2));
-  }
+  await Promise.all(tickets.map((t) =>
+    writeFile(`${sessionDir}/${t.id}.json`, JSON.stringify(buildTicketJson(t), null, 2))));
 
   // Reset per-turn stats (mirrors the reset at the top of turn.js)
   runtime.stats.agentsCompleted = 0;

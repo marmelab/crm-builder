@@ -15,6 +15,11 @@ import { LOG_DIR } from './config.js';
 import { runtimes } from './runtime.js';
 import { broadcast } from './ws-bus.js';
 
+const jsonError = (res, code, msg) => {
+  res.writeHead(code, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ error: msg }));
+};
+
 async function handleSyntheticSession(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const scenario = url.searchParams.get('scenario') || 'simple3';
@@ -25,8 +30,7 @@ async function handleSyntheticSession(req, res) {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ...result, url: `/sessions/${result.sessionId}` }));
   } catch (err) {
-    res.writeHead(400, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: err.message }));
+    jsonError(res, 400, err.message);
   }
 }
 
@@ -36,33 +40,20 @@ async function handleReplay(req, res) {
   const sourceId = url.searchParams.get('source');
   const speed    = Math.max(1, Math.min(200, parseFloat(url.searchParams.get('speed') || '20')));
 
-  if (!sourceId) {
-    res.writeHead(400, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'source param required — pass ?source=<sessionId>' }));
-    return;
-  }
+  if (!sourceId) return jsonError(res, 400, 'source param required — pass ?source=<sessionId>');
   const runtime = targetId ? runtimes.get(targetId) : null;
-  if (!runtime) {
-    res.writeHead(400, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'sessionId not found or no active runtime — open the session in the UI first' }));
-    return;
-  }
+  if (!runtime) return jsonError(res, 400, 'sessionId not found or no active runtime — open the session in the UI first');
+
   let logText;
   try {
     logText = await readFile(`${LOG_DIR}/${sourceId}/log.jsonl`, 'utf8');
   } catch {
-    res.writeHead(404, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: `source session ${sourceId} not found` }));
-    return;
+    return jsonError(res, 404, `source session ${sourceId} not found`);
   }
   const outEvents = logText.trim().split('\n')
     .map((l) => { try { return JSON.parse(l); } catch { return null; } })
     .filter((e) => e && e.dir === 'out');
-  if (outEvents.length === 0) {
-    res.writeHead(400, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'no outbound events in source session' }));
-    return;
-  }
+  if (outEvents.length === 0) return jsonError(res, 400, 'no outbound events in source session');
   const t0 = new Date(outEvents[0].ts).getTime();
   for (const event of outEvents) {
     const delay = Math.round((new Date(event.ts).getTime() - t0) / speed);

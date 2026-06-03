@@ -11,10 +11,11 @@ import { startSubagentTailer, stopSubagentTailer } from './subagent-tail.js';
 import {
   emptyBreakdown, addBreakdown, breakdownFromModelUsage, costFromBreakdown,
 } from '../stats/io.js';
-import { updateProgressBar, predictedFlowExpected } from './progress-bar.ts';
+import { updateProgressBar, predictedFlowExpected, flowExpectedForTickets } from './progress-bar.ts';
 import {
   sessionHasMergedTickets, scheduleDocumentatorRun, clearDocumentatorTimer,
 } from './documentator-spawn.js';
+import { countSessionTickets } from './session-store.js';
 
 const AGENT_DISPATCH_TOOLS = new Set(['Agent', 'Task']);
 
@@ -218,16 +219,11 @@ export async function processMessage(runtime, prompt, opts = {}) {
             //   2 (orchestrator + planner) + N_tickets × 3 (dev+qr+tv) + 1 (merger)
             if (runtime.stats.agentsCompleted === 1
                 && runtime.stats.dispatchedSubagentTypes[0] === 'planner') {
-              try {
-                const sessionDir = `${LOG_DIR}/${runtime.session.id}`;
-                const entries = await readdir(sessionDir);
-                const ticketCount = entries.filter((e) => /^TASK-\d+\.json$/i.test(e)).length;
-                if (ticketCount > 0) {
-                  // flowExpected counts only dispatched subagents (NOT orchestrator).
-                  // Formula: planner(1) + N_tickets × 3(dev+qr+tv) + 1 merger.
-                  runtime.stats.flowExpected = 1 + ticketCount * 3 + 1;
-                }
-              } catch {}
+              const sessionDir = `${LOG_DIR}/${runtime.session.id}`;
+              const ticketCount = await countSessionTickets(sessionDir);
+              if (ticketCount > 0) {
+                runtime.stats.flowExpected = flowExpectedForTickets(ticketCount);
+              }
             }
             sendStats(runtime);
             updateProgressBar(runtime);

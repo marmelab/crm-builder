@@ -59,6 +59,9 @@ const AGENT_DURATIONS_MS: Record<RoleType, number> = {
 
 const PARALLEL_ROLES: Set<RoleType> = new Set([Roles.DEVELOPER, Roles.QUALITY_REVIEWER, Roles.TEST_VALIDATOR]);
 
+// Per-ticket wave agent sequence used both for step prediction and synthetic sessions.
+export const WAVE_PATTERN: RoleType[] = [Roles.DEVELOPER, Roles.QUALITY_REVIEWER, Roles.TEST_VALIDATOR];
+
 const FLOW_PLANS: Partial<Record<RoleType, RoleType[]>> = {
     [Roles.DOCUMENTATOR]: [Roles.DOCUMENTATOR],
     // SIMPLE
@@ -91,7 +94,6 @@ function buildSteps(runtime: { stats: RuntimeStats }): Step[] {
     // the correct total without capping at 6 or back-tracking between waves.
     const planSlice = plan ? plan.slice(dispatched, dispatched + predictedNotDispatched) : [];
     const overflow = predictedNotDispatched - planSlice.length;
-    const wavePattern: RoleType[] = [Roles.DEVELOPER, Roles.QUALITY_REVIEWER, Roles.TEST_VALIDATOR];
     let upcomingAgents: RoleType[];
     if (overflow <= 0) {
         upcomingAgents = planSlice;
@@ -105,7 +107,7 @@ function buildSteps(runtime: { stats: RuntimeStats }): Step[] {
         const slots = predictedNotDispatched - planWithoutMerger.length - (hasMerger ? 1 : 0);
         upcomingAgents = [
             ...planWithoutMerger,
-            ...Array.from({ length: Math.max(0, slots) }, (_, i) => wavePattern[i % wavePattern.length]),
+            ...Array.from({ length: Math.max(0, slots) }, (_, i) => WAVE_PATTERN[i % WAVE_PATTERN.length]),
             ...(hasMerger ? [Roles.MERGER] : []),
         ];
     }
@@ -169,4 +171,9 @@ const renderProgressBar = (
 export const predictedFlowExpected = (subagentType: RoleType): number => {
   return FLOW_PLANS[subagentType]?.length || 0;
 }
+
+// flowExpected after planner completes: dispatched subagents only (NOT orchestrator).
+// Formula: planner(1) + ticketCount×3(dev+qr+tv) + waveCount×1(merger).
+export const flowExpectedForTickets = (ticketCount: number, waveCount = 1): number =>
+  1 + ticketCount * 3 + waveCount;
 

@@ -14,12 +14,23 @@ import {
 // so the resume must spawn fresh and re-evaluate real state instead. Takes the
 // session dir (not an id) so it's testable without LOG_DIR coupling — mirrors
 // sessionHasMergedTickets in documentator-spawn.js.
+const TASK_FILE_RE = /^TASK-\d+\.json$/i;
+
 export async function sessionHasTickets(sessionDir) {
   try {
     const entries = await readdir(sessionDir);
-    return entries.some((e) => /^TASK-\d+\.json$/i.test(e));
+    return entries.some((e) => TASK_FILE_RE.test(e));
   } catch {
     return false;
+  }
+}
+
+export async function countSessionTickets(sessionDir) {
+  try {
+    const entries = await readdir(sessionDir);
+    return entries.filter((e) => TASK_FILE_RE.test(e)).length;
+  } catch {
+    return 0;
   }
 }
 
