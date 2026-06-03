@@ -301,6 +301,7 @@ function scheduleEvents(runtime, tickets, speed, sessionDir, initialDelayMs = 30
   at(endT + 3, { type: 'state', state: 'completed' });
   setTimeout(() => {
     runtime.session.setState('completed').catch(() => {});
+    runtime.stats.durationScale = 1; // restore real durations
     runtime.busy = false;
   }, ms(endT + 3));
 }
@@ -381,6 +382,8 @@ export async function runFakeTurn(runtime, { scenario = 'simple3', speed = 20 } 
   runtime.stats.dispatchedSubagentTypes = [];
   runtime.stats.activeAgentIds = new Set();
   runtime.stats.activeAgents = 0;
+  // Scale animation durations so in_progress segments visually animate at fake speed
+  runtime.stats.durationScale = 1 / speed;
 
   // Schedule all events — WS already connected so no initial delay needed
   scheduleEvents(runtime, tickets, speed, sessionDir, 0);

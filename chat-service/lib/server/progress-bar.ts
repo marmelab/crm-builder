@@ -18,6 +18,7 @@ type RuntimeStats = {
     dispatchedSubagentTypes: RoleType[];
     agentsCompleted: number;
     flowExpected: number;
+    durationScale?: number; // 1/speed in fake/test mode so animations match actual elapsed time
 };
 
 // ------------------------------------------------- 
@@ -79,7 +80,7 @@ export const updateProgressBar = (runtime: { stats: RuntimeStats }, targetWs: un
 
 // Extract the steps with their status and estimated durations from the runtime stats
 function buildSteps(runtime: { stats: RuntimeStats }): Step[] {
-    const { dispatchedSubagentTypes: dispatchedTypes, agentsCompleted: completed, flowExpected: expected } = runtime.stats;
+    const { dispatchedSubagentTypes: dispatchedTypes, agentsCompleted: completed, flowExpected: expected, durationScale = 1 } = runtime.stats;
     const dispatched = dispatchedTypes.length;
     const completedCount = Math.min(dispatched, completed);
     const predictedNotDispatched = Math.max(0, expected - dispatched);
@@ -109,24 +110,25 @@ function buildSteps(runtime: { stats: RuntimeStats }): Step[] {
         ];
     }
 
+    const dur = (role: RoleType) => Math.round(durationFor(role) * durationScale);
     return [
         {
             role: Roles.ORCHESTRATOR,
             status: dispatched > 0 ? Statuses.DONE : Statuses.IN_PROGRESS,
-            durationMs: durationFor(Roles.ORCHESTRATOR),
+            durationMs: dur(Roles.ORCHESTRATOR),
         },
         ...dispatchedTypes.map((role, i) => {
             const inProgress = i >= completedCount;
             return {
                 role,
                 status: inProgress ? Statuses.IN_PROGRESS : Statuses.DONE,
-                durationMs: durationFor(role),
+                durationMs: dur(role),
             };
         }),
         ...upcomingAgents.map((role) => ({
             role,
             status: Statuses.PENDING,
-            durationMs: durationFor(role),
+            durationMs: dur(role),
         })),
     ];
 }
