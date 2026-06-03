@@ -123,6 +123,11 @@ function scheduleEvents(runtime, tickets, speed, sessionDir, initialDelayMs = 30
   // browser has time to navigate; 0 for /fake command where WS is already open).
   const ms = (seconds) => initialDelayMs + Math.round(seconds * 1000 / speed);
 
+  // Scale animation durations so in_progress segments visually fill at fake speed.
+  // Set here (not in each caller) so both createSyntheticSession and runFakeTurn
+  // get scaled animations without duplicating the assignment.
+  runtime.stats.durationScale = 1 / speed;
+
   function at(seconds, payload) {
     setTimeout(() => broadcast(runtime, payload), ms(seconds));
   }
@@ -363,8 +368,6 @@ export async function runFakeTurn(runtime, { scenario = 'simple3', speed = 20 } 
   runtime.stats.dispatchedSubagentTypes = [];
   runtime.stats.activeAgentIds = new Set();
   runtime.stats.activeAgents = 0;
-  // Scale animation durations so in_progress segments visually animate at fake speed
-  runtime.stats.durationScale = 1 / speed;
 
   // Schedule all events — WS already connected so no initial delay needed
   scheduleEvents(runtime, tickets, speed, sessionDir, 0);

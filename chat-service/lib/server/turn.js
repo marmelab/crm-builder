@@ -15,7 +15,7 @@ import { updateProgressBar, predictedFlowExpected, flowExpectedForTickets } from
 import {
   sessionHasMergedTickets, scheduleDocumentatorRun, clearDocumentatorTimer,
 } from './documentator-spawn.js';
-import { countSessionTickets } from './session-store.js';
+import { loadTicketsAndWaves } from '../stats/tickets.js';
 
 const AGENT_DISPATCH_TOOLS = new Set(['Agent', 'Task']);
 
@@ -220,9 +220,9 @@ export async function processMessage(runtime, prompt, opts = {}) {
             if (runtime.stats.agentsCompleted === 1
                 && runtime.stats.dispatchedSubagentTypes[0] === 'planner') {
               const sessionDir = `${LOG_DIR}/${runtime.session.id}`;
-              const ticketCount = await countSessionTickets(sessionDir);
-              if (ticketCount > 0) {
-                runtime.stats.flowExpected = flowExpectedForTickets(ticketCount);
+              const result = await loadTicketsAndWaves(sessionDir);
+              if (result && result.tickets.length > 0) {
+                runtime.stats.flowExpected = flowExpectedForTickets(result.tickets.length, result.waves.length);
               }
             }
             sendStats(runtime);
