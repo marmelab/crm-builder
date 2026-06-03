@@ -1,10 +1,15 @@
 // Drives the Deploy button + Configure/Progress modal.
 //
 // Server contract:
-//   GET  /api/deploy/status     → { configured, projectRef, ..., running, tail }
+//   GET  /api/deploy/status     → { configured, supabaseComplete, projectRef, cloudflareConfigured, cloudflareAccountId, cloudflareTokenStored, ..., running, tail }
 //   GET  /api/deploy/events      → SSE stream (see below)
 //   POST /api/deploy/configure  → 200 with same shape  | 400 { errors }
 //   POST /api/deploy/run        → 202 { deployId }     | 409 { error }  | 412 { error: 'not_configured' }
+//
+// A deploy requires BOTH targets: Supabase (backend) AND Cloudflare (frontend,
+// API token + account ID). The deploy builds the app and publishes it to a
+// Cloudflare Workers static-assets Worker after the Supabase push. The Supabase
+// URL is not entered — it's derived from the project ref (<ref>.supabase.co).
 //
 // Live progress rides a dedicated SSE channel (NOT the chat WebSocket): deploy
 // is cross-session global state and the modal lives in the always-visible
@@ -21,9 +26,16 @@ import { openConfirmModal } from '../sessions/new_session_modal.js';
 
 let state = {
   configured: false,
+  // The Supabase half is fully filled in (deploy-ready). Distinct from
+  // `configured` (a config file merely exists): the form allows partial saves,
+  // so a draft can be configured-but-incomplete.
+  supabaseComplete: false,
   running: false,
   expectedSecrets: [],
   configuredSecrets: [],
+  // Top-level secret fields already stored (names only) → drives the per-field
+  // "leave blank to keep" placeholder after a partial save.
+  configuredSecretFields: [],
 };
 
 let elements = null;
@@ -37,24 +49,36 @@ let originalPlaceholders = {};
 
 function $(sel) { return document.querySelector(sel); }
 
+// A deploy needs BOTH targets fully filled in: Supabase (the backend) and
+// Cloudflare (the frontend). A partial draft does NOT count — `supabaseComplete`
+// (every Supabase field present), not merely `configured` (a file exists). When
+// either target is incomplete, the Deploy button instead forces the configure
+// form open so the user finishes the setup before deploying.
+function isFullyConfigured() {
+  return state.supabaseComplete && state.cloudflareConfigured;
+}
+
 function refreshButtonLabel() {
   if (!elements?.btn) return;
   const label = elements.btnLabel;
+  const ready = isFullyConfigured();
   if (state.running) {
     elements.btn.classList.add('deploy-btn-running');
     if (label) label.textContent = 'Deploying…';
     elements.btn.title = 'A deploy is in progress';
   } else {
     elements.btn.classList.remove('deploy-btn-running');
-    if (label) label.textContent = state.configured ? 'Deploy' : 'Configure Supabase';
-    elements.btn.title = state.configured ? 'Deploy to Supabase' : 'Configure Supabase';
+    if (label) label.textContent = ready ? 'Deploy' : 'Configure deployment';
+    elements.btn.title = ready ? 'Deploy' : 'Configure deployment';
   }
-  // The Edit affordance only makes sense once configured and while idle.
-  if (elements.editBtn) elements.editBtn.hidden = !(state.configured && !state.running);
+  // The Edit affordance only makes sense once fully configured and while idle —
+  // otherwise the main button already opens the configure form.
+  if (elements.editBtn) elements.editBtn.hidden = !(ready && !state.running);
   // Mid-deploy the modal is non-dismissable (see close handlers) — hide the ✕
   // so it doesn't look clickable while it's inert.
   if (elements.modalClose) elements.modalClose.hidden = state.running;
   refreshDashboardLink();
+  refreshConfigChips();
 }
 
 // Point the "Open Supabase dashboard" link at the configured project, shown
@@ -71,9 +95,11 @@ function refreshDashboardLink() {
 }
 
 // Prefill the configure form for the current state. Non-secret fields are
-// shown (they're not sensitive); secret fields stay blank — on edit they get a
-// "leave blank to keep" placeholder and lose their `required` flag, on first
-// configure they keep their original placeholder and stay required.
+// shown (they're not sensitive); secret fields stay blank. No field is
+// `required` — the form persists partial input so the user can fill it across
+// several sittings (the Deploy button stays gated until it's complete). A
+// secret that is already stored gets a "leave blank to keep" placeholder; one
+// that isn't keeps its original example placeholder.
 function prefillForm() {
   const form = elements.form;
   if (!form) return;
@@ -82,22 +108,28 @@ function prefillForm() {
     if (el) el.value = val ?? '';
   };
   setVal('projectRef', state.projectRef);
-  setVal('supabaseUrl', state.supabaseUrl);
+  setVal('cloudflareAccountId', state.cloudflareAccountId);
   for (const name of SECRET_FIELDS) {
     const el = form.querySelector(`input[name="${name}"]`);
     if (!el) continue;
     el.value = '';
-    if (state.configured) {
-      el.required = false;
-      el.placeholder = '(configured — leave blank to keep)';
-    } else {
-      el.required = true;
-      el.placeholder = originalPlaceholders[name] ?? '';
-    }
+    const stored = state.configuredSecretFields?.includes(name);
+    el.placeholder = stored ? '(configured — leave blank to keep)' : (originalPlaceholders[name] ?? '');
+  }
+  // Cloudflare token is a secret: never prefilled. A stored token gets the
+  // "leave blank to keep" hint — even on a partial save (token entered before
+  // the account ID), via cloudflareTokenStored.
+  const cfToken = form.querySelector('input[name="cloudflareApiToken"]');
+  if (cfToken) {
+    cfToken.value = '';
+    cfToken.placeholder = (state.cloudflareConfigured || state.cloudflareTokenStored)
+      ? '(configured — leave blank to keep)'
+      : (originalPlaceholders.cloudflareApiToken ?? '');
   }
   if (elements.title) {
-    elements.title.textContent = state.configured ? 'Edit Supabase configuration' : 'Configure Supabase';
+    elements.title.textContent = state.configured ? 'Edit Deploy Configuration' : 'Configure deployment';
   }
+  focusFirstIncompleteTab();
 }
 
 function showView(name) {
@@ -107,11 +139,43 @@ function showView(name) {
   }
 }
 
+// Reveal one configure tab's panel and mark its tab selected.
+function activateTab(name) {
+  if (!elements?.tabs) return;
+  for (const tab of elements.tabs) {
+    const active = tab.dataset.deployTab === name;
+    tab.setAttribute('aria-selected', active ? 'true' : 'false');
+    tab.classList.toggle('deploy-tab-active', active);
+  }
+  for (const panel of elements.panels) {
+    panel.hidden = panel.dataset.deployTabPanel !== name;
+  }
+}
+
+// Open the configure form on the first tab that still needs attention so the
+// user lands on the incomplete target (Supabase first, then Cloudflare).
+function focusFirstIncompleteTab() {
+  if (!state.supabaseComplete) activateTab('supabase');
+  else if (!state.cloudflareConfigured) activateTab('cloudflare');
+  else activateTab('supabase');
+}
+
+// Red chips flag the targets that aren't configured yet: one per tab label and
+// one on the sidebar Deploy button (shown whenever either target is missing).
+function refreshConfigChips() {
+  const supabaseDone = !!state.supabaseComplete;
+  const cloudflareDone = !!state.cloudflareConfigured;
+  if (elements?.chips?.supabase) elements.chips.supabase.hidden = supabaseDone;
+  if (elements?.chips?.cloudflare) elements.chips.cloudflare.hidden = cloudflareDone;
+  if (elements?.btnChip) elements.btnChip.hidden = supabaseDone && cloudflareDone;
+}
+
 function openModal() {
   elements.modal.hidden = false;
-  // Focus the first input when the configure view is showing.
+  // Focus the first input of the visible tab panel when the configure view is showing.
   setTimeout(() => {
-    const first = elements.modal.querySelector('.deploy-view:not([hidden]) input');
+    const view = elements.modal.querySelector('.deploy-view:not([hidden])');
+    const first = view?.querySelector('.deploy-tab-panel:not([hidden]) input') || view?.querySelector('input');
     first?.focus();
   }, 0);
 }
@@ -156,8 +220,10 @@ function applyStatus(status) {
   if (!status) return;
   const next = { ...state };
   const passthrough = [
-    'configured', 'running', 'expectedSecrets', 'configuredSecrets',
-    'projectRef', 'supabaseUrl', 'lastDeployAt',
+    'configured', 'supabaseComplete', 'running', 'expectedSecrets',
+    'configuredSecrets', 'configuredSecretFields',
+    'projectRef', 'lastDeployAt',
+    'cloudflareConfigured', 'cloudflareAccountId', 'cloudflareTokenStored',
     'deployId', 'ok', 'exitCode', 'durationMs',
   ];
   for (const k of passthrough) {
@@ -168,10 +234,11 @@ function applyStatus(status) {
   buildSecretInputs();
   // If a deploy is running on the backend, rehydrate the progress view.
   if (state.running && Array.isArray(status.tail)) {
-    if (elements.title) elements.title.textContent = 'Deploy to Supabase';
+    if (elements.title) elements.title.textContent = 'Deploying';
     showView('progress');
     elements.log.textContent = status.tail.map((f) => f.line).join('\n');
     elements.progressStatus.textContent = 'Deploying…';
+    if (elements.progressWarning) elements.progressWarning.hidden = true;
     elements.progressClose.disabled = true;
   }
   // If a deploy just finished and the modal was open in progress view, leave it.
@@ -243,6 +310,12 @@ function paintTerminalStatus(ok, durationMs, exitCode) {
     elements.progressStatus.textContent = `✗ Deploy failed (exit ${exitCode}) — see log for details`;
     elements.progressStatus.className = 'deploy-progress-status deploy-fail';
   }
+  // Auth redirect URL reminder: only after a SUCCESSFUL deploy that published a
+  // Cloudflare Worker (the URL the redirect must point at). A Supabase-only or
+  // failed deploy has no worker URL to configure, so keep it hidden.
+  if (elements.progressWarning) {
+    elements.progressWarning.hidden = !(ok && state.cloudflareConfigured);
+  }
   elements.progressClose.disabled = false;
 }
 
@@ -251,15 +324,16 @@ async function triggerDeploy() {
   elements.log.textContent = '';
   elements.progressStatus.textContent = 'Deploying…';
   elements.progressStatus.className = 'deploy-progress-status';
+  if (elements.progressWarning) elements.progressWarning.hidden = true;
   elements.progressClose.disabled = true;
-  if (elements.title) elements.title.textContent = 'Deploy to Supabase';
+  if (elements.title) elements.title.textContent = 'Deploying';
   showView('progress');
   openModal();
 
   const res = await fetch('/api/deploy/run', { method: 'POST' });
   if (res.status === 412) {
     // Race: somehow lost config between status check and click. Bounce to configure.
-    elements.errors.textContent = 'Supabase is not configured yet — fill in the form first.';
+    elements.errors.textContent = 'Deployment is not configured yet — fill in the form first.';
     elements.errors.hidden = false;
     showView('configure');
     return;
@@ -284,8 +358,9 @@ function onDeployStarted(msg) {
     elements.log.textContent = '';
     elements.progressStatus.textContent = 'Deploying…';
     elements.progressStatus.className = 'deploy-progress-status';
+    if (elements.progressWarning) elements.progressWarning.hidden = true;
     elements.progressClose.disabled = true;
-    if (elements.title) elements.title.textContent = 'Deploy to Supabase';
+    if (elements.title) elements.title.textContent = 'Deploying';
     showView('progress');
   }
 }
@@ -311,6 +386,7 @@ export function initDeploy() {
   elements = {
     btn: $('#deploy-btn'),
     btnLabel: document.querySelector('#deploy-btn .deploy-btn-label'),
+    btnChip: $('#deploy-btn-chip'),
     editBtn: $('#deploy-edit-btn'),
     dashboardLink: $('#deploy-dashboard-btn'),
     modal: $('#deploy-modal'),
@@ -321,12 +397,26 @@ export function initDeploy() {
   elements.errors = elements.modal.querySelector('.deploy-form-errors');
   elements.log = elements.modal.querySelector('.deploy-progress-log');
   elements.progressStatus = elements.modal.querySelector('.deploy-progress-status');
+  elements.progressWarning = elements.modal.querySelector('.deploy-progress-warning');
   elements.progressClose = elements.modal.querySelector('.deploy-progress-close');
   elements.modalClose = elements.modal.querySelector('.deploy-modal-close');
+  elements.tabs = [...elements.modal.querySelectorAll('.deploy-tab')];
+  elements.panels = [...elements.modal.querySelectorAll('.deploy-tab-panel')];
+  elements.chips = {
+    supabase: elements.modal.querySelector('[data-deploy-chip="supabase"]'),
+    cloudflare: elements.modal.querySelector('[data-deploy-chip="cloudflare"]'),
+  };
+
+  // Tab bar: clicking a tab reveals its panel (both panels stay in the same
+  // <form>, so a Save submits every field regardless of the visible tab).
+  for (const tab of elements.tabs) {
+    tab.addEventListener('click', () => activateTab(tab.dataset.deployTab));
+  }
 
   // Stash the secret inputs' original placeholders so prefillForm can restore
-  // them for the first-time configure view.
-  for (const name of SECRET_FIELDS) {
+  // them for the first-time configure view. cloudflareApiToken is an optional
+  // secret (not in SECRET_FIELDS) but uses the same restore mechanism.
+  for (const name of [...SECRET_FIELDS, 'cloudflareApiToken']) {
     const el = elements.form?.querySelector(`input[name="${name}"]`);
     if (el) originalPlaceholders[name] = el.placeholder;
   }
@@ -338,19 +428,20 @@ export function initDeploy() {
       openModal();
       return;
     }
-    if (state.configured) {
+    if (isFullyConfigured()) {
       // Don't deploy on the first click — a deploy pushes migrations to the
       // live remote DB and can't be undone. Confirm first (same modal the
       // equally-destructive rollback action uses).
       const ok = await openConfirmModal({
-        title: 'Deploy to Supabase?',
-        body: `This pushes your current CRM to the live Supabase project ${state.projectRef || ''}: pending database migrations are applied to the remote database and the edge functions are redeployed. Schema changes to a live database can't be automatically undone.`,
+        title: 'Deploy?',
+        body: `This pushes your current CRM to the live Supabase project ${state.projectRef || ''}: pending database migrations are applied to the remote database and the edge functions are redeployed. Schema changes to a live database can't be automatically undone. The app frontend is then built and published to Cloudflare Workers.`,
         confirmLabel: 'Deploy',
         cancelLabel: 'Cancel',
       });
       if (!ok) return;
       triggerDeploy();
     } else {
+      // Missing Supabase and/or Cloudflare config → force the configure form.
       showView('configure');
       prefillForm();
       openModal();
@@ -379,6 +470,18 @@ export function initDeploy() {
 
   elements.form.addEventListener('submit', async (e) => {
     e.preventDefault();
+    // No field is required (partial saves are allowed), so an empty field is
+    // valid — `:invalid` now only matches a field the user filled in with a
+    // malformed value (bad project ref, URL, or Cloudflare account ID). Reveal
+    // the tab of the first such field and let the browser show its bubble; an
+    // all-blank-or-valid form saves whatever subset was entered.
+    const invalid = elements.form.querySelector(':invalid');
+    if (invalid) {
+      const panel = invalid.closest('.deploy-tab-panel');
+      if (panel) activateTab(panel.dataset.deployTabPanel);
+      elements.form.reportValidity();
+      return;
+    }
     const submitBtn = elements.form.querySelector('button[type="submit"]');
     submitBtn.disabled = true;
     try {

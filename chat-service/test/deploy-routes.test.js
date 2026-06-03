@@ -1,12 +1,17 @@
 import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, readFile, stat, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { mkdtemp, mkdir, rm, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FAKE_SUPABASE = join(__dirname, 'fixtures', 'fake-supabase.sh');
+const FAKE_BUILD = join(__dirname, 'fixtures', 'fake-build.sh');
+const FAKE_WRANGLER = join(__dirname, 'fixtures', 'fake-wrangler.sh');
+// Stand-in contents for the Supabase App.tsx variant the build swaps in.
+const SUPABASE_VARIANT = '// supabase variant\nexport default () => null;\n';
 
 let tmpDir;
 let mod;
@@ -20,11 +25,30 @@ before(async () => {
   tmpDir = await mkdtemp(join(tmpdir(), 'deploy-test-'));
   process.env.DEPLOY_CONFIG_PATH = join(tmpDir, 'config.json');
   process.env.SUPABASE_BIN = FAKE_SUPABASE;
-  // The deploy spawns the CLI with cwd: DEPLOY_APP_DIR (default /app). That dir
-  // exists in the container but not on a bare CI runner, where a missing cwd
-  // makes spawn fail with `spawn script ENOENT`. Point it at the tmp dir so the
-  // phases run regardless of host layout.
+  // Build + wrangler fakes so the optional Cloudflare phases run without a real
+  // Vite build or Cloudflare account. Harmless for the Supabase-only tests:
+  // their configs carry no Cloudflare credentials, so neither phase fires.
+  process.env.BUILD_BIN = FAKE_BUILD;
+  process.env.WRANGLER_BIN = FAKE_WRANGLER;
+  // Supabase App.tsx variant the build phase overlays in the build worktree.
+  process.env.APP_SUPABASE_VARIANT = join(tmpDir, 'App.supabase.tsx');
+  await writeFile(process.env.APP_SUPABASE_VARIANT, SUPABASE_VARIANT, { mode: 0o644 });
+  // The deploy builds in an isolated detached git worktree of DEPLOY_APP_DIR at
+  // HEAD (so the live /app/src is never touched) and spawns the CLIs with that
+  // dir as cwd. Make tmpDir a real git repo with a committed src/App.tsx so
+  // createBuildWorktree has something to check out — and so the phases run
+  // regardless of host layout (a bare /app doesn't exist on a CI runner).
   process.env.DEPLOY_APP_DIR = tmpDir;
+  await mkdir(join(tmpDir, 'src'), { recursive: true });
+  await writeFile(join(tmpDir, 'src', 'App.tsx'), '// committed App.tsx\nexport default () => null;\n');
+  await writeFile(join(tmpDir, 'package.json'), '{"name":"crm","version":"0.0.0","scripts":{"build":"true"}}\n');
+  await writeFile(join(tmpDir, '.gitignore'), 'worktrees/\nnode_modules/\nconfig.json\n*.txt\n');
+  const git = (...args) => execFileSync('git', ['-C', tmpDir, ...args], { stdio: 'ignore' });
+  git('init', '-q');
+  git('config', 'user.email', 'test@example.com');
+  git('config', 'user.name', 'Deploy Test');
+  git('add', '-A');
+  git('commit', '-q', '-m', 'init');
   mod = await import('../lib/server/deploy-routes.js');
 });
 
@@ -34,8 +58,8 @@ after(async () => {
 
 beforeEach(() => {
   mod._resetForTests();
-  // Drop any FAKE_SUPABASE_* env from previous tests so each starts clean.
-  for (const k of ['FAKE_SUPABASE_EXIT', 'FAKE_SUPABASE_STDERR', 'FAKE_SUPABASE_DELAY_MS', 'FAKE_SUPABASE_LEAK']) {
+  // Drop any FAKE_* env from previous tests so each starts clean.
+  for (const k of ['FAKE_SUPABASE_EXIT', 'FAKE_SUPABASE_STDERR', 'FAKE_SUPABASE_DELAY_MS', 'FAKE_SUPABASE_LEAK', 'FAKE_BUILD_EXIT', 'FAKE_WRANGLER_EXIT']) {
     delete process.env[k];
   }
 });
@@ -218,7 +242,7 @@ test('POST /api/deploy/configure — edit: non-blank secret overwrites the store
   assert.equal(disk.accessToken, validConfig().accessToken); // kept (blank)
 });
 
-test('POST /api/deploy/configure — first configure still requires secrets', async () => {
+test('POST /api/deploy/configure — first configure accepts a partial draft (no secrets yet)', async () => {
   await rm(process.env.DEPLOY_CONFIG_PATH, { force: true });
 
   const req = makeReq('POST', {
@@ -230,13 +254,41 @@ test('POST /api/deploy/configure — first configure still requires secrets', as
   await mod.handleConfigureDeploy(req, res);
   await res.done;
 
-  assert.equal(res.statusCode, 400);
+  // Partial saves are allowed so the user can fill the form across sittings and
+  // switch away whenever — the missing secrets just leave it not-yet-deployable.
+  assert.equal(res.statusCode, 200, res.body);
   const body = JSON.parse(res.body);
-  assert.equal(body.error, 'invalid_config');
-  // Each missing secret is reported.
-  for (const k of ['anonKey', 'serviceRoleKey', 'dbPassword', 'accessToken']) {
-    assert.ok(body.errors.some((e) => e.includes(k)), `${k} should be required on first configure`);
-  }
+  assert.equal(body.configured, true, 'a config file now exists');
+  assert.equal(body.supabaseComplete, false, 'but it is not deploy-ready');
+  assert.equal(body.projectRef, 'abcdefghijklmnopqrst');
+  assert.deepEqual(body.configuredSecretFields, [], 'no secrets stored yet');
+
+  // The draft persisted the non-secret fields; blank secrets were not stored.
+  const disk = JSON.parse(await readFile(process.env.DEPLOY_CONFIG_PATH, 'utf8'));
+  assert.equal(disk.projectRef, 'abcdefghijklmnopqrst');
+  assert.ok(!disk.dbPassword, 'a blank secret must not be stored');
+});
+
+test('POST /api/deploy/configure — completing the draft flips supabaseComplete and lists stored secrets', async () => {
+  // Seed a partial draft (Supabase URL + project ref only).
+  await writeFile(
+    process.env.DEPLOY_CONFIG_PATH,
+    JSON.stringify({ projectRef: 'abcdefghijklmnopqrst', supabaseUrl: 'https://abcdefghijklmnopqrst.supabase.co' }),
+    { mode: 0o600 },
+  );
+
+  const res = makeRes();
+  await mod.handleConfigureDeploy(makeReq('POST', validConfig()), res);
+  await res.done;
+
+  assert.equal(res.statusCode, 200, res.body);
+  const body = JSON.parse(res.body);
+  assert.equal(body.supabaseComplete, true, 'all Supabase fields now present');
+  assert.deepEqual(
+    body.configuredSecretFields.sort(),
+    ['accessToken', 'anonKey', 'dbPassword', 'serviceRoleKey'],
+    'every stored secret field is reported by name (never its value)',
+  );
 });
 
 test('POST /api/deploy/configure — edit: bad access token is still rejected when supplied', async () => {
@@ -262,9 +314,25 @@ test('POST /api/deploy/run — 412 when not configured', async () => {
   assert.equal(body.error, 'not_configured');
 });
 
+test('POST /api/deploy/run — 412 on a partial draft (config exists but Supabase incomplete)', async () => {
+  // A saved-but-incomplete config must not start a deploy: it would link the
+  // project and push migrations before failing mid-way against the live DB.
+  await writeFile(
+    process.env.DEPLOY_CONFIG_PATH,
+    JSON.stringify(validConfig({ dbPassword: '' })), // every field but the db password
+    { mode: 0o600 },
+  );
+  const res = makeRes();
+  await mod.handleDeployRun(makeReq('POST'), res);
+  await res.done;
+  assert.equal(res.statusCode, 412);
+  assert.equal(JSON.parse(res.body).error, 'not_configured');
+  assert.equal(mod.deployState.running, false, 'the optimistically-claimed slot is released');
+});
+
 test('POST /api/deploy/run — 409 when deploy already running', async () => {
-  // Seed configured state.
-  await writeFile(process.env.DEPLOY_CONFIG_PATH, JSON.stringify(validConfig()), { mode: 0o600 });
+  // Seed a fully deployable config (both targets).
+  await writeFile(process.env.DEPLOY_CONFIG_PATH, JSON.stringify(cfConfig()), { mode: 0o600 });
   // Force a long-running fake so the second request races into the running flag.
   process.env.FAKE_SUPABASE_DELAY_MS = '300';
 
@@ -286,7 +354,7 @@ test('POST /api/deploy/run — 409 when deploy already running', async () => {
 });
 
 test('POST /api/deploy/run — two requests in the same tick: exactly one wins (TOCTOU guard)', async () => {
-  await writeFile(process.env.DEPLOY_CONFIG_PATH, JSON.stringify(validConfig()), { mode: 0o600 });
+  await writeFile(process.env.DEPLOY_CONFIG_PATH, JSON.stringify(cfConfig()), { mode: 0o600 });
 
   // Fire BOTH before awaiting either — they race through the running-flag check
   // in the same tick. The guard claims the slot synchronously before the first
@@ -308,7 +376,7 @@ test('POST /api/deploy/run — two requests in the same tick: exactly one wins (
 });
 
 test('POST /api/deploy/run — happy path: tail captures lines, deploy_done fires, lastDeployAt stamped', async () => {
-  await writeFile(process.env.DEPLOY_CONFIG_PATH, JSON.stringify(validConfig()), { mode: 0o600 });
+  await writeFile(process.env.DEPLOY_CONFIG_PATH, JSON.stringify(cfConfig()), { mode: 0o600 });
 
   const res = makeRes();
   await mod.handleDeployRun(makeReq('POST'), res);
@@ -331,7 +399,7 @@ test('POST /api/deploy/run — happy path: tail captures lines, deploy_done fire
 });
 
 test('POST /api/deploy/run — failure path: exitCode propagated, full error on stderr only', async () => {
-  await writeFile(process.env.DEPLOY_CONFIG_PATH, JSON.stringify(validConfig()), { mode: 0o600 });
+  await writeFile(process.env.DEPLOY_CONFIG_PATH, JSON.stringify(cfConfig()), { mode: 0o600 });
   process.env.FAKE_SUPABASE_EXIT = '7';
   process.env.FAKE_SUPABASE_STDERR = 'boom';
 
@@ -366,7 +434,7 @@ test('POST /api/deploy/run — failure path: exitCode propagated, full error on 
 });
 
 test('POST /api/deploy/run — missing supabase binary finalizes instead of hanging', async () => {
-  await writeFile(process.env.DEPLOY_CONFIG_PATH, JSON.stringify(validConfig()), { mode: 0o600 });
+  await writeFile(process.env.DEPLOY_CONFIG_PATH, JSON.stringify(cfConfig()), { mode: 0o600 });
   const prevBin = process.env.SUPABASE_BIN;
   // Absolute path that doesn't exist → the first phase's spawn emits ENOENT.
   process.env.SUPABASE_BIN = join(tmpDir, 'no-such-supabase-binary');
@@ -412,7 +480,7 @@ test('POST /api/deploy/run — redacts dbPassword from the mirrored Supabase out
   const leakedSecret = 'leak-canary-1234567890';
   await writeFile(
     process.env.DEPLOY_CONFIG_PATH,
-    JSON.stringify(validConfig({ dbPassword: leakedSecret })),
+    JSON.stringify(cfConfig({ dbPassword: leakedSecret })),
     { mode: 0o600 },
   );
   process.env.FAKE_SUPABASE_LEAK = leakedSecret;
@@ -483,7 +551,7 @@ test('GET /api/deploy/events — opens an SSE stream and replays a snapshot on c
 });
 
 test('GET /api/deploy/events — streams started/log/done live during a deploy, then stops after disconnect', async () => {
-  await writeFile(process.env.DEPLOY_CONFIG_PATH, JSON.stringify(validConfig()), { mode: 0o600 });
+  await writeFile(process.env.DEPLOY_CONFIG_PATH, JSON.stringify(cfConfig()), { mode: 0o600 });
 
   const req = makeSseReq();
   const res = makeSseRes();
@@ -509,4 +577,258 @@ test('GET /api/deploy/events — streams started/log/done live during a deploy, 
   await mod.handleDeployRun(makeReq('POST'), makeRes());
   await drainDeploy();
   assert.equal(res.chunks.length, before, 'disconnected client must receive no further frames');
+});
+
+// ── Cloudflare frontend deploy ────────────────────────────────────────────
+// Obviously-fake credentials: a 32-hex account ID and a ≥20-char token that
+// won't trip any real-secret scanner.
+const CF_ACCOUNT_ID = '0123456789abcdef0123456789abcdef';
+const CF_TOKEN = 'cf-TEST-TOKEN-NOT-A-REAL-SECRET-123';
+
+function cfConfig(overrides = {}) {
+  return validConfig({ cloudflareAccountId: CF_ACCOUNT_ID, cloudflareApiToken: CF_TOKEN, ...overrides });
+}
+
+async function waitUntilSettled(m = mod) {
+  await new Promise((resolve) => {
+    const tick = () => (m.deployState.running ? setTimeout(tick, 30) : resolve());
+    tick();
+  });
+}
+
+test('POST /api/deploy/configure — Cloudflare: stores creds, status echoes accountId + configured, never the token', async () => {
+  await rm(process.env.DEPLOY_CONFIG_PATH, { force: true });
+
+  const res = makeRes();
+  await mod.handleConfigureDeploy(makeReq('POST', cfConfig()), res);
+  await res.done;
+
+  assert.equal(res.statusCode, 200, res.body);
+  const body = JSON.parse(res.body);
+  assert.equal(body.cloudflareConfigured, true);
+  assert.equal(body.cloudflareAccountId, CF_ACCOUNT_ID);
+  assert.ok(!('cloudflareApiToken' in body), 'cloudflare token must never be returned');
+
+  // Round-trips to disk.
+  const disk = JSON.parse(await readFile(process.env.DEPLOY_CONFIG_PATH, 'utf8'));
+  assert.equal(disk.cloudflareAccountId, CF_ACCOUNT_ID);
+  assert.equal(disk.cloudflareApiToken, CF_TOKEN);
+});
+
+test('POST /api/deploy/configure — Cloudflare: no creds keeps it disabled (Supabase-only)', async () => {
+  await rm(process.env.DEPLOY_CONFIG_PATH, { force: true });
+
+  const res = makeRes();
+  await mod.handleConfigureDeploy(makeReq('POST', validConfig()), res);
+  await res.done;
+
+  assert.equal(res.statusCode, 200, res.body);
+  assert.equal(JSON.parse(res.body).cloudflareConfigured, false);
+  const disk = JSON.parse(await readFile(process.env.DEPLOY_CONFIG_PATH, 'utf8'));
+  assert.ok(!('cloudflareApiToken' in disk), 'no token stored when none supplied');
+});
+
+test('POST /api/deploy/configure — Cloudflare: account ID without token saves as an incomplete draft', async () => {
+  // Partial Cloudflare is a valid saved state — it just doesn't enable the
+  // frontend deploy until the token lands too (pairing enforced at deploy time).
+  await rm(process.env.DEPLOY_CONFIG_PATH, { force: true });
+  const res = makeRes();
+  await mod.handleConfigureDeploy(makeReq('POST', validConfig({ cloudflareAccountId: CF_ACCOUNT_ID })), res);
+  await res.done;
+  assert.equal(res.statusCode, 200, res.body);
+  const body = JSON.parse(res.body);
+  assert.equal(body.cloudflareConfigured, false, 'a lone account ID does not enable Cloudflare');
+  assert.equal(body.cloudflareAccountId, CF_ACCOUNT_ID, 'but the account ID is kept');
+  const disk = JSON.parse(await readFile(process.env.DEPLOY_CONFIG_PATH, 'utf8'));
+  assert.ok(!disk.cloudflareApiToken, 'no token stored');
+});
+
+test('POST /api/deploy/configure — Cloudflare: a token without an account ID is persisted (not dropped) but stays disabled', async () => {
+  // A lone token must NOT be silently discarded — it's kept (blank-keeps rule)
+  // so the user doesn't lose it, but Cloudflare stays disabled until the account
+  // ID lands too. `cloudflareTokenStored` lets the form show "leave blank to keep".
+  await rm(process.env.DEPLOY_CONFIG_PATH, { force: true });
+  const res = makeRes();
+  await mod.handleConfigureDeploy(makeReq('POST', validConfig({ cloudflareApiToken: CF_TOKEN })), res);
+  await res.done;
+  assert.equal(res.statusCode, 200, res.body);
+  const body = JSON.parse(res.body);
+  assert.equal(body.cloudflareConfigured, false, 'a lone token does not enable Cloudflare');
+  assert.equal(body.cloudflareTokenStored, true, 'but the token is reported as stored');
+  assert.ok(!('cloudflareApiToken' in body), 'the token value is still never returned');
+  const disk = JSON.parse(await readFile(process.env.DEPLOY_CONFIG_PATH, 'utf8'));
+  assert.equal(disk.cloudflareApiToken, CF_TOKEN, 'the token is persisted, not silently dropped');
+  assert.ok(!disk.cloudflareAccountId, 'no account ID yet');
+});
+
+test('POST /api/deploy/configure — Cloudflare: malformed account ID is rejected', async () => {
+  await rm(process.env.DEPLOY_CONFIG_PATH, { force: true });
+  const res = makeRes();
+  await mod.handleConfigureDeploy(makeReq('POST', cfConfig({ cloudflareAccountId: 'not-hex' })), res);
+  await res.done;
+  assert.equal(res.statusCode, 400);
+  assert.ok(JSON.parse(res.body).errors.some((e) => e.includes('cloudflareAccountId')));
+});
+
+test('POST /api/deploy/configure — Cloudflare edit: blank fields keep the stored creds (no accidental drop)', async () => {
+  await writeFile(process.env.DEPLOY_CONFIG_PATH, JSON.stringify(cfConfig()), { mode: 0o600 });
+
+  // Edit only the Supabase tab — both Cloudflare fields arrive blank in the body.
+  // Blank keeps the stored value (same rule as the Supabase secrets), so a stored
+  // Cloudflare credential is never silently dropped by an unrelated edit.
+  const res = makeRes();
+  await mod.handleConfigureDeploy(
+    makeReq('POST', validConfig({ cloudflareAccountId: '', cloudflareApiToken: '', anonKey: '', serviceRoleKey: '', dbPassword: '', accessToken: '' })),
+    res,
+  );
+  await res.done;
+  assert.equal(res.statusCode, 200, res.body);
+  assert.equal(JSON.parse(res.body).cloudflareConfigured, true, 'blank fields keep Cloudflare configured');
+  const disk = JSON.parse(await readFile(process.env.DEPLOY_CONFIG_PATH, 'utf8'));
+  assert.equal(disk.cloudflareAccountId, CF_ACCOUNT_ID, 'account ID kept');
+  assert.equal(disk.cloudflareApiToken, CF_TOKEN, 'token kept (not dropped)');
+});
+
+test('redactSecrets — masks the Cloudflare API token', () => {
+  const out = mod.redactSecrets(`deploying with token ${CF_TOKEN}`, cfConfig());
+  assert.ok(!out.includes(CF_TOKEN), 'cloudflare token leaked');
+  assert.match(out, /\*\*\*/);
+});
+
+test('POST /api/deploy/run — Cloudflare enabled: build runs first, wrangler last, in order', async () => {
+  await writeFile(process.env.DEPLOY_CONFIG_PATH, JSON.stringify(cfConfig()), { mode: 0o600 });
+
+  const res = makeRes();
+  await mod.handleDeployRun(makeReq('POST'), res);
+  await res.done;
+  assert.equal(res.statusCode, 202);
+  await waitUntilSettled();
+
+  assert.equal(mod.deployState.ok, true);
+  const steps = mod.deployState.tail.map((f) => f.line).join('\n');
+  // Order: build (first) → supabase link → cloudflare (last) → complete.
+  const iBuild = steps.indexOf('Building CRM');
+  const iLink = steps.indexOf('Linking project');
+  const iCf = steps.indexOf('Cloudflare Workers');
+  const iDone = steps.indexOf('Deploy complete');
+  assert.ok(iBuild >= 0, 'build step must appear when Cloudflare is configured');
+  assert.ok(iCf >= 0, 'cloudflare step must appear when configured');
+  assert.ok(iBuild < iLink && iLink < iCf && iCf < iDone, `phase order wrong:\n${steps}`);
+});
+
+test('runDeploy — Cloudflare not configured: skips the build + wrangler phases', async () => {
+  // The HTTP run endpoint now requires Cloudflare (see the 412 test below), but
+  // the phase orchestration itself must still skip the CF phases cleanly when
+  // invoked directly with a Supabase-only config.
+  mod.deployState.tail = [];
+  await mod.runDeploy(validConfig(), 'test-no-cf');
+
+  const steps = mod.deployState.tail.map((f) => f.line).join('\n');
+  assert.ok(!steps.includes('Building CRM'), 'build must be skipped without Cloudflare');
+  assert.ok(!steps.includes('Cloudflare Workers'), 'cloudflare deploy must be skipped without config');
+  assert.match(steps, /Deploy complete/);
+});
+
+test('POST /api/deploy/run — Cloudflare build failure aborts before Supabase', async () => {
+  await writeFile(process.env.DEPLOY_CONFIG_PATH, JSON.stringify(cfConfig()), { mode: 0o600 });
+  process.env.FAKE_BUILD_EXIT = '3';
+
+  const errLines = [];
+  const origErr = console.error;
+  console.error = (...a) => errLines.push(a.join(' '));
+  try {
+    const res = makeRes();
+    await mod.handleDeployRun(makeReq('POST'), res);
+    await res.done;
+    await waitUntilSettled();
+  } finally {
+    console.error = origErr;
+  }
+
+  assert.equal(mod.deployState.ok, false);
+  assert.equal(mod.deployState.exitCode, 3);
+  const steps = mod.deployState.tail.map((f) => f.line).join('\n');
+  assert.match(steps, /Building CRM/);
+  assert.ok(!steps.includes('Linking project'), 'Supabase must not run after a build failure');
+});
+
+test('POST /api/deploy/run — builds against the Supabase variant in an isolated worktree, never touching the live src/App.tsx', async () => {
+  await writeFile(process.env.DEPLOY_CONFIG_PATH, JSON.stringify(cfConfig()), { mode: 0o600 });
+
+  // Simulate a container running in demo mode: the live working-tree src/App.tsx
+  // is the FakeRest variant. The build worktree checks out HEAD and overlays the
+  // Supabase variant there — it must never write this live file.
+  const liveApp = join(tmpDir, 'src', 'App.tsx');
+  const fakerest = '// fakerest live variant\nexport default () => null;\n';
+  await writeFile(liveApp, fakerest, { mode: 0o644 });
+
+  // The fake build snapshots its cwd's src/App.tsx so we can prove the build ran
+  // against the Supabase variant (in the worktree), not the live file.
+  const snapshot = join(tmpDir, 'apptsx-at-build.txt');
+  process.env.FAKE_BUILD_APPTSX_OUT = snapshot;
+  try {
+    const res = makeRes();
+    await mod.handleDeployRun(makeReq('POST'), res);
+    await res.done;
+    await waitUntilSettled();
+  } finally {
+    delete process.env.FAKE_BUILD_APPTSX_OUT;
+  }
+
+  assert.equal(mod.deployState.ok, true, mod.deployState.tail.map((f) => f.line).join('\n'));
+  // The build ran against the Supabase variant (overlaid in the worktree).
+  assert.equal(await readFile(snapshot, 'utf8'), SUPABASE_VARIANT, 'build must run against the Supabase variant');
+  // The live src/App.tsx was never touched by the deploy — full isolation.
+  assert.equal(await readFile(liveApp, 'utf8'), fakerest, 'live src/App.tsx must be untouched by the deploy');
+
+  // Restore the committed content so later tests' worktrees are unaffected.
+  await writeFile(liveApp, '// committed App.tsx\nexport default () => null;\n', { mode: 0o644 });
+});
+
+test('POST /api/deploy/run — 412 when Supabase is complete but Cloudflare is not', async () => {
+  // Both targets are required to deploy. A Supabase-only config (no Cloudflare)
+  // must be refused at the run gate, exactly like a missing config.
+  await writeFile(process.env.DEPLOY_CONFIG_PATH, JSON.stringify(validConfig()), { mode: 0o600 });
+  const res = makeRes();
+  await mod.handleDeployRun(makeReq('POST'), res);
+  await res.done;
+  assert.equal(res.statusCode, 412);
+  assert.equal(JSON.parse(res.body).error, 'not_configured');
+  assert.equal(mod.deployState.running, false, 'the optimistically-claimed slot is released');
+});
+
+test('POST /api/deploy/configure — Cloudflare: an uppercase account ID is stored lowercased', async () => {
+  await rm(process.env.DEPLOY_CONFIG_PATH, { force: true });
+  const res = makeRes();
+  await mod.handleConfigureDeploy(makeReq('POST', cfConfig({ cloudflareAccountId: CF_ACCOUNT_ID.toUpperCase() })), res);
+  await res.done;
+  assert.equal(res.statusCode, 200, res.body);
+  assert.equal(JSON.parse(res.body).cloudflareAccountId, CF_ACCOUNT_ID, 'echoed lowercase');
+  const disk = JSON.parse(await readFile(process.env.DEPLOY_CONFIG_PATH, 'utf8'));
+  assert.equal(disk.cloudflareAccountId, CF_ACCOUNT_ID, 'stored lowercase, never the uppercase paste');
+});
+
+test('POST /api/deploy/run — a missing App.tsx variant aborts the deploy before Supabase', async () => {
+  await writeFile(process.env.DEPLOY_CONFIG_PATH, JSON.stringify(cfConfig()), { mode: 0o600 });
+  // Remove the variant the build overlays → runBuildPhase's readFile throws,
+  // which must abort the whole deploy rather than ship the wrong (FakeRest) build.
+  await rm(process.env.APP_SUPABASE_VARIANT, { force: true });
+
+  const origErr = console.error;
+  console.error = () => {};
+  try {
+    const res = makeRes();
+    await mod.handleDeployRun(makeReq('POST'), res);
+    await res.done;
+    await waitUntilSettled();
+  } finally {
+    console.error = origErr;
+    // Restore the variant for any later test.
+    await writeFile(process.env.APP_SUPABASE_VARIANT, SUPABASE_VARIANT, { mode: 0o644 });
+  }
+
+  assert.equal(mod.deployState.ok, false, 'deploy must fail when the variant is missing');
+  const steps = mod.deployState.tail.map((f) => f.line).join('\n');
+  assert.match(steps, /Building CRM/);
+  assert.ok(!steps.includes('Linking project'), 'Supabase must not run when the build aborts');
 });

@@ -9,6 +9,7 @@ FROM node:24-trixie-slim
 # ── Version pins — update when upgrading tools ────────────────
 ARG SUPABASE_CLI_VERSION=v2.98.2
 ARG CLAUDE_CODE_VERSION=2.1.98
+ARG WRANGLER_VERSION=4.42.0
 
 ENV DEBIAN_FRONTEND=noninteractive \
     APP_DIR=/app \
@@ -49,6 +50,9 @@ RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
 
 # ── TypeScript language server (required by typescript-lsp plugin for agents)
 RUN npm install -g typescript-language-server typescript
+
+# ── Wrangler (Cloudflare Workers deploy — used by the frontend deploy phase) ──
+RUN npm install -g wrangler@${WRANGLER_VERSION}
 
 # ── Download project (zip from main branch) ──────────────────
 # GitHub automatically generates a zip for any branch at:

@@ -17,7 +17,7 @@ Two compose profiles: `demo` (FakeRest) and `full` (Supabase, needs Docker socke
 
 `entrypoint.sh`: syncs `claudeConfig/.claude/` → `/home/developer/.claude`, applies App.tsx variant, overwrites `/app/.claude/settings.json` with `{"hooks":{}}` (prevents upstream format-file.sh fight with our hooks).
 
-`./crm-source` bind mount for `/app` — host-visible so users can browse/edit the CRM source and share it with co-workers. `node_modules` and `worktrees/` live in the same mount so `cp -al` hard-links node_modules into each worktree (zero disk cost). First run: `entrypoint.sh` copies `/opt/atomic-crm-source/` (staged in the Dockerfile) into the empty bind mount.
+Single `crm-app` volume for `/app` — keeps `node_modules` and `worktrees/` on the same device so `cp -al` hard-links node_modules into each worktree (zero disk cost).
 
 ## Chat-service (`chat-service/`)
 
@@ -30,6 +30,8 @@ Key invariants:
 - `tokensUsed` = input + cache_creation + output (cache-read excluded — cheap rehydration).
 - `total_cost_usd` is cumulative within a spawn: buffer in `costUsdCurrentSpawn`, commit to `costUsd` on turn end only.
 - `activeAgents` counts only `task_type === 'local_agent'` via `Set<task_id>`.
+
+Remote deploy (`lib/server/deploy-routes.js`): the sidebar "Deploy" modal pushes the live CRM, independent of the chat WS (own SSE channel `/api/deploy/events`). Credentials persist to `/var/lib/atomic-crm/supabase-deploy/config.json` (mode 600); secrets never returned by `/api/deploy/status` and are redacted from streamed logs. A deploy requires BOTH targets fully configured — Supabase (backend) and Cloudflare (frontend) — gated server-side by `isDeployable` (`handleDeployRun` returns 412 otherwise) and client-side by the Deploy button. Partial saves are allowed as drafts: any field may be left blank, blank-keeps-stored on every secret (incl. the Cloudflare token, so an unrelated edit never silently drops it); only `projectRef` identifies the project — the Supabase URL is derived (`https://<ref>.supabase.co`), never entered. Phases run in-process under a `script` PTY: **(0) vite build, (1) supabase link, (2) db push, (3) functions deploy, (4) secrets set, (5) wrangler deploy**. The build (step 0) runs in an isolated detached git worktree at `/app/worktrees/_deploy` (checked out from `HEAD`, node_modules hard-linked in) so the live Vite dev server's `/app/src` is never touched; it overlays the Supabase `App.tsx` variant (`/app-variants/App.supabase.tsx`) there — a missing variant is FATAL (abort, never ship the demo/FakeRest build) — and bakes the Supabase URL/publishable key into the bundle (`VITE_SUPABASE_URL` / `VITE_SB_PUBLISHABLE_KEY`). The worktree is removed in a `finally` (success or failure). Cloudflare deploys an assets-only Worker named `atomic-crm-<projectRef>` (account ID stored lowercased) with SPA fallback, serving the worktree's `dist/`. `wrangler` is installed globally in the image.
 
 Tests: `cd chat-service && npm test` — uses glob `'test/**/*.test.js'` (directory form broken on Node 25).
 

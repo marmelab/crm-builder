@@ -77,9 +77,10 @@
       <svg class="mode-toggle-icon" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"/></svg>
       <span class="mode-toggle-label">Demo</span>
     </button>
-    <button id="deploy-btn" type="button" title="Deploy to Supabase" aria-label="Deploy to Supabase">
+    <button id="deploy-btn" type="button" title="Deploy" aria-label="Deploy">
       <svg class="deploy-btn-icon" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 15-4-4 6.75-6.77a7.79 7.79 0 0 1 11 11L13 22l-4-4 6-6"/><path d="m5 8 4 4"/><path d="M12 15 9 18l-3-3"/><path d="m15 9-3 3"/></svg>
-      <span class="deploy-btn-label">Configure Supabase</span>
+      <span class="deploy-btn-label">Configure deployment</span>
+      <span class="deploy-btn-chip" id="deploy-btn-chip" title="Deployment configuration incomplete" hidden></span>
     </button>
     <button id="history-more-btn" type="button" title="More actions" aria-label="More actions" aria-haspopup="true" aria-expanded="false">
       <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>
@@ -95,9 +96,9 @@
 
   <div id="history-more-popup" hidden role="dialog" aria-label="More actions">
     <div id="history-more-popup-header">More actions</div>
-    <button id="deploy-edit-btn" type="button" hidden title="Edit Supabase configuration" aria-label="Edit Supabase configuration">
+    <button id="deploy-edit-btn" type="button" hidden title="Edit deploy configuration" aria-label="Edit deploy configuration">
       <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" x2="4" y1="21" y2="14"/><line x1="4" x2="4" y1="10" y2="3"/><line x1="12" x2="12" y1="21" y2="12"/><line x1="12" x2="12" y1="8" y2="3"/><line x1="20" x2="20" y1="21" y2="16"/><line x1="20" x2="20" y1="12" y2="3"/><line x1="1" x2="7" y1="14" y2="14"/><line x1="9" x2="15" y1="8" y2="8"/><line x1="17" x2="23" y1="16" y2="16"/></svg>
-      <span class="deploy-btn-label">Edit Supabase Configuration</span>
+      <span class="deploy-btn-label">Edit Deploy Configuration</span>
     </button>
     <a id="deploy-dashboard-btn" href="#" target="_blank" rel="noopener" hidden title="Open Supabase dashboard" aria-label="Open Supabase dashboard">
       <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" x2="21" y1="14" y2="3"/></svg>
@@ -113,44 +114,115 @@
     <div class="deploy-modal-backdrop"></div>
     <div class="deploy-modal-panel">
       <button type="button" class="deploy-modal-close" aria-label="Close" title="Close">✕</button>
-      <h2 id="deploy-modal-title">Configure Supabase</h2>
+      <h2 id="deploy-modal-title">Configure deployment</h2>
 
       <div class="deploy-view deploy-view-configure">
         <p class="deploy-modal-body">
           Paste the credentials of a Supabase project you created on
-          <a href="https://supabase.com/dashboard" target="_blank" rel="noopener">supabase.com</a>.
-          They stay inside the container; nothing is sent anywhere except Supabase itself when you deploy.
+          <a href="https://supabase.com/dashboard" target="_blank" rel="noopener">supabase.com</a>
+          and a <a href="https://dash.cloudflare.com" target="_blank" rel="noopener">Cloudflare</a>
+          token to publish the app itself. Both are needed to deploy. Credentials stay inside the
+          container; nothing is sent anywhere except Supabase and Cloudflare when you deploy.
         </p>
-        <form class="deploy-form" autocomplete="off">
-          <label class="deploy-field">
-            <span class="deploy-field-label">Project ref <span class="deploy-field-hint">(20 lowercase chars)</span></span>
-            <input name="projectRef" type="text" required spellcheck="false" pattern="[a-z0-9]{20}" placeholder="abcdefghijklmnopqrst">
-          </label>
-          <label class="deploy-field">
-            <span class="deploy-field-label">Supabase URL</span>
-            <input name="supabaseUrl" type="url" required spellcheck="false" placeholder="https://<ref>.supabase.co">
-          </label>
-          <label class="deploy-field">
-            <span class="deploy-field-label">Anon key</span>
-            <input name="anonKey" type="text" required spellcheck="false" placeholder="eyJ…">
-          </label>
-          <label class="deploy-field">
-            <span class="deploy-field-label">Service role key</span>
-            <input name="serviceRoleKey" type="password" required spellcheck="false" placeholder="eyJ…">
-          </label>
-          <label class="deploy-field">
-            <span class="deploy-field-label">Database password</span>
-            <input name="dbPassword" type="password" required spellcheck="false" placeholder="••••••••">
-          </label>
-          <label class="deploy-field">
-            <span class="deploy-field-label">Personal access token <span class="deploy-field-hint">(sbp_…)</span></span>
-            <input name="accessToken" type="password" required spellcheck="false" placeholder="sbp_…">
-          </label>
-          <fieldset class="deploy-fieldset" data-secrets-fieldset>
-            <legend>Function secrets</legend>
-            <p class="deploy-field-hint">Optional. Synced as Supabase function secrets on every deploy.</p>
-            <!-- Inputs injected from EXPECTED_SECRETS at runtime. -->
-          </fieldset>
+
+        <div class="deploy-tabs" role="tablist">
+          <button type="button" class="deploy-tab" data-deploy-tab="supabase" role="tab" aria-selected="true">
+            <span>Supabase</span>
+            <span class="deploy-tab-chip" data-deploy-chip="supabase" title="Incomplete" hidden></span>
+          </button>
+          <button type="button" class="deploy-tab" data-deploy-tab="cloudflare" role="tab" aria-selected="false">
+            <span>Cloudflare</span>
+            <span class="deploy-tab-chip" data-deploy-chip="cloudflare" title="Incomplete" hidden></span>
+          </button>
+        </div>
+
+        <form class="deploy-form" autocomplete="off" novalidate>
+          <div class="deploy-form-body">
+          <div class="deploy-tab-panel" data-deploy-tab-panel="supabase">
+            <p class="deploy-field-hint deploy-panel-intro">
+              Open your project in <a href="https://supabase.com/dashboard/org" target="_blank" rel="noopener">Supabase Studio</a>, then copy each value below.
+            </p>
+            <div class="deploy-columns">
+              <section class="deploy-section">
+                <h3 class="deploy-section-title">Project</h3>
+                <p class="deploy-field-hint">Find the project ref in <strong>Your Project</strong> → <strong>Project Settings</strong>. The Supabase URL is derived from it.</p>
+                <label class="deploy-field">
+                  <span class="deploy-field-label">Project ref <span class="deploy-field-hint">(20 lowercase chars)</span></span>
+                  <input name="projectRef" type="text" spellcheck="false" pattern="[a-z0-9]{20}" placeholder="abcdefghijklmnopqrst">
+                </label>
+              </section>
+
+              <section class="deploy-section">
+                <h3 class="deploy-section-title">API Keys</h3>
+                <p class="deploy-field-hint">Copy both keys from <strong>Your Project</strong> → <strong>Project Settings</strong> → <strong>API Keys</strong>.</p>
+                <label class="deploy-field">
+                  <span class="deploy-field-label">Publishable key</span>
+                  <input name="anonKey" type="text" spellcheck="false" placeholder="eyJ…">
+                </label>
+                <label class="deploy-field">
+                  <span class="deploy-field-label">Secret key</span>
+                  <input name="serviceRoleKey" type="password" spellcheck="false" placeholder="eyJ…">
+                </label>
+              </section>
+
+              <section class="deploy-section">
+                <h3 class="deploy-section-title">Database &amp; access</h3>
+                <p class="deploy-field-hint">Supabase needs these to push migrations and deploy functions:</p>
+                <label class="deploy-field">
+                  <span class="deploy-field-label">Database password</span>
+                  <input name="dbPassword" type="password" spellcheck="false" placeholder="••••••••">
+                  <span class="deploy-field-hint">The password you used when you created the database. Can be reset in <strong>Your Project</strong> → <strong>Database</strong> → <strong>Settings</strong>.</span>
+                </label>
+                <label class="deploy-field">
+                  <span class="deploy-field-label">Personal access token <span class="deploy-field-hint">(sbp_…)</span></span>
+                  <input name="accessToken" type="password" spellcheck="false" placeholder="sbp_…">
+                  <span class="deploy-field-hint">Create one at <a href="https://supabase.com/dashboard/account/tokens" target="_blank" rel="noopener">supabase.com/dashboard/account/tokens</a>.</span>
+                </label>
+              </section>
+
+              <section class="deploy-section deploy-section-secrets" data-secrets-fieldset>
+                <h3 class="deploy-section-title">Function secrets</h3>
+                <p class="deploy-field-hint">Optional. Synced as Supabase function secrets on every deploy.</p>
+                <!-- Inputs injected from EXPECTED_SECRETS at runtime. -->
+              </section>
+
+              <section class="deploy-section">
+                <h3 class="deploy-section-title">Authentication</h3>
+                <p class="deploy-warning">
+                  <span class="deploy-warning-icon" aria-hidden="true">⚠</span>
+                  <span>After your first deploy, set the authentication redirect URL in
+                  <strong>Your Project</strong> → <strong>Authentication</strong> → <strong>URL Configuration</strong>
+                  to the URL of your Cloudflare Worker
+                  (<code>https://atomic-crm-&lt;ref&gt;.&lt;account&gt;.workers.dev</code>) — otherwise sign-in
+                  links won't redirect back to your deployed app. Find the exact URL on the
+                  <a href="https://dash.cloudflare.com" target="_blank" rel="noopener">Cloudflare dashboard</a>
+                  under <strong>Workers &amp; Pages</strong>.</span>
+                </p>
+              </section>
+            </div>
+          </div>
+
+          <div class="deploy-tab-panel" data-deploy-tab-panel="cloudflare" hidden>
+            <section class="deploy-section">
+              <p class="deploy-field-hint">The app is built and published to Cloudflare Workers after the Supabase deploy.</p>
+              <ol class="deploy-instructions">
+                <li>Open <a href="https://dash.cloudflare.com" target="_blank" rel="noopener">dash.cloudflare.com</a>.</li>
+                <li>Go to <strong>Manage account</strong> → <strong>Account API tokens</strong> → <strong>Create Token</strong>.</li>
+                <li>Select <strong>Edit Cloudflare Workers</strong> from the <strong>Permissions Policies</strong> dropdown at the end of the header.</li>
+                <li>Click <strong>Review Token</strong>, create it, then paste it below.</li>
+              </ol>
+              <label class="deploy-field">
+                <span class="deploy-field-label">Account ID <span class="deploy-field-hint">(32 hex chars)</span></span>
+                <input name="cloudflareAccountId" type="text" spellcheck="false" pattern="[0-9a-fA-F]{32}" placeholder="0123456789abcdef0123456789abcdef">
+              </label>
+              <label class="deploy-field">
+                <span class="deploy-field-label">API token</span>
+                <input name="cloudflareApiToken" type="password" spellcheck="false" placeholder="Cloudflare deploy token">
+              </label>
+            </section>
+          </div>
+          </div>
+
           <p class="deploy-form-errors" hidden></p>
           <div class="deploy-form-actions">
             <button type="button" class="modal-btn modal-btn-secondary deploy-modal-cancel">Cancel</button>
@@ -162,6 +234,15 @@
       <div class="deploy-view deploy-view-progress" hidden>
         <p class="deploy-progress-status">Deploying…</p>
         <pre class="deploy-progress-log" aria-live="polite"></pre>
+        <p class="deploy-warning deploy-progress-warning" hidden>
+          <span class="deploy-warning-icon" aria-hidden="true">⚠</span>
+          <span>One last step — set the authentication redirect URL in
+          <strong>Your Project</strong> → <strong>Authentication</strong> → <strong>URL Configuration</strong>
+          to the URL of your Cloudflare Worker, otherwise sign-in links won't redirect back to your
+          deployed app. Find the exact URL on the
+          <a href="https://dash.cloudflare.com" target="_blank" rel="noopener">Cloudflare dashboard</a>
+          under <strong>Workers &amp; Pages</strong>.</span>
+        </p>
         <div class="deploy-form-actions">
           <button type="button" class="modal-btn modal-btn-primary deploy-progress-close" disabled>Close</button>
         </div>
