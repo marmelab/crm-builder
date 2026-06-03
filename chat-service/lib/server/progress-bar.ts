@@ -105,39 +105,35 @@ function buildSteps(runtime: { stats: RuntimeStats }): Step[] {
     const completedCount = Math.min(dispatched, completed);
     const predictedNotDispatched = Math.max(0, expected - dispatched);
     const plan = FLOW_PLANS[dispatchedTypes[0]];
-    // For multi-ticket COMPLEX the plan template only covers 1 ticket (5 steps).
-    // Extend beyond the template with same-role blocks (all devs, then all qr's,
-    // then all tv's) so groupRoles can collapse them into single segments.
-    const planSlice = plan ? plan.slice(dispatched, dispatched + predictedNotDispatched) : [];
-    const overflow = predictedNotDispatched - planSlice.length;
-    let upcomingAgents: RoleType[];
-    if (overflow <= 0) {
-        upcomingAgents = planSlice;
-    } else {
-        // Pull merger to the end, fill remaining slots as grouped blocks per role
-        // so consecutive-same-role grouping produces clean pending segments.
-        const planWithoutMerger = planSlice.filter((r) => r !== Roles.MERGER);
-        const hasMerger = planSlice.includes(Roles.MERGER);
-        const slots = predictedNotDispatched - planWithoutMerger.length - (hasMerger ? 1 : 0);
-        const fullCycles = Math.floor(slots / WAVE_PATTERN.length);
-        const remainder = slots % WAVE_PATTERN.length;
-        // Group by role (all devs, then all qr's, then all tv's) so groupRoles
-        // collapses them — avoids isolated "lone developer" pending segments.
-        const overflowByRole = WAVE_PATTERN.flatMap((r) =>
-            Array<RoleType>(fullCycles + (WAVE_PATTERN.indexOf(r) < remainder ? 1 : 0)).fill(r)
-        );
-        upcomingAgents = [
-            ...planWithoutMerger,
-            ...overflowByRole,
-            ...(hasMerger ? [Roles.MERGER] : []),
-        ];
-    }
-
     const dur = (role: RoleType, count = 1) => Math.round(durationFor(role, count) * durationScale);
 
-    // Build dispatched steps — group parallel agents into single segments.
-    // A group is done when all its individual agents have completed
-    // (agentCursor tracks how many individual agents we've accounted for).
+    // Build upcoming predicted agents as contiguous role blocks so groupRoles
+    // collapses them into clean segments with no gaps.
+    let upcomingAgents: RoleType[];
+    if (predictedNotDispatched === 0) {
+        upcomingAgents = [];
+    } else if (expected > (plan?.length ?? 0)) {
+        // Multi-ticket COMPLEX: compute remaining per role from dispatch state.
+        // floor((expected-2)/3) gives the per-role ticket count for ≤3 waves.
+        const ticketCount = Math.floor((expected - 2) / 3);
+        const waveCount   = Math.max(1, expected - 1 - ticketCount * 3);
+        const devDone     = dispatchedTypes.filter(r => r === Roles.DEVELOPER).length;
+        const qrDone      = dispatchedTypes.filter(r => r === Roles.QUALITY_REVIEWER).length;
+        const tvDone      = dispatchedTypes.filter(r => r === Roles.TEST_VALIDATOR).length;
+        const mergerDone  = dispatchedTypes.filter(r => r === Roles.MERGER).length;
+        upcomingAgents = [
+            ...Array<RoleType>(Math.max(0, ticketCount - devDone)).fill(Roles.DEVELOPER),
+            ...Array<RoleType>(Math.max(0, ticketCount - qrDone)).fill(Roles.QUALITY_REVIEWER),
+            ...Array<RoleType>(Math.max(0, ticketCount - tvDone)).fill(Roles.TEST_VALIDATOR),
+            ...Array<RoleType>(Math.max(0, waveCount   - mergerDone)).fill(Roles.MERGER),
+        ].slice(0, predictedNotDispatched);
+    } else {
+        // Single-ticket flow: follow the plan template directly.
+        upcomingAgents = plan ? plan.slice(dispatched, dispatched + predictedNotDispatched) : [];
+    }
+
+    // Collapse consecutive same-role groups for display. A group is done when
+    // all its individual agents have completed (tracked by agentCursor).
     const dispatchedGroups = groupRoles(dispatchedTypes);
     let agentCursor = 0;
     const dispatchedSteps = dispatchedGroups.map(({ role, count }) => {
@@ -149,18 +145,35 @@ function buildSteps(runtime: { stats: RuntimeStats }): Step[] {
         };
     });
 
+    const upcomingSteps = groupRoles(upcomingAgents).map(({ role, count }) => ({
+        role,
+        status: Statuses.PENDING,
+        durationMs: dur(role, count),
+    }));
+
+    // Merge adjacent same-role PARALLEL_ROLES steps — eliminates the case where
+    // e.g. 2-of-3 developers are dispatched (in_progress) and 1 remains predicted
+    // (pending), which would otherwise appear as two separate developer segments.
+    const merged: Step[] = [];
+    for (const step of [...dispatchedSteps, ...upcomingSteps]) {
+        const prev = merged[merged.length - 1];
+        if (prev && prev.role === step.role && PARALLEL_ROLES.has(step.role)) {
+            prev.durationMs += step.durationMs;
+            // Keep the more-advanced status: done > in_progress > pending
+            if (step.status === Statuses.DONE) prev.status = Statuses.DONE;
+            else if (step.status === Statuses.IN_PROGRESS && prev.status === Statuses.PENDING) prev.status = Statuses.IN_PROGRESS;
+        } else {
+            merged.push({ ...step });
+        }
+    }
+
     return [
         {
             role: Roles.ORCHESTRATOR,
             status: dispatched > 0 ? Statuses.DONE : Statuses.IN_PROGRESS,
             durationMs: dur(Roles.ORCHESTRATOR),
         },
-        ...dispatchedSteps,
-        ...groupRoles(upcomingAgents).map(({ role, count }) => ({
-            role,
-            status: Statuses.PENDING,
-            durationMs: dur(role, count),
-        })),
+        ...merged,
     ];
 }
 
