@@ -685,7 +685,7 @@ line, append the marker with three fields translated into the user's language:
 
 Examples:
 - French: `%%ASK_SATISFACTION|Aperçu prêt|Vos modifications sont visibles dans l'aperçu, mais pas encore enregistrées définitivement. Êtes-vous satisfait ?|Oui, enregistrer les modifications|Non, je veux modifier quelque chose%%`
-- English: `%%ASK_SATISFACTION|Preview ready|Your changes are visible in the preview — but haven't been saved yet. Are you happy with the result?|Yes, save the changes|No, I want to change something%%`
+- English: `%%ASK_SATISFACTION|Preview ready|Your changes are visible in the preview but haven't been saved yet. Are you happy with the result?|Yes, save the changes|No, I want to change something%%`
 
 The chat UI renders this as a styled widget — do NOT write a text question yourself.
 
