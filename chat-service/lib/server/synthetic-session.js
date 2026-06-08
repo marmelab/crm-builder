@@ -23,20 +23,20 @@ function uid() { return randomBytes(6).toString('hex'); }
 
 const SCENARIOS = {
   simple3: {
-    userMessage: 'Ajoute un badge notification sur la cloche, un indicateur de statut sur les deals, et un filtre par secteur sur les entreprises',
+    userMessage: 'Add a notification badge on the bell, a status indicator on deals, and a sector filter on companies',
     tickets: [
-      { id: 'TASK-001', title: 'Badge notification sur l\'icône cloche du header', deps: [] },
-      { id: 'TASK-002', title: 'Indicateur de statut coloré dans la liste des deals', deps: [] },
-      { id: 'TASK-003', title: 'Filtre par secteur d\'activité sur la liste des entreprises', deps: [] },
+      { id: 'TASK-001', title: 'Notification badge on the header bell icon', deps: [] },
+      { id: 'TASK-002', title: 'Colored status indicator in the deals list', deps: [] },
+      { id: 'TASK-003', title: 'Sector filter on the companies list', deps: [] },
     ],
   },
   complex4: {
-    userMessage: 'Ajoute un pipeline de ventes configurable avec des étapes personnalisées et un tableau de bord de performance associé',
+    userMessage: 'Add a configurable sales pipeline with custom stages and an associated performance dashboard',
     tickets: [
-      { id: 'TASK-001', title: 'Modèle Pipeline avec étapes configurables', deps: [] },
-      { id: 'TASK-002', title: 'API REST pour gérer les étapes du pipeline', deps: ['TASK-001'] },
-      { id: 'TASK-003', title: 'Vue liste des pipelines avec CRUD', deps: ['TASK-001'] },
-      { id: 'TASK-004', title: 'Dashboard de performance du pipeline', deps: ['TASK-002', 'TASK-003'] },
+      { id: 'TASK-001', title: 'Pipeline model with configurable stages', deps: [] },
+      { id: 'TASK-002', title: 'REST API to manage pipeline stages', deps: ['TASK-001'] },
+      { id: 'TASK-003', title: 'Pipeline list view with CRUD', deps: ['TASK-001'] },
+      { id: 'TASK-004', title: 'Pipeline performance dashboard', deps: ['TASK-002', 'TASK-003'] },
     ],
   },
 };
@@ -177,8 +177,8 @@ function scheduleEvents(runtime, tickets, speed, sessionDir, initialDelayMs = 30
   setTimeout(() => broadcast(runtime, { type: 'status', working: true }), Math.max(0, initialDelayMs - 100));
   atProgress(0, { dispatchedSubagentTypes: [], agentsCompleted: 0, completedByRole: {}, flowExpected: 0, activeAgentIds: new Set(), activeAgents: 0 });
 
-  atDebug(2, { type: 'assistant', message: { content: [{ type: 'text', text: `Analyse de la demande. Je vais créer ${N} ticket${N > 1 ? 's' : ''} et dispatcher une équipe de développement.` }] } });
-  at(3, { type: 'message', role: 'assistant', content: `🎯 Analyse en cours — ${N} ticket${N > 1 ? 's' : ''} identifié${N > 1 ? 's' : ''}, ${waves.length} wave${waves.length > 1 ? 's' : ''}.` });
+  atDebug(2, { type: 'assistant', message: { content: [{ type: 'text', text: `Analyzing the request. I will create ${N} ticket${N > 1 ? 's' : ''} and dispatch a development team.` }] } });
+  at(3, { type: 'message', role: 'assistant', content: `🎯 Analyzing — ${N} ticket${N > 1 ? 's' : ''} identified, ${waves.length} wave${waves.length > 1 ? 's' : ''}.` });
 
   // Planner dispatch
   atDebug(6, agentDispatchEvent([plannerAgent], null));
@@ -188,15 +188,15 @@ function scheduleEvents(runtime, tickets, speed, sessionDir, initialDelayMs = 30
 
   // ── Planner phase (T=8–38s) ───────────────────────────────────────────────
 
-  atDebug(12, { type: 'assistant', message: { content: [{ type: 'text', text: `Création des ${N} fichiers TASK-0XX.json dans TICKETS_DIR...` }] } });
+  atDebug(12, { type: 'assistant', message: { content: [{ type: 'text', text: `Creating the ${N} TASK-0XX.json files in TICKETS_DIR...` }] } });
   atDebug(20, { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'toolu_' + uid(), name: 'Write', input: { file_path: `/sessions/.../TASK-001.json`, content: '...' } }] } });
-  atDebug(25, { type: 'assistant', message: { content: [{ type: 'text', text: `Tickets créés. Vérification des dépendances...` }] } });
+  atDebug(25, { type: 'assistant', message: { content: [{ type: 'text', text: `Tickets created. Checking dependencies...` }] } });
 
   // Planner done → lock flowExpected
   atDebug(35, taskCompletedEvent(plannerAgent, { inputTokens: 9000, outputTokens: 1800, cacheCreationInputTokens: 0, cacheReadInputTokens: 52000 }));
   atProgress(35.1, { agentsCompleted: 1, completedByRole: { planner: 1 }, flowExpected: flowExpectedValue, waveSizes: waves.map((w) => w.length) });
   atStats(35.2, 28000, 0, 0.22);
-  at(36, { type: 'message', role: 'assistant', content: `📋 ${N} tickets planifiés en ${waves.length} wave${waves.length > 1 ? 's' : ''} — dispatch de l'équipe.` });
+  at(36, { type: 'message', role: 'assistant', content: `📋 ${N} tickets planned across ${waves.length} wave${waves.length > 1 ? 's' : ''} — dispatching the team.` });
   at(37, { type: 'title', title: `Synthetic COMPLEX (${N} tickets, ${waves.length} wave${waves.length > 1 ? 's' : ''})` });
 
   // ── Waves ─────────────────────────────────────────────────────────────────
@@ -303,7 +303,7 @@ function scheduleEvents(runtime, tickets, speed, sessionDir, initialDelayMs = 30
       }
     }, ms(mergerT));
 
-    at(mergerT + 2, { type: 'message', role: 'assistant', content: `✅ Wave ${waveIdx + 1}/${waves.length} mergée (${waveTickets.length} ticket${waveTickets.length > 1 ? 's' : ''}).` });
+    at(mergerT + 2, { type: 'message', role: 'assistant', content: `✅ Wave ${waveIdx + 1}/${waves.length} merged (${waveTickets.length} ticket${waveTickets.length > 1 ? 's' : ''}).` });
 
     // Next wave starts after merger + short gap
     waveBaseT = mergerT + 8;
@@ -312,7 +312,7 @@ function scheduleEvents(runtime, tickets, speed, sessionDir, initialDelayMs = 30
   // ── End of session ────────────────────────────────────────────────────────
 
   const endT = waveBaseT;
-  at(endT, { type: 'message', role: 'assistant', content: `🎉 Toutes les modifications sont mergées sur \`main\`. Session terminée.` });
+  at(endT, { type: 'message', role: 'assistant', content: `🎉 All changes merged into \`main\`. Session complete.` });
   at(endT + 2, { type: 'status', working: false });
   at(endT + 3, { type: 'state', state: 'completed' });
   setTimeout(() => {
