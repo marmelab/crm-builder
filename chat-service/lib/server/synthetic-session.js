@@ -29,15 +29,15 @@ async function runSatisfactionAsk(runtime, speed) {
   const at = (s, payload) => setTimeout(() => broadcast(runtime, payload), ms(s));
 
   at(0,   { type: 'status', working: true });
-  at(0.5, { type: 'message', role: 'assistant', content: '⚙️ Application de vos modifications…' });
-  at(3,   { type: 'message', role: 'assistant', content: '🔀 Fusion dans la branche principale…' });
-  at(5,   { type: 'message', role: 'assistant', content: 'C\'est fait — jetez un œil dans l\'aperçu.' });
+  at(0.5, { type: 'message', role: 'assistant', content: '⚙️ Applying your changes…' });
+  at(3,   { type: 'message', role: 'assistant', content: '🔀 Merging into the main branch…' });
+  at(5,   { type: 'message', role: 'assistant', content: 'Done — take a look in the preview.' });
   at(5.2, {
     type: 'satisfaction_ask',
-    header: 'Aperçu prêt',
-    body: "Vos modifications sont visibles dans l'aperçu, mais pas encore enregistrées définitivement. Êtes-vous satisfait ?",
-    yes: 'Oui, enregistrer les modifications',
-    no: 'Non, je veux modifier quelque chose',
+    header: 'Preview ready',
+    body: "Your changes are visible in the preview — but haven't been saved yet. Are you happy with the result?",
+    yes: 'Yes, save the changes',
+    no: 'No, I want to change something',
   });
   at(5.4, { type: 'status', working: false });
 }
