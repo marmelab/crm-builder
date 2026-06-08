@@ -5,8 +5,8 @@ import { renderInlineMarkdown } from './lib/markdown.js';
 import { initRollback } from './lib/rollback/index.js';
 import { initDeploy } from './lib/deploy/index.js';
 
-const widget = document.getElementById('chat-widget');
-const toggle = document.getElementById('chat-toggle');
+const widget   = document.getElementById('chat-widget');
+const toggle   = document.getElementById('chat-toggle');
 const debugBtn = document.getElementById('chat-debug');
 const stateBtn = document.getElementById('chat-state');
 const newBtn = document.getElementById('chat-new');
@@ -15,9 +15,9 @@ const historyCollapseBtn = document.getElementById('history-collapse');
 const historyList = document.getElementById('history-list');
 const historyEmpty = document.getElementById('history-empty');
 const chatTitle = document.getElementById('chat-title');
-const form = document.getElementById('chat-form');
-const input = document.getElementById('chat-input');
-const send = document.getElementById('chat-send');
+const form     = document.getElementById('chat-form');
+const input    = document.getElementById('chat-input');
+const send     = document.getElementById('chat-send');
 const stopBtn = document.getElementById('chat-stop');
 const messages = document.getElementById('chat-messages');
 const stats = document.getElementById('chat-stats');
@@ -27,7 +27,7 @@ const statsPanelBody = document.getElementById('chat-stats-panel-body');
 const statsCloseBtn = document.getElementById('chat-stats-close');
 
 const restoreBtn = document.getElementById('chat-restore-btn');
-let working = false;
+let working  = false;
 // Last broadcast state of the *displayed* session. A rollback that hits a
 // conflict keeps the session `in_progress` for the whole background resolution,
 // so gating the restore button on this (plus `working`) keeps it disabled until
@@ -47,7 +47,7 @@ function refreshRestoreBtn() {
   if (restoreBtn) restoreBtn.disabled = isSessionBusy();
 }
 let progressTotal = 0;
-let progressDone = 0;
+let progressDone  = 0;
 let progressSteps = [];
 // Unix-seconds timestamp when the 5h usage limit window resets. Non-null while
 // the session sits in `rate_limited` state — drives the bubble + resume button
@@ -95,20 +95,20 @@ function placeIntoMessages(el, seq) {
 
 const TOOL_LABELS = {
   orchestrator: '🎭 Orchestrator',
-  Task: '🤖 Agent',
-  Agent: '🤖 Agent',
+  Task:         '🤖 Agent',
+  Agent:        '🤖 Agent',
   agent_output: '💬 Agent reply',
-  TeamCreate: '👥 Team spawned',
-  TeamDelete: '✓  Team done',
-  Read: '📖 Reading',
-  Write: '✏️  Writing',
-  Edit: '✏️  Editing',
-  Bash: '⚡ Running command',
-  Glob: '🔍 Searching files',
-  Grep: '🔍 Searching code',
-  SendMessage: '✉️  Message',
-  system: '🔌 Session started',
-  result: '✅ Turn complete',
+  TeamCreate:   '👥 Team spawned',
+  TeamDelete:   '✓  Team done',
+  Read:         '📖 Reading',
+  Write:        '✏️  Writing',
+  Edit:         '✏️  Editing',
+  Bash:         '⚡ Running command',
+  Glob:         '🔍 Searching files',
+  Grep:         '🔍 Searching code',
+  SendMessage:  '✉️  Message',
+  system:       '🔌 Session started',
+  result:       '✅ Turn complete',
 };
 
 function switchSessionAndOpen(id) {
@@ -549,9 +549,9 @@ function handleWsMessage(event) {
     const timeline = Array.isArray(msg.timeline) && msg.timeline.length
       ? msg.timeline
       : [
-        ...(msg.messages || []).map((m) => ({ kind: 'message', role: m.role, content: m.content })),
-        ...(msg.debugEvents || []).map((d) => ({ kind: 'debug', ...d })),
-      ];
+          ...(msg.messages || []).map((m) => ({ kind: 'message', role: m.role, content: m.content })),
+          ...(msg.debugEvents || []).map((d) => ({ kind: 'debug', ...d })),
+        ];
     // Tail user messages still in the queue: walk the timeline backwards and
     // mark the last N user-message items as queued (queue holds user-only).
     // queuedIds[i] pairs with the i-th queued tail message in chronological
@@ -684,7 +684,7 @@ function handleWsMessage(event) {
 
   if (msg.type === 'progress') {
     progressTotal = msg.total || 0;
-    progressDone = msg.done || 0;
+    progressDone  = msg.done  || 0;
     progressSteps = Array.isArray(msg.steps) ? msg.steps : [];
     if (typeof msg.remainingTimeMs === 'number') {
       remainingTimeMsAtReceipt = msg.remainingTimeMs;
@@ -1036,10 +1036,10 @@ function toolDetail(toolName, input) {
   if (!input) return null;
   const short = (s, n = 60) => s && s.length > n ? '…' + s.slice(-n) : s;
   switch (toolName) {
-    case 'Read': return short(input.file_path);
+    case 'Read':  return short(input.file_path);
     case 'Write': return short(input.file_path);
-    case 'Edit': return short(input.file_path);
-    case 'Bash': return short(input.command, 80);
+    case 'Edit':  return short(input.file_path);
+    case 'Bash':  return short(input.command, 80);
     case 'Grep': return `"${input.pattern}"${input.path ? ' in ' + input.path : ''}`;
     case 'Glob': return input.pattern;
     case 'SendMessage': {
