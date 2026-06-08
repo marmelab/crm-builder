@@ -49,6 +49,7 @@ function refreshRestoreBtn() {
 let progressTotal = 0;
 let progressDone  = 0;
 let progressSteps = [];
+let progressIndeterminate = false;
 // Unix-seconds timestamp when the 5h usage limit window resets. Non-null while
 // the session sits in `rate_limited` state — drives the bubble + resume button
 // and the countdown ticker below.
@@ -182,6 +183,7 @@ function resetChatUi() {
   progressTotal = 0;
   progressDone = 0;
   progressSteps = [];
+  progressIndeterminate = false;
   remainingTimeMsAtReceipt = 0;
   remainingTimeReceivedAt = 0;
   stopRemainingTimeTicker();
@@ -219,6 +221,7 @@ function stopRemainingTimeTicker() {
 // snapshot hasn't arrived yet (right after sending a message), we still want
 // to render *something* under the bar, so default to "Estimating…".
 function remainingTimeText() {
+  if (progressIndeterminate) return 'Estimating remaining time…';
   if (remainingTimeMsAtReceipt > 0 && remainingTimeReceivedAt > 0) {
     const live = remainingTimeMsAtReceipt - (Date.now() - remainingTimeReceivedAt);
     return live > 0 ? formatRemaining(live) || '' : 'Wrapping up…';
@@ -311,13 +314,30 @@ function updateWorkingProgress() {
 // server omits steps (legacy / edge), fall back to N equal segments so the
 // label/remaining-time still match the bar.
 function renderProgressSegments(bar) {
+  // Work total unknown yet — show one indeterminate shimmer segment (CSS
+  // `.is-indeterminate`) rather than a determinate fill that would recede once
+  // the planner reveals the real, larger topology.
+  bar.classList.toggle('is-indeterminate', progressIndeterminate);
+  if (progressIndeterminate) {
+    if (bar.children.length !== 1 || !bar.firstChild.classList.contains('is-indeterminate')) {
+      const seg = makeStepEl();
+      seg.classList.add('is-indeterminate');
+      bar.replaceChildren(seg);
+    }
+    return;
+  }
+
   const steps = progressSteps.length
     ? progressSteps
     : fallbackEqualSteps(progressTotal, progressDone);
 
-  if (bar.children.length !== steps.length) {
-    bar.replaceChildren(...steps.map(makeStepEl));
-  }
+  // Reconcile the child count by appending/removing only the trailing delta —
+  // never replaceChildren. Recreating elements resets every mask to empty, so a
+  // `done` segment re-animates from 0→full, flashing the whole bar backward on
+  // any count change (e.g. when the planner reveals the wave topology). Reusing
+  // the leading segments keeps their filled state and animation intact.
+  while (bar.children.length < steps.length) bar.appendChild(makeStepEl());
+  while (bar.children.length > steps.length) bar.removeChild(bar.lastChild);
 
   steps.forEach((step, i) => {
     updateStepEl(bar.children[i], step);
@@ -334,14 +354,26 @@ function makeStepEl() {
 }
 
 // Step-driven only: status maps to a class, CSS handles the mask transition.
-// pending/in_progress → mask fully covers the segment (scaleX(1) by default);
-// done → mask collapses (scaleX(0) via `.is-done` rule). No wall-clock fill.
+// pending → mask fully covers the segment (scaleX(1) by default);
+// in_progress → mask animates slowly toward scaleX(0.05) over durationMs so the
+//   bar visually advances while the agent runs; --fill-duration drives the CSS animation.
+// done → mask collapses fully (scaleX(0) via `.is-done` rule + transition).
 function updateStepEl(seg, step) {
   seg.style.flexGrow = String(Math.max(1, step.durationMs));
   seg.title = `${step.role} · ${Math.round(step.durationMs / 1000)}s`;
   if (seg.dataset.status === step.status) return;
   seg.dataset.status = step.status;
   seg.className = `msg-working-progress-step is-${step.status}`;
+  if (step.status === 'in_progress') {
+    const mask = seg.querySelector('.msg-working-progress-step-mask');
+    if (mask) {
+      mask.style.setProperty('--fill-duration', `${step.durationMs}ms`);
+      // On reconnect the DOM is rebuilt from scratch, so the CSS animation restarts
+      // at scaleX(1) (empty) even if the step has been running for a while. Apply a
+      // negative animation-delay to restore the correct visual position.
+      mask.style.setProperty('--fill-delay', `-${step.elapsedMs || 0}ms`);
+    }
+  }
 }
 
 function fallbackEqualSteps(total, done) {
@@ -648,6 +680,7 @@ function handleWsMessage(event) {
       progressTotal = 0;
       progressDone = 0;
       progressSteps = [];
+      progressIndeterminate = true;
       remainingTimeMsAtReceipt = 0;
       remainingTimeReceivedAt = 0;
       startRemainingTimeTicker();
@@ -686,7 +719,11 @@ function handleWsMessage(event) {
     progressTotal = msg.total || 0;
     progressDone  = msg.done  || 0;
     progressSteps = Array.isArray(msg.steps) ? msg.steps : [];
-    if (typeof msg.remainingTimeMs === 'number') {
+    // Indeterminate = the server doesn't yet know the total work (orchestrator
+    // routing / planner decomposing). Render a shimmer + "Estimating…" instead
+    // of a determinate fill that would recede once the real plan arrives.
+    progressIndeterminate = !!msg.indeterminate;
+    if (!progressIndeterminate && typeof msg.remainingTimeMs === 'number') {
       remainingTimeMsAtReceipt = msg.remainingTimeMs;
       remainingTimeReceivedAt = Date.now();
     }

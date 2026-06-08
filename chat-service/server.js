@@ -237,6 +237,7 @@ wss.on('connection', async (ws, req) => {
     } else if (/^\s*\/fake\b/i.test(parsed.content)) {
       // /fake [scenario=<name>] [speed=<n>] — inject a synthetic turn into the
       // current session without spawning Claude (zero tokens).
+      // Each scenario manages runtime.busy itself (cleared in its last timer).
       r.busy = true;
       (async () => {
         const { runFakeTurn } = await import('./lib/server/synthetic-session.js');
@@ -246,7 +247,6 @@ wss.on('connection', async (ws, req) => {
         if (sm) params.scenario = sm[1];
         if (sp) params.speed = parseFloat(sp[1]);
         await runFakeTurn(r, params);
-        r.busy = false;
       })().catch((err) => {
         broadcast(r, { type: 'message', role: 'assistant', content: `❌ /fake error: ${err.message}` });
         r.busy = false;

@@ -10,6 +10,7 @@ import { runtimes } from './runtime.js';
 import { handleSessionCommitsRequest, handleSessionRollbackRequest } from './rollback.js';
 import { broadcast, sendToWs } from './ws-bus.js';
 import { handleGetDeployStatus, handleConfigureDeploy, handleDeployRun, handleDeployEvents } from './deploy-routes.js';
+import { handleDebugRequest } from './debug-routes.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -250,6 +251,7 @@ export function createRequestHandler({ publicDir }) {
     if (req.url === '/api/deploy/configure' && req.method === 'POST') return handleConfigureDeploy(req, res);
     if (req.url === '/api/deploy/run' && req.method === 'POST') return handleDeployRun(req, res);
     if (req.url?.startsWith('/api/stats')) return handleStatsRequest(req, res);
+    if (req.url?.startsWith('/api/debug/')) return handleDebugRequest(req, res);
 
     const commitsMatch = req.url?.match(/^\/api\/sessions\/([0-9a-f-]+)\/commits$/i);
     if (commitsMatch && req.method === 'GET') {

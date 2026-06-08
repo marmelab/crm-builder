@@ -11,10 +11,11 @@ import { startSubagentTailer, stopSubagentTailer } from './subagent-tail.js';
 import {
   emptyBreakdown, addBreakdown, breakdownFromModelUsage, costFromBreakdown,
 } from '../stats/io.js';
-import { updateProgressBar, predictedFlowExpected } from './progress-bar.ts';
+import { updateProgressBar, predictedFlowExpected, flowExpectedForTickets } from './progress-bar.ts';
 import {
   sessionHasMergedTickets, scheduleDocumentatorRun, clearDocumentatorTimer,
 } from './documentator-spawn.js';
+import { loadTicketsAndWaves } from '../stats/tickets.js';
 
 const AGENT_DISPATCH_TOOLS = new Set(['Agent', 'Task']);
 
@@ -43,8 +44,18 @@ export async function processMessage(runtime, prompt, opts = {}) {
   runtime.stats = {
     ...runtime.stats,
     agentsCompleted: 0,
+    completedByRole: {},
     flowExpected: 0,
     dispatchedSubagentTypes: [],
+    waveSizes: null,
+    inProgressSince: Date.now(),
+    lastInProgressRole: null,
+    activeAgentIds: new Set(),
+    activeAgents: 0,
+    // Always 1 for a real turn — reset here so a prior `/fake` (which sets it to
+    // 1/speed and only restores it on natural completion) can't leak its scaled
+    // animation durations into the next real turn.
+    durationScale: 1,
   };
   updateProgressBar(runtime);
 
@@ -55,6 +66,10 @@ export async function processMessage(runtime, prompt, opts = {}) {
   // before this spawn started) so it can't leak into this turn's outcome.
   runtime.pendingRateLimit = null;
   const toolMap = new Map();
+  // task_id → role, resolved at task_started via the spawning Agent tool_use
+  // (task_started carries tool_use_id; toolMap holds its subagent_type). Lets
+  // completions be attributed per-role for the progress frontier.
+  const taskRole = new Map();
   let receivedText = false;
   let rateLimit = null;
   let resultError = false;
@@ -223,11 +238,31 @@ export async function processMessage(runtime, prompt, opts = {}) {
           if (event.subtype === 'task_started' && isAgentTaskType && event.task_id) {
             runtime.stats.activeAgentIds.add(event.task_id);
             runtime.stats.activeAgents = runtime.stats.activeAgentIds.size;
+            // Remember this task's role so its completion can be attributed.
+            const role = toolMap.get(event.tool_use_id)?.input?.subagent_type;
+            if (role) taskRole.set(event.task_id, role);
             sendStats(runtime);
           } else if (event.subtype === 'task_notification' && event.status === 'completed' && event.task_id && runtime.stats.activeAgentIds.has(event.task_id)) {
             runtime.stats.activeAgentIds.delete(event.task_id);
             runtime.stats.activeAgents = runtime.stats.activeAgentIds.size;
             runtime.stats.agentsCompleted++;
+            const doneRole = taskRole.get(event.task_id);
+            if (doneRole) runtime.stats.completedByRole[doneRole] = (runtime.stats.completedByRole[doneRole] || 0) + 1;
+            // When the planner completes (first agent done in a COMPLEX flow),
+            // count the TASK-*.json files it produced and lock flowExpected to
+            // the exact total so the bar never backtracks between waves:
+            //   2 (orchestrator + planner) + N_tickets × 3 (dev+qr+tv) + 1 (merger)
+            if (runtime.stats.agentsCompleted === 1
+                && runtime.stats.dispatchedSubagentTypes[0] === 'planner') {
+              const sessionDir = `${LOG_DIR}/${runtime.session.id}`;
+              const result = await loadTicketsAndWaves(sessionDir);
+              if (result && result.tickets.length > 0) {
+                runtime.stats.flowExpected = flowExpectedForTickets(result.tickets.length, result.waves.length);
+                // Per-wave ticket counts let the bar build the exact final
+                // topology now, so it never restructures wave by wave.
+                runtime.stats.waveSizes = result.waves.map((w) => w.length);
+              }
+            }
             sendStats(runtime);
             updateProgressBar(runtime);
           }
@@ -265,9 +300,12 @@ export async function processMessage(runtime, prompt, opts = {}) {
           // cost: total_cost_usd is cumulative within the current spawn — replace,
           // don't add (summing cumulative values inflates massively).
           runtime.stats.costUsdCurrentSpawn = event.total_cost_usd || 0;
-          // Reset active agents when turn ends (safety — sub-agents should all be done)
-          runtime.stats.activeAgents = 0;
-          runtime.stats.activeAgentIds.clear();
+          // Do NOT clear activeAgentIds here. In COMPLEX, `result` fires for each
+          // subagent as it finishes (not just once at the end of the turn), so
+          // clearing on every `result` wipes in-process-teammate agents before
+          // their task_notification/completed arrives — agentsCompleted then never
+          // increments past orchestrator+planner and the progress bar stalls at ~15%.
+          // Let completions drain activeAgentIds naturally via task_notification.
           sendStats(runtime);
           // Do NOT break here. For SIMPLE the process closes right after `result`
           // so the loop ends on its own. For COMPLEX the autonomous team keeps
