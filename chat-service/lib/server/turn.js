@@ -44,11 +44,16 @@ export async function processMessage(runtime, prompt, opts = {}) {
   runtime.stats = {
     ...runtime.stats,
     agentsCompleted: 0,
+    completedByRole: {},
     flowExpected: 0,
     dispatchedSubagentTypes: [],
     waveSizes: null,
     activeAgentIds: new Set(),
     activeAgents: 0,
+    // Always 1 for a real turn — reset here so a prior `/fake` (which sets it to
+    // 1/speed and only restores it on natural completion) can't leak its scaled
+    // animation durations into the next real turn.
+    durationScale: 1,
   };
   updateProgressBar(runtime);
 
@@ -59,6 +64,10 @@ export async function processMessage(runtime, prompt, opts = {}) {
   // before this spawn started) so it can't leak into this turn's outcome.
   runtime.pendingRateLimit = null;
   const toolMap = new Map();
+  // task_id → role, resolved at task_started via the spawning Agent tool_use
+  // (task_started carries tool_use_id; toolMap holds its subagent_type). Lets
+  // completions be attributed per-role for the progress frontier.
+  const taskRole = new Map();
   let receivedText = false;
   let rateLimit = null;
   let resultError = false;
@@ -209,11 +218,16 @@ export async function processMessage(runtime, prompt, opts = {}) {
           if (event.subtype === 'task_started' && isAgentTaskType && event.task_id) {
             runtime.stats.activeAgentIds.add(event.task_id);
             runtime.stats.activeAgents = runtime.stats.activeAgentIds.size;
+            // Remember this task's role so its completion can be attributed.
+            const role = toolMap.get(event.tool_use_id)?.input?.subagent_type;
+            if (role) taskRole.set(event.task_id, role);
             sendStats(runtime);
           } else if (event.subtype === 'task_notification' && event.status === 'completed' && event.task_id && runtime.stats.activeAgentIds.has(event.task_id)) {
             runtime.stats.activeAgentIds.delete(event.task_id);
             runtime.stats.activeAgents = runtime.stats.activeAgentIds.size;
             runtime.stats.agentsCompleted++;
+            const doneRole = taskRole.get(event.task_id);
+            if (doneRole) runtime.stats.completedByRole[doneRole] = (runtime.stats.completedByRole[doneRole] || 0) + 1;
             // When the planner completes (first agent done in a COMPLEX flow),
             // count the TASK-*.json files it produced and lock flowExpected to
             // the exact total so the bar never backtracks between waves:

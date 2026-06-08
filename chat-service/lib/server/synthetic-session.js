@@ -175,7 +175,7 @@ function scheduleEvents(runtime, tickets, speed, sessionDir, initialDelayMs = 30
   // would be wiped. Use a 100ms head-start on the same base delay.
   setTimeout(() => broadcast(runtime, { type: 'queue_updated', queuedIds: [], cancelledId: null }), Math.max(0, initialDelayMs - 150));
   setTimeout(() => broadcast(runtime, { type: 'status', working: true }), Math.max(0, initialDelayMs - 100));
-  atProgress(0, { dispatchedSubagentTypes: [], agentsCompleted: 0, flowExpected: 0, activeAgentIds: new Set(), activeAgents: 0 });
+  atProgress(0, { dispatchedSubagentTypes: [], agentsCompleted: 0, completedByRole: {}, flowExpected: 0, activeAgentIds: new Set(), activeAgents: 0 });
 
   atDebug(2, { type: 'assistant', message: { content: [{ type: 'text', text: `Analyse de la demande. Je vais créer ${N} ticket${N > 1 ? 's' : ''} et dispatcher une équipe de développement.` }] } });
   at(3, { type: 'message', role: 'assistant', content: `🎯 Analyse en cours — ${N} ticket${N > 1 ? 's' : ''} identifié${N > 1 ? 's' : ''}, ${waves.length} wave${waves.length > 1 ? 's' : ''}.` });
@@ -194,7 +194,7 @@ function scheduleEvents(runtime, tickets, speed, sessionDir, initialDelayMs = 30
 
   // Planner done → lock flowExpected
   atDebug(35, taskCompletedEvent(plannerAgent, { inputTokens: 9000, outputTokens: 1800, cacheCreationInputTokens: 0, cacheReadInputTokens: 52000 }));
-  atProgress(35.1, { agentsCompleted: 1, flowExpected: flowExpectedValue, waveSizes: waves.map((w) => w.length) });
+  atProgress(35.1, { agentsCompleted: 1, completedByRole: { planner: 1 }, flowExpected: flowExpectedValue, waveSizes: waves.map((w) => w.length) });
   atStats(35.2, 28000, 0, 0.22);
   at(36, { type: 'message', role: 'assistant', content: `📋 ${N} tickets planifiés en ${waves.length} wave${waves.length > 1 ? 's' : ''} — dispatch de l'équipe.` });
   at(37, { type: 'title', title: `Synthetic COMPLEX (${N} tickets, ${waves.length} wave${waves.length > 1 ? 's' : ''})` });
@@ -260,6 +260,7 @@ function scheduleEvents(runtime, tickets, speed, sessionDir, initialDelayMs = 30
           runtime.stats.activeAgentIds.delete(a.taskId);
           runtime.stats.activeAgents = runtime.stats.activeAgentIds.size;
           runtime.stats.agentsCompleted++;
+          runtime.stats.completedByRole[a.subagentType] = (runtime.stats.completedByRole[a.subagentType] || 0) + 1;
           updateProgressBar(runtime);
         }, ms(t));
       });
@@ -286,6 +287,7 @@ function scheduleEvents(runtime, tickets, speed, sessionDir, initialDelayMs = 30
       runtime.stats.activeAgentIds.delete(mergerAgent.taskId);
       runtime.stats.activeAgents = runtime.stats.activeAgentIds.size;
       runtime.stats.agentsCompleted++;
+      runtime.stats.completedByRole['merger'] = (runtime.stats.completedByRole['merger'] || 0) + 1;
       runtime.stats.dispatchedSubagentTypes.push('merger');
       updateProgressBar(runtime);
       // Update wave tickets to 'merged' on disk so /api/stats shows them green
@@ -371,6 +373,7 @@ export async function runFakeTurn(runtime, { scenario = 'simple3', speed = 20 } 
 
   // Reset per-turn stats (mirrors the reset at the top of turn.js)
   runtime.stats.agentsCompleted = 0;
+  runtime.stats.completedByRole = {};
   runtime.stats.flowExpected = 0;
   runtime.stats.dispatchedSubagentTypes = [];
   runtime.stats.waveSizes = null;

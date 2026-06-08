@@ -164,3 +164,53 @@ test('first wave block is sized to its own tickets, not the whole flow', () => {
   // wave2 has 2 tickets so its developer block must be wider than wave1's (1 ticket).
   assert.ok(devBlocks[1].durationMs > devBlocks[0].durationMs, 'wave2 dev block should be wider than wave1');
 });
+
+// Per-role attribution: in a multi-ticket wave a fast role completing must NOT
+// advance the frontier past a slower role's block that is still running.
+const statusOf = (steps, role) => steps.find((s) => s.role === role)?.status;
+
+test('developer block stays in_progress while a later ticket developer runs', () => {
+  // 1 wave, 2 tickets. Ticket-1's whole trio finished; ticket-2's developer
+  // is still running. The developer block must NOT show done.
+  const stats = {
+    dispatchedSubagentTypes: ['planner', 'developer', 'quality-reviewer', 'test-validator', 'developer', 'quality-reviewer', 'test-validator'],
+    agentsCompleted: 4,
+    completedByRole: { planner: 1, developer: 1, 'quality-reviewer': 1, 'test-validator': 1 },
+    flowExpected: flowExpectedForTickets(2, 1),
+    waveSizes: [2],
+  };
+  const steps = stepsFor(stats);
+  assertGapFree(steps, 'per-role mid-wave');
+  assert.equal(statusOf(steps, 'developer'), 'in_progress', 'developer block must stay in_progress (1/2 devs done)');
+  // Later blocks pending — single frontier preserved despite qr/tv having a completion.
+  assert.equal(statusOf(steps, 'quality-reviewer'), 'pending');
+
+  // Sanity: the OLD scalar behaviour (no per-role data) DID mark it done — proves
+  // the attribution is what fixes it, not a topology change.
+  const scalar = stepsFor({ ...stats, completedByRole: {} });
+  assert.equal(statusOf(scalar, 'developer'), 'done', 'scalar fallback reproduces the prior (over-advanced) behaviour');
+});
+
+test('developer block flips to done only once both developers complete', () => {
+  const steps = stepsFor({
+    dispatchedSubagentTypes: ['planner', 'developer', 'quality-reviewer', 'test-validator', 'developer', 'quality-reviewer', 'test-validator'],
+    agentsCompleted: 3,
+    completedByRole: { planner: 1, developer: 2 }, // both devs done, no reviewer yet
+    flowExpected: flowExpectedForTickets(2, 1),
+    waveSizes: [2],
+  });
+  assertGapFree(steps, 'per-role both devs done');
+  assert.equal(statusOf(steps, 'developer'), 'done');
+  assert.equal(statusOf(steps, 'quality-reviewer'), 'in_progress');
+});
+
+test('planner that reveals no waves does not shimmer forever', () => {
+  // Still planning (0 completions) → indeterminate shimmer.
+  let p = payloadFor({ dispatchedSubagentTypes: ['planner'], agentsCompleted: 0, flowExpected: predictedFlowExpected('planner') });
+  assert.equal(p.indeterminate, true);
+  // Planner completed but produced no waveSizes (failed / empty plan) → must fall
+  // through to a determinate fallback rather than shimmer for the whole run.
+  p = payloadFor({ dispatchedSubagentTypes: ['planner'], agentsCompleted: 1, flowExpected: predictedFlowExpected('planner') });
+  assert.ok(!p.indeterminate, 'planner-done without waveSizes must not stay indeterminate');
+  assert.ok(p.steps.length >= 1);
+});
