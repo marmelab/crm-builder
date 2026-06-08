@@ -699,7 +699,7 @@ text typed directly.
 
 | Meaning | Next |
 |---|---|
-| Satisfaction expressed (button label or free text: "yes", "oui", "perfect", "looks good"…) | Run `Bash("pending-deploys --app /app --session <SESSION_SHORT_ID>")`. Empty output → reply "Great, everything's set." and STATE DONE. Non-empty → emit "Saving your changes — this can take a moment." and enter STATE PD-MIG-DEV. |
+| Satisfaction expressed (button label or free text: "yes", "oui", "perfect", "looks good"…) | Run `Bash("pending-deploys --app /app --session <SESSION_SHORT_ID>")`. Empty output → reply in the user's language (e.g. "Great, everything's set.") and STATE DONE. Non-empty → emit in the user's language (e.g. "Saving your changes — this can take a moment.") and enter STATE PD-MIG-DEV. |
 | Wants to adjust (button label or free text: "no", "non", "change something"…) | Reply asking what they'd like to change, then re-enter CLASSIFICATION on their next message; after the new wave completes, send `%%ASK_SATISFACTION|...|...|...|...%%` again (STATE PD-ASK). |
 | Ambiguous | Ask once what they mean; stay in PD-RESPOND. |
 
@@ -713,8 +713,8 @@ Agent({ subagent_type: "simple-developer",
   prompt: "ROLE: simple-developer (MIGRATION MODE)\nSESSION_SHORT_ID: <id>\nWORKTREE_PATH: /app/worktrees/<id>/simple\nBRANCH_NAME: <id>/simple\nInvoke Skill({skill: \"writing-migrations\"}) and follow it. If no schema change, output NO_MIGRATION_NEEDED." })
 ```
 
-One line: *"Saving your changes…"*. **End turn.** SubagentStop hooks run.
-→ If the dev returned `NO_MIGRATION_NEEDED` → reply "Everything's set." → STATE DONE. Else → STATE PD-MIG-REVIEW.
+One line in the user's language (e.g. *"Saving your changes…"*). **End turn.** SubagentStop hooks run.
+→ If the dev returned `NO_MIGRATION_NEEDED` → reply in the user's language (e.g. "Everything's set.") → STATE DONE. Else → STATE PD-MIG-REVIEW.
 
 ### STATE PD-MIG-REVIEW — review the SQL
 
@@ -741,9 +741,9 @@ Agent({
 
 ### STATE PD-DEPLOY — apply
 
-One line: *"Applying your changes — this can take a moment on first run."*
+One line in the user's language (e.g. *"Applying your changes — this can take a moment on first run."*).
 `Bash("apply-migrations")` (timeout 240000 ms).
-→ exit 0: demo mode → STATE PD-LIVE-ASK; full mode → STATE PD-DONE ("Your changes are saved."). Non-zero → PD-DONE with a non-technical failure line.
+→ exit 0: demo mode → STATE PD-LIVE-ASK; full mode → STATE PD-DONE with a short confirmation in the user's language (e.g. "Your changes are saved."). Non-zero → PD-DONE with a non-technical failure line in the user's language.
 
 ### STATE PD-LIVE-ASK — offer to switch the app to real data
 
@@ -755,8 +755,8 @@ terms), then on a new line the marker with all four fields translated:
 ```
 
 Examples:
-- French: `%%ASK_SATISFACTION|Données enregistrées|Vos données sont sauvegardées. Voulez-vous basculer vers vos vraies données maintenant, ou continuer avec les données de démonstration ?|Oui, utiliser mes vraies données|Non, garder les données de démo%%`
-- English: `%%ASK_SATISFACTION|Data saved|Your data is saved. Want to switch the app to your real data now, or keep using sample data?|Yes, switch to real data|No, keep sample data%%`
+- French: `%%ASK_SATISFACTION|Modifications enregistrées|Vos modifications sont sauvegardées. Voulez-vous basculer vers vos vraies données maintenant, ou continuer avec les données de démonstration ?|Oui, utiliser mes vraies données|Non, garder les données de démo%%`
+- English: `%%ASK_SATISFACTION|Changes saved|Your changes have been saved. Want to switch the app to your real data now, or keep using sample data?|Yes, switch to real data|No, keep sample data%%`
 
 **End this turn.** → Enter STATE PD-LIVE-RESPOND on the next user turn.
 
@@ -767,7 +767,7 @@ The user's reply is the button label text (full string) or free text.
 | Meaning | Next state |
 |---|---|
 | Agreement (button "yes" label or free text) | STATE PD-LIVE-SWITCH |
-| Refusal (button "no" label or free text) | STATE PD-DONE with a short plain reply ("OK, keeping sample data for now. Let me know if you want to switch later.") |
+| Refusal (button "no" label or free text) | STATE PD-DONE with a short plain reply in the user's language (e.g. "OK, keeping sample data for now. Let me know if you want to switch later.") |
 | A new code-change request | Re-enter CLASSIFICATION; send PD-LIVE-ASK widget again after the new wave. |
 | Ambiguous | Re-send the widget once; stay in STATE PD-LIVE-RESPOND. |
 
@@ -775,14 +775,14 @@ The user's reply is the button label text (full string) or free text.
 
 Same as STATE MS-RUN, target `full`:
 
-1. One text line: *"Switching the app to your real data — give it a moment."*
+1. One text line in the user's language (e.g. *"Switching the app to your real data — give it a moment."*).
 2. `Bash("switch-mode full")` (timeout 240000 ms on the first run).
 
 **End this turn.**
 
 → Next turn: STATE PD-DONE.
-- Success → *"Done — the CRM is now using your real data."*
-- Failure → *"The switch didn't complete. Your data is safe, but the app is still on sample data. Want me to try again?"*
+- Success → reply in the user's language (e.g. *"Done — the CRM is now using your real data."*)
+- Failure → reply in the user's language (e.g. *"The switch didn't complete. Your data is safe, but the app is still on sample data. Want me to try again?"*)
 
 ### STATE PD-DONE — POST-DEV wrap
 
