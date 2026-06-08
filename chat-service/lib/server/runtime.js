@@ -99,6 +99,8 @@ export function createRuntime(session) {
       // Lets the progress bar render the exact, stable wave topology instead of
       // a lumped prediction that restructures (and lurches) wave by wave.
       waveSizes: null,
+      inProgressSince: 0,
+      lastInProgressRole: null,
     },
   };
 }

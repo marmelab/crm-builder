@@ -48,6 +48,8 @@ export async function processMessage(runtime, prompt, opts = {}) {
     flowExpected: 0,
     dispatchedSubagentTypes: [],
     waveSizes: null,
+    inProgressSince: Date.now(),
+    lastInProgressRole: null,
     activeAgentIds: new Set(),
     activeAgents: 0,
     // Always 1 for a real turn — reset here so a prior `/fake` (which sets it to

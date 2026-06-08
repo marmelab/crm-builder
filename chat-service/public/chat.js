@@ -365,7 +365,13 @@ function updateStepEl(seg, step) {
   seg.className = `msg-working-progress-step is-${step.status}`;
   if (step.status === 'in_progress') {
     const mask = seg.querySelector('.msg-working-progress-step-mask');
-    if (mask) mask.style.setProperty('--fill-duration', `${step.durationMs}ms`);
+    if (mask) {
+      mask.style.setProperty('--fill-duration', `${step.durationMs}ms`);
+      // On reconnect the DOM is rebuilt from scratch, so the CSS animation restarts
+      // at scaleX(1) (empty) even if the step has been running for a while. Apply a
+      // negative animation-delay to restore the correct visual position.
+      mask.style.setProperty('--fill-delay', `-${step.elapsedMs || 0}ms`);
+    }
   }
 }
 

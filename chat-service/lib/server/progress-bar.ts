@@ -1,9 +1,5 @@
 import { broadcast, sendToWs } from './ws-bus.js';
 
-// ---------------------------------------------
-// ------------------- TYPES -------------------
-// ---------------------------------------------
-
 type RoleType = typeof Roles[keyof typeof Roles];
 
 type StatusType = typeof Statuses[keyof typeof Statuses];
@@ -12,20 +8,19 @@ type Step = {
     role: RoleType;
     status: StatusType;
     durationMs: number;
+    elapsedMs?: number; // how long the in_progress block has been running — used by reconnecting clients to restore animation position
 };
 
 type RuntimeStats = {
     dispatchedSubagentTypes: RoleType[];
     agentsCompleted: number;
-    completedByRole?: Partial<Record<RoleType, number>>; // completions attributed per role
+    completedByRole?: Partial<Record<RoleType, number>>;
     flowExpected: number;
-    waveSizes?: number[] | null; // per-wave ticket counts once the planner reveals them
-    durationScale?: number; // 1/speed in fake/test mode so animations match actual elapsed time
+    waveSizes?: number[] | null;
+    durationScale?: number; // 1/speed in fake/test mode
+    inProgressSince?: number; // wall-clock ms when the current in_progress block started
+    lastInProgressRole?: RoleType | null; // role of the in_progress block from the last call, to detect frontier advances
 };
-
-// ------------------------------------------------- 
-// ------------------- CONSTANTS ------------------- 
-// ------------------------------------------------- 
 
 const Roles = {
     ORCHESTRATOR: 'orchestrator',
@@ -59,24 +54,16 @@ const AGENT_DURATIONS_MS: Record<RoleType, number> = {
 
 const PARALLEL_ROLES: Set<RoleType> = new Set([Roles.DEVELOPER, Roles.QUALITY_REVIEWER, Roles.TEST_VALIDATOR]);
 
-// Canonical order the parallel roles are rendered in within a wave — also the
-// per-ticket agent trio. Used by groupRoles to collapse an interleaved wave
-// (dispatched dev,qr,tv,dev,qr,tv,…) into ordered dev/qr/tv blocks.
+// Render order for parallel roles — collapses interleaved dispatch [dev,qr,tv,dev,qr,tv] → [dev×N, qr×N, tv×N].
 const WAVE_PATTERN: RoleType[] = [Roles.DEVELOPER, Roles.QUALITY_REVIEWER, Roles.TEST_VALIDATOR];
 
 const FLOW_PLANS: Partial<Record<RoleType, RoleType[]>> = {
     [Roles.DOCUMENTATOR]: [Roles.DOCUMENTATOR],
     // SIMPLE
     [Roles.SIMPLE_DEVELOPER]: [Roles.SIMPLE_DEVELOPER, Roles.MERGER],
-    // COMPLEX (with X ticket in each wave):
-    //      Shared: 1 planner + 1 merger.
-    //      For each wave: 1 developers + 1 quality-reviewer + 1 test-validator. -> time multiplied by X tickets in the wave.
+    // COMPLEX
     [Roles.PLANNER]: [Roles.PLANNER, Roles.DEVELOPER, Roles.QUALITY_REVIEWER, Roles.TEST_VALIDATOR, Roles.MERGER],
 };
-
-// ------------------------------------------------- 
-// ------------------- FUNCTIONS ------------------- 
-// ------------------------------------------------- 
 
 export const updateProgressBar = (runtime: { stats: RuntimeStats }, targetWs: unknown = null): void => {
     if (isIndeterminate(runtime.stats)) {
@@ -84,35 +71,33 @@ export const updateProgressBar = (runtime: { stats: RuntimeStats }, targetWs: un
         return;
     }
     const steps = buildSteps(runtime);
+
+    // Track when the in_progress block changes so reconnecting clients can restore
+    // the animation position (animation-delay: -elapsedMs) instead of restarting from 0.
+    const inProgressStep = steps.find(s => s.status === Statuses.IN_PROGRESS);
+    const currentRole = inProgressStep?.role ?? null;
+    if (currentRole !== (runtime.stats.lastInProgressRole ?? null)) {
+        runtime.stats.lastInProgressRole = currentRole;
+        runtime.stats.inProgressSince = Date.now();
+    }
+    if (inProgressStep && runtime.stats.inProgressSince) {
+        inProgressStep.elapsedMs = Math.max(0, Date.now() - runtime.stats.inProgressSince);
+    }
+
     renderProgressBar(runtime, steps, targetWs);
 }
 
-// True while the total amount of work is still unknown: nothing dispatched yet
-// (flow type undecided), or a COMPLEX planner is running but hasn't revealed the
-// wave structure. Rendering a determinate fill here is misleading — the total
-// only grows as the real plan appears, so any early fill must shrink/recede
-// (the "morceau isolé" the bar then has to catch back up to). Show an
-// indeterminate shimmer instead until the topology is known.
+// True while the flow total is unknown — nothing dispatched yet, or COMPLEX planner running before waveSizes arrive.
+// We check agentsCompleted to avoid shimmering forever if the planner produces no tickets.
 function isIndeterminate(stats: RuntimeStats): boolean {
     const dispatched = stats.dispatchedSubagentTypes;
     if (dispatched.length === 0) return true;
-    // COMPLEX planner is running but hasn't revealed the waves yet. Once the
-    // planner has completed (agentsCompleted ≥ 1) we stop shimmering even if
-    // waveSizes never materialised (planner produced no tickets / failed) —
-    // otherwise the bar would shimmer forever; fall through to the determinate
-    // fallback instead.
     if (dispatched[0] === Roles.PLANNER && !(stats.waveSizes && stats.waveSizes.length > 0) && stats.agentsCompleted < 1) return true;
     return false;
 }
 
-// Group a flat role sequence into display segments. Parallel roles (dev/qr/tv)
-// that fall between two non-parallel boundaries (planner, merger, …) belong to
-// the same wave and are aggregated by role into canonical-ordered blocks — so
-// an interleaved wave [dev,qr,tv,dev,qr,tv] becomes [dev×2, qr×2, tv×2]. A real
-// COMPLEX wave dispatches interleaved by ticket, so a consecutive-only merge
-// would leave every agent in its own segment; collapsing by role fixes that.
-// Non-parallel roles always form their own group of 1 and act as wave
-// boundaries, keeping each wave's blocks separate across multi-wave flows.
+// Collapse a flat role list into wave blocks: non-parallel roles are wave boundaries,
+// parallel roles (dev/qr/tv) between boundaries are merged by role in canonical order.
 function groupRoles(roles: RoleType[]): Array<{ role: RoleType; count: number }> {
     const groups: Array<{ role: RoleType; count: number }> = [];
     let buffer: RoleType[] = [];
@@ -135,11 +120,7 @@ function groupRoles(roles: RoleType[]): Array<{ role: RoleType; count: number }>
     return groups;
 }
 
-// Build the full ordered agent list for a COMPLEX flow once the wave structure
-// is known: planner, then for each wave its dev/qr/tv trio (one per ticket) and
-// a shared merger. This is the exact final topology — it does NOT depend on
-// dispatch/completion progress, so the segment layout stays stable for the whole
-// run (no restructuring, no oversized lumped blocks that over-fill then recede).
+// Build the exact final topology from waveSizes so the segment layout is stable for the whole run.
 function waveTopologyAgents(waveSizes: number[]): RoleType[] {
     const agents: RoleType[] = [Roles.PLANNER];
     for (const size of waveSizes) {
@@ -151,7 +132,6 @@ function waveTopologyAgents(waveSizes: number[]): RoleType[] {
     return agents;
 }
 
-// Extract the steps with their status and estimated durations from the runtime stats
 function buildSteps(runtime: { stats: RuntimeStats }): Step[] {
     const { dispatchedSubagentTypes: dispatchedTypes, agentsCompleted: completed, flowExpected: expected, waveSizes, durationScale = 1 } = runtime.stats;
     const dispatched = dispatchedTypes.length;
@@ -159,45 +139,22 @@ function buildSteps(runtime: { stats: RuntimeStats }): Step[] {
     const plan = FLOW_PLANS[dispatchedTypes[0]];
     const dur = (role: RoleType, count = 1) => Math.round(durationFor(role, count) * durationScale);
 
-    // Once the planner has revealed the wave structure, render the exact final
-    // topology (stable for the rest of the run). Until then — and for SIMPLE /
-    // documentator flows — fall back to "what's dispatched + a predicted tail".
     let flatAgents: RoleType[];
     if (waveSizes && waveSizes.length > 0) {
         flatAgents = waveTopologyAgents(waveSizes);
     } else {
         const predictedNotDispatched = Math.max(0, expected - dispatched);
-        // Predicted tail: the plan template past what's already dispatched.
         const upcomingAgents = predictedNotDispatched > 0 && plan
             ? plan.slice(dispatched, dispatched + predictedNotDispatched)
             : [];
         flatAgents = [...dispatchedTypes, ...upcomingAgents];
     }
 
-    // Flatten into one ordered role list — orchestrator first — and collapse it
-    // into wave-aware role blocks (see groupRoles).
     const groups = groupRoles([Roles.ORCHESTRATOR, ...flatAgents]);
 
-    // Render as a single advancing frontier so the bar is gap-free by
-    // construction: every fully-completed block is `done`, the first
-    // not-yet-complete block is the lone `in_progress` segment, and everything
-    // after it is `pending`. This avoids the parallel-execution gaps that arise
-    // when several blocks animate at once at their own (wildly different)
-    // durations — e.g. a 30s quality-reviewer filling fully while the 500s
-    // developer beside it stays near-empty.
-    //
-    // A block is "satisfied" (its work is done) when its role's completions
-    // cover it. We attribute completions PER ROLE (completedByRole) so that, in
-    // a multi-ticket wave, finishing ticket-1's quick reviewer can't mark the
-    // whole — much longer — developer block done while ticket-2's developer is
-    // still running. Rendering stays a single advancing frontier: the first
-    // not-satisfied block is the lone `in_progress` segment, everything after it
-    // is `pending` regardless of its own role's completions — so the bar can
-    // never gap.
-    //
-    // Fallback: if no completion could be attributed to a role yet (e.g. a
-    // resumed turn with no task_started→tool_use_id mapping) we revert to the
-    // flat completed count, which keeps the bar advancing rather than freezing.
+    // Single advancing frontier (done*·in_progress·pending*) keeps the bar gap-free.
+    // Per-role attribution prevents a fast reviewer from marking the slower developer block done.
+    // Falls back to flat count when no attribution is available (resumed turn without task_started mapping).
     const completedByRole = runtime.stats.completedByRole ?? {};
     const attributed = Object.values(completedByRole).reduce((a: number, n) => a + (n ?? 0), 0);
     const usePerRole = completedCount === 0 || attributed > 0;
@@ -229,12 +186,11 @@ function buildSteps(runtime: { stats: RuntimeStats }): Step[] {
     });
 }
 
-// Get the estimated duration for an agent, taking into account parallel execution if applicable
 const durationFor = (agent: RoleType, nbParallel?: number): number => {
     const baseDuration = AGENT_DURATIONS_MS[agent];
 
     if (nbParallel && PARALLEL_ROLES.has(agent)) {
-        return baseDuration + (nbParallel - 1) * baseDuration * 0.5; // Each additional parallel agent adds 50% of the base duration
+        return baseDuration + (nbParallel - 1) * baseDuration * 0.5; // each extra parallel agent adds 50%
     }
 
     return baseDuration;
@@ -262,9 +218,7 @@ const renderProgressBar = (
     broadcast(runtime, payload);
 }
 
-// Indeterminate frame: no determinate fill, just a "working, estimating" signal.
-// `indeterminate` tells the client to render a shimmer bar and show "Estimating…"
-// rather than a percentage that would later recede.
+// No fill — client renders a shimmer and shows "Estimating…".
 const renderIndeterminate = (runtime: { stats: RuntimeStats }, targetWs: unknown = null): void => {
     const payload = { type: 'progress', indeterminate: true, total: 0, done: 0, remainingTimeMs: 0, steps: [] };
     if (targetWs) {
@@ -278,8 +232,6 @@ export const predictedFlowExpected = (subagentType: RoleType): number => {
   return FLOW_PLANS[subagentType]?.length || 0;
 }
 
-// flowExpected after planner completes: dispatched subagents only (NOT orchestrator).
-// Formula: planner(1) + ticketCount×3(dev+qr+tv) + waveCount×1(merger).
+// planner(1) + ticketCount×3(dev+qr+tv) + waveCount(merger)
 export const flowExpectedForTickets = (ticketCount: number, waveCount = 1): number =>
   1 + ticketCount * 3 + waveCount;
-

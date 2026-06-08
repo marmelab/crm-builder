@@ -583,7 +583,7 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
    decelerates — never quite reaching 0 so it can't be mistaken for done.
    When the step becomes done, the is-done rule + transition finish the last 5%. */
 .msg-working-progress-step.is-in_progress .msg-working-progress-step-mask {
-  animation: maskProgress var(--fill-duration, 60s) cubic-bezier(0.33, 1, 0.68, 1) forwards;
+  animation: maskProgress var(--fill-duration, 60s) cubic-bezier(0.33, 1, 0.68, 1) var(--fill-delay, 0ms) forwards;
 }
 @keyframes maskProgress {
   to { transform: scaleX(0.05); }
