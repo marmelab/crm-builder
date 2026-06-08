@@ -158,8 +158,8 @@ export async function processMessage(runtime, prompt, opts = {}) {
           if (satisfactionMatch && !satisfactionAskSent) {
             satisfactionAskSent = true;
             const payload = {
-              header: satisfactionMatch[1]?.trim() || null,
-              body:   satisfactionMatch[2]?.trim() || null,
+              header: satisfactionMatch[1]?.trim() || undefined,
+              body:   satisfactionMatch[2]?.trim() || undefined,
               yes:    satisfactionMatch[3]?.trim() || 'Yes, save the changes',
               no:     satisfactionMatch[4]?.trim() || 'No, I want to change something',
             };

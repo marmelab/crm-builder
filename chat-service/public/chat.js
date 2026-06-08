@@ -821,7 +821,13 @@ function renderSatisfactionAskUi({
 
   const header = document.createElement('div');
   header.className = 'satisfaction-ask-header';
-  header.innerHTML = `<span class="satisfaction-ask-icon" aria-hidden="true">👁️</span><span>${headerText}</span>`;
+  const icon = document.createElement('span');
+  icon.className = 'satisfaction-ask-icon';
+  icon.setAttribute('aria-hidden', 'true');
+  icon.textContent = '👁️';
+  const headerLabel = document.createElement('span');
+  headerLabel.textContent = headerText;
+  header.append(icon, headerLabel);
 
   const bodyEl = document.createElement('p');
   bodyEl.className = 'satisfaction-ask-body';

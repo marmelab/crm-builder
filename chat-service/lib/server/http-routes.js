@@ -213,8 +213,9 @@ async function handleFake(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const sessionId = url.searchParams.get('session');
   const scenario  = url.searchParams.get('scenario') || 'satisfaction-ask';
-  const speed     = Math.max(1, parseFloat(url.searchParams.get('speed') || '5'));
-  const targets   = sessionId
+  const rawSpeed = parseFloat(url.searchParams.get('speed') ?? '');
+  const speed    = Number.isFinite(rawSpeed) ? Math.max(1, rawSpeed) : 5;
+  const targets  = sessionId
     ? [runtimes.get(sessionId)].filter(Boolean)
     : [...runtimes.values()];
   if (targets.length === 0) {
@@ -222,10 +223,15 @@ async function handleFake(req, res) {
     res.end(JSON.stringify({ error: 'no active session — open the chat UI first' }));
     return;
   }
-  const { runFakeTurn } = await import('./synthetic-session.js');
-  await Promise.all(targets.map((rt) => runFakeTurn(rt, { scenario, speed })));
-  res.writeHead(200, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({ ok: true, scenario, speed, sessions: targets.map((rt) => rt.session.id) }));
+  try {
+    const { runFakeTurn } = await import('./synthetic-session.js');
+    await Promise.all(targets.map((rt) => runFakeTurn(rt, { scenario, speed })));
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, scenario, speed, sessions: targets.map((rt) => rt.session.id) }));
+  } catch (err) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: err.message }));
+  }
 }
 
 export function createRequestHandler({ publicDir }) {
