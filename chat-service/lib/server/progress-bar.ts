@@ -36,7 +36,6 @@ const Roles = {
     ARCHITECT: 'architect',
     DEVELOPER: 'developer',
     DOCUMENTATOR: 'documentator',
-    UNKNOWN: 'unknown',
 } as const;
 
 const Statuses = {
@@ -55,7 +54,6 @@ const AGENT_DURATIONS_MS: Record<RoleType, number> = {
     [Roles.ARCHITECT]: 60_000,
     [Roles.DEVELOPER]: 500_000, // 8m20s
     [Roles.DOCUMENTATOR]: 60_000,
-    [Roles.UNKNOWN]: 60_000, // default for unknown agents
 };
 
 const PARALLEL_ROLES: Set<RoleType> = new Set([Roles.DEVELOPER, Roles.QUALITY_REVIEWER, Roles.TEST_VALIDATOR]);

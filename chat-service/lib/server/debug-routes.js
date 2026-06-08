@@ -10,7 +10,7 @@
 //   Replays all dir:'out' events from a recorded session onto an open session.
 //   Requires the target session to be open in a browser tab (active WS).
 
-import { readFile } from 'node:fs/promises';
+import { readJsonl } from '../stats/io.js';
 import { LOG_DIR } from './config.js';
 import { runtimes } from './runtime.js';
 import { broadcast } from './ws-bus.js';
@@ -44,15 +44,14 @@ async function handleReplay(req, res) {
   const runtime = targetId ? runtimes.get(targetId) : null;
   if (!runtime) return jsonError(res, 400, 'sessionId not found or no active runtime — open the session in the UI first');
 
-  let logText;
+  const outEvents = [];
   try {
-    logText = await readFile(`${LOG_DIR}/${sourceId}/log.jsonl`, 'utf8');
+    for await (const event of readJsonl(`${LOG_DIR}/${sourceId}/log.jsonl`)) {
+      if (event.dir === 'out') outEvents.push(event);
+    }
   } catch {
     return jsonError(res, 404, `source session ${sourceId} not found`);
   }
-  const outEvents = logText.trim().split('\n')
-    .map((l) => { try { return JSON.parse(l); } catch { return null; } })
-    .filter((e) => e && e.dir === 'out');
   if (outEvents.length === 0) return jsonError(res, 400, 'no outbound events in source session');
   const t0 = new Date(outEvents[0].ts).getTime();
   for (const event of outEvents) {

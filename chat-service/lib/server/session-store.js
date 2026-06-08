@@ -25,15 +25,6 @@ export async function sessionHasTickets(sessionDir) {
   }
 }
 
-export async function countSessionTickets(sessionDir) {
-  try {
-    const entries = await readdir(sessionDir);
-    return entries.filter((e) => TASK_FILE_RE.test(e)).length;
-  } catch {
-    return 0;
-  }
-}
-
 // ─── Session persistence ──────────────────────────────────────
 // Single source of truth = log.jsonl (append-only stream of ws in/out events).
 // meta.json holds only lightweight metadata (title, timestamps, counts,
