@@ -555,7 +555,12 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
 }
 .msg-working-progress-step-mask {
   position: absolute;
-  inset: 0;
+  /* Bleed 0.5px past the segment on each side so adjacent masks overlap. The
+     bar's blue stripes are painted on the bar (continuous, behind all segments);
+     without the overlap, sub-pixel gaps between neighbouring masks let a thin
+     blue line show through at each boundary — most visibly at a wave/merger
+     edge, reading as a stray little segment. */
+  inset: 0 -0.5px;
   background: #3a3a3c;
   transform-origin: right;
   transform: scaleX(1);
@@ -577,6 +582,27 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
 @keyframes barStripes {
   from { background-position: 0 0; }
   to   { background-position: 11.31px 0; }
+}
+/* Indeterminate: total work unknown (orchestrator routing / planner decomposing).
+   A dim track with a blue highlight sweeping across — reads as "working,
+   estimating" without claiming a determinate fill that would later recede. */
+.msg-working-progress-step.is-indeterminate {
+  flex: 1 1 100%;
+}
+.msg-working-progress-step.is-indeterminate .msg-working-progress-step-mask {
+  transform: scaleX(1); /* grey cover over the striped background = the track */
+}
+.msg-working-progress-step.is-indeterminate::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  background: linear-gradient(90deg, transparent, #3b82f6 50%, transparent);
+  animation: indeterminateSweep 1.3s ease-in-out infinite;
+}
+@keyframes indeterminateSweep {
+  from { transform: translateX(-110%); }
+  to   { transform: translateX(310%); }
 }
 /* Mirror of the latest assistant narration — sandwiched between the progress
    bar and the remaining-time so the user reads top-to-bottom: how-much-left,

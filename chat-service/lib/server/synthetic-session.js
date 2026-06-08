@@ -15,7 +15,7 @@ import { LOG_DIR } from './config.js';
 import { openSession } from './session-store.js';
 import { createRuntime, runtimes } from './runtime.js';
 import { broadcast } from './ws-bus.js';
-import { updateProgressBar, flowExpectedForTickets, WAVE_PATTERN } from './progress-bar.ts';
+import { updateProgressBar, flowExpectedForTickets } from './progress-bar.ts';
 
 function uid() { return randomBytes(6).toString('hex'); }
 
@@ -194,7 +194,7 @@ function scheduleEvents(runtime, tickets, speed, sessionDir, initialDelayMs = 30
 
   // Planner done → lock flowExpected
   atDebug(35, taskCompletedEvent(plannerAgent, { inputTokens: 9000, outputTokens: 1800, cacheCreationInputTokens: 0, cacheReadInputTokens: 52000 }));
-  atProgress(35.1, { agentsCompleted: 1, flowExpected: flowExpectedValue });
+  atProgress(35.1, { agentsCompleted: 1, flowExpected: flowExpectedValue, waveSizes: waves.map((w) => w.length) });
   atStats(35.2, 28000, 0, 0.22);
   at(36, { type: 'message', role: 'assistant', content: `📋 ${N} tickets planifiés en ${waves.length} wave${waves.length > 1 ? 's' : ''} — dispatch de l'équipe.` });
   at(37, { type: 'title', title: `Synthetic COMPLEX (${N} tickets, ${waves.length} wave${waves.length > 1 ? 's' : ''})` });
@@ -212,7 +212,14 @@ function scheduleEvents(runtime, tickets, speed, sessionDir, initialDelayMs = 30
     const qrAgents  = waveTickets.map((t) => makeAgent('quality-reviewer', t.id, teamName));
     const tvAgents  = waveTickets.map((t) => makeAgent('test-validator', t.id, teamName));
     const mergerAgent = makeAgent('merger', null, teamName);
-    const allWaveAgents = [...devAgents, ...qrAgents, ...tvAgents, mergerAgent];
+    // Dispatch order mirrors the real orchestrator (agent-team SKILL.md): the
+    // dev/qr/tv trio is emitted interleaved per ticket, NOT grouped by role,
+    // then one shared merger. Faithful ordering keeps /fake a real reproduction
+    // of the parallel-progress path (grouped-by-role hid the bar's gap bug).
+    const allWaveAgents = [
+      ...waveTickets.flatMap((_, i) => [devAgents[i], qrAgents[i], tvAgents[i]]),
+      mergerAgent,
+    ];
 
     // Dispatch: TeamCreate + Agent tool_uses in one assistant message
     atDebug(waveBaseT, agentDispatchEvent(allWaveAgents, teamName));
@@ -366,6 +373,7 @@ export async function runFakeTurn(runtime, { scenario = 'simple3', speed = 20 } 
   runtime.stats.agentsCompleted = 0;
   runtime.stats.flowExpected = 0;
   runtime.stats.dispatchedSubagentTypes = [];
+  runtime.stats.waveSizes = null;
   runtime.stats.activeAgentIds = new Set();
   runtime.stats.activeAgents = 0;
 

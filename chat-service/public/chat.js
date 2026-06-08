@@ -49,6 +49,7 @@ function refreshRestoreBtn() {
 let progressTotal = 0;
 let progressDone  = 0;
 let progressSteps = [];
+let progressIndeterminate = false;
 // Unix-seconds timestamp when the 5h usage limit window resets. Non-null while
 // the session sits in `rate_limited` state — drives the bubble + resume button
 // and the countdown ticker below.
@@ -181,6 +182,7 @@ function resetChatUi() {
   progressTotal = 0;
   progressDone = 0;
   progressSteps = [];
+  progressIndeterminate = false;
   remainingTimeMsAtReceipt = 0;
   remainingTimeReceivedAt = 0;
   stopRemainingTimeTicker();
@@ -218,6 +220,7 @@ function stopRemainingTimeTicker() {
 // snapshot hasn't arrived yet (right after sending a message), we still want
 // to render *something* under the bar, so default to "Estimating…".
 function remainingTimeText() {
+  if (progressIndeterminate) return 'Estimating remaining time…';
   if (remainingTimeMsAtReceipt > 0 && remainingTimeReceivedAt > 0) {
     const live = remainingTimeMsAtReceipt - (Date.now() - remainingTimeReceivedAt);
     return live > 0 ? formatRemaining(live) || '' : 'Wrapping up…';
@@ -310,13 +313,30 @@ function updateWorkingProgress() {
 // server omits steps (legacy / edge), fall back to N equal segments so the
 // label/remaining-time still match the bar.
 function renderProgressSegments(bar) {
+  // Work total unknown yet — show one indeterminate shimmer segment (CSS
+  // `.is-indeterminate`) rather than a determinate fill that would recede once
+  // the planner reveals the real, larger topology.
+  bar.classList.toggle('is-indeterminate', progressIndeterminate);
+  if (progressIndeterminate) {
+    if (bar.children.length !== 1 || !bar.firstChild.classList.contains('is-indeterminate')) {
+      const seg = makeStepEl();
+      seg.classList.add('is-indeterminate');
+      bar.replaceChildren(seg);
+    }
+    return;
+  }
+
   const steps = progressSteps.length
     ? progressSteps
     : fallbackEqualSteps(progressTotal, progressDone);
 
-  if (bar.children.length !== steps.length) {
-    bar.replaceChildren(...steps.map(makeStepEl));
-  }
+  // Reconcile the child count by appending/removing only the trailing delta —
+  // never replaceChildren. Recreating elements resets every mask to empty, so a
+  // `done` segment re-animates from 0→full, flashing the whole bar backward on
+  // any count change (e.g. when the planner reveals the wave topology). Reusing
+  // the leading segments keeps their filled state and animation intact.
+  while (bar.children.length < steps.length) bar.appendChild(makeStepEl());
+  while (bar.children.length > steps.length) bar.removeChild(bar.lastChild);
 
   steps.forEach((step, i) => {
     updateStepEl(bar.children[i], step);
@@ -652,6 +672,7 @@ function handleWsMessage(event) {
       progressTotal = 0;
       progressDone = 0;
       progressSteps = [];
+      progressIndeterminate = true;
       remainingTimeMsAtReceipt = 0;
       remainingTimeReceivedAt = 0;
       startRemainingTimeTicker();
@@ -685,7 +706,11 @@ function handleWsMessage(event) {
     progressTotal = msg.total || 0;
     progressDone  = msg.done  || 0;
     progressSteps = Array.isArray(msg.steps) ? msg.steps : [];
-    if (typeof msg.remainingTimeMs === 'number') {
+    // Indeterminate = the server doesn't yet know the total work (orchestrator
+    // routing / planner decomposing). Render a shimmer + "Estimating…" instead
+    // of a determinate fill that would recede once the real plan arrives.
+    progressIndeterminate = !!msg.indeterminate;
+    if (!progressIndeterminate && typeof msg.remainingTimeMs === 'number') {
       remainingTimeMsAtReceipt = msg.remainingTimeMs;
       remainingTimeReceivedAt = Date.now();
     }

@@ -90,6 +90,10 @@ export function createRuntime(session) {
       agentsCompleted: 0,
       flowExpected: 0,
       dispatchedSubagentTypes: [],
+      // Per-wave ticket counts (e.g. [1,2,1]) once the planner reveals them.
+      // Lets the progress bar render the exact, stable wave topology instead of
+      // a lumped prediction that restructures (and lurches) wave by wave.
+      waveSizes: null,
     },
   };
 }

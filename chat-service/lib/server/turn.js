@@ -46,6 +46,7 @@ export async function processMessage(runtime, prompt, opts = {}) {
     agentsCompleted: 0,
     flowExpected: 0,
     dispatchedSubagentTypes: [],
+    waveSizes: null,
     activeAgentIds: new Set(),
     activeAgents: 0,
   };
@@ -223,6 +224,9 @@ export async function processMessage(runtime, prompt, opts = {}) {
               const result = await loadTicketsAndWaves(sessionDir);
               if (result && result.tickets.length > 0) {
                 runtime.stats.flowExpected = flowExpectedForTickets(result.tickets.length, result.waves.length);
+                // Per-wave ticket counts let the bar build the exact final
+                // topology now, so it never restructures wave by wave.
+                runtime.stats.waveSizes = result.waves.map((w) => w.length);
               }
             }
             sendStats(runtime);
