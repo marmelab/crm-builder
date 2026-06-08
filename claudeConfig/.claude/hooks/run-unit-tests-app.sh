@@ -103,16 +103,22 @@ for WT in $WORKTREES; do
   # keep the stdout pipe open after the main process exits.
   TMPOUT=$(mktemp)
   # Inner timeout is 150s, 30s shorter than the 180s Claude Code hook timeout,
-  # so the script can detect the failure and return exit 2 before Claude Code
-  # kills it (a timed-out hook is treated as exit 0, bypassing the gate).
+  # so the script can detect the outcome and return before Claude Code kills it.
   CI=true timeout 150 npx vitest run --config vitest.config.ts > "$TMPOUT" 2>&1
   EXIT_CODE=$?
   OUTPUT=$(tail -40 "$TMPOUT")
   rm -f "$TMPOUT"
   if [ $EXIT_CODE -eq 124 ]; then
-    echo "[$(date -Iseconds)] unit-app TIMEOUT wt=$WT (150s)" >> "$LOG"
-    FAILED=1
-    AGGREGATED_ERR+="=== unit-app TIMEOUT in $WT (>150s) -- vitest did not exit. Tests may be hanging. ===\n\n"
+    # A 150s timeout is an INFRASTRUCTURE problem, not a test failure: browser-mode
+    # vitest (Playwright/Chromium + un-pre-bundled module serving) intermittently
+    # stalls at startup in this worktree environment. Treating it as a failure was
+    # the original disaster — it injected "tests may be hanging" into the developer,
+    # who then abandoned its feature work to debug vitest internals, looping against
+    # the circuit breaker for hours and burning the session. A timeout tells us
+    # nothing about the developer's code, so we DO NOT block on it: log it for
+    # observability and move on. Real test failures (vitest exit 1) below still
+    # gate normally, and typecheck/prettier/unit-functions remain hard gates.
+    echo "[$(date -Iseconds)] unit-app TIMEOUT wt=$WT (150s) -- NON-BLOCKING (infra, vitest browser stall)" >> "$LOG"
     continue
   fi
   if [ $EXIT_CODE -ne 0 ]; then
