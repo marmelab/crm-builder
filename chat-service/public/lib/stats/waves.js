@@ -70,7 +70,7 @@ export function renderWavesSection(data) {
   }
 
   return el('section', { className: 'stats-section' },
-    el('h3', { className: 'stats-section-title' }, 'Dependency waves'),
+    el('h3', { className: 'stats-section-title' }, 'Development waves'),
     el('div', { className: 'wave-verdict' }, verdict),
     el('div', { className: 'wave-flow' }, ...flow),
   );
