@@ -129,11 +129,17 @@ EOF
   exit 2
 fi
 
-# Hard-link node_modules (zero disk cost, keeps vitest cache valid)
+# Hard-link node_modules (zero disk cost)
 if [ ! -e "$WORKTREE_PATH/node_modules" ]; then
   cp -al "${APP_DIR}/node_modules" "$WORKTREE_PATH/node_modules"
   echo "[$(date -Iseconds)] setup-worktree node_modules hard-linked" >> "$LOG" 2>/dev/null || true
 fi
+# Clear the Vite dep-optimization cache right after hard-linking. The cache
+# was built from /app and _metadata.json contains absolute /app/... paths.
+# Vitest browser mode silently hangs in worktrees when those paths mismatch.
+# Clearing here (before any agent runs) avoids any race with parallel hooks.
+rm -rf "$WORKTREE_PATH/node_modules/.vite" 2>/dev/null || true
+echo "[$(date -Iseconds)] setup-worktree vite-cache cleared wt=$WORKTREE_PATH" >> "$LOG" 2>/dev/null || true
 
 echo "[$(date -Iseconds)] setup-worktree OK wt=$WORKTREE_PATH" >> "$LOG" 2>/dev/null || true
 exit 0
