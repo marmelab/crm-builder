@@ -211,6 +211,26 @@ async function handleModeNotify(req, res) {
 
 export function createRequestHandler({ publicDir }) {
   return async (req, res) => {
+    if (req.url?.startsWith('/api/debug/fake') && req.method === 'POST') {
+      const url = new URL(req.url, 'http://localhost');
+      const sessionId = url.searchParams.get('session');
+      const scenario  = url.searchParams.get('scenario') || 'satisfaction-ask';
+      const speed     = Math.max(1, parseFloat(url.searchParams.get('speed') || '5'));
+      const targets   = sessionId
+        ? [runtimes.get(sessionId)].filter(Boolean)
+        : [...runtimes.values()];
+      if (targets.length === 0) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'no active session — open the chat UI first' }));
+        return;
+      }
+      const { runFakeTurn } = await import('./synthetic-session.js');
+      await Promise.all(targets.map((rt) => runFakeTurn(rt, { scenario, speed })));
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, scenario, speed, sessions: targets.map((rt) => rt.session.id) }));
+      return;
+    }
+
     if (req.url === '/api/mode' && req.method === 'GET') return handleGetMode(req, res);
     if (req.url === '/api/mode' && req.method === 'POST') return handleSetMode(req, res);
     if (req.url === '/api/mode/notify' && req.method === 'POST') return handleModeNotify(req, res);

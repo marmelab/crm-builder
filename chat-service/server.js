@@ -112,6 +112,7 @@ wss.on('connection', async (ws, req) => {
     // the session lands in `rate_limited` state so a refresh shows the same
     // countdown + resume button the live tab last rendered.
     rateLimitResetsAt: runtime.session.meta.rateLimitResetsAt ?? null,
+    satisfactionAsk: runtime.session.meta.satisfactionAsk ?? false,
     isNew: session.isNew,
     // Deploy progress is delivered over its own SSE channel
     // (GET /api/deploy/events), not the chat WebSocket — it's cross-session
@@ -233,6 +234,21 @@ wss.on('connection', async (ws, req) => {
     if (queueId !== null) {
       const queuedIds = r.queue.map((q) => q.id);
       broadcast(r, { type: 'queue_updated', queuedIds, addedId: queueId });
+    } else if (/^\s*\/fake\b/i.test(parsed.content)) {
+      // /fake [scenario=<name>] [speed=<n>] — inject a synthetic turn into the
+      // current session without spawning Claude (zero tokens).
+      r.busy = true;
+      import('./lib/server/synthetic-session.js').then(({ runFakeTurn }) => {
+        const params = {};
+        const sm = parsed.content.match(/scenario=(\S+)/i);
+        const sp = parsed.content.match(/speed=(\d+(?:\.\d+)?)/i);
+        if (sm) params.scenario = sm[1];
+        if (sp) params.speed = parseFloat(sp[1]);
+        return runFakeTurn(r, params);
+      }).then(() => { r.busy = false; }).catch((err) => {
+        broadcast(r, { type: 'message', role: 'assistant', content: `❌ /fake error: ${err.message}` });
+        r.busy = false;
+      });
     } else {
       // Claim the runtime synchronously (before any await) so a second message
       // racing in can't start a concurrent turn.

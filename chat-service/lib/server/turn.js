@@ -59,6 +59,7 @@ export async function processMessage(runtime, prompt, opts = {}) {
   let rateLimit = null;
   let resultError = false;
   let lastAssistantText = '';
+  let satisfactionAskSent = false;
   let exitCode = null;
   // Raw stream facts read again in the finally block (a separate scope), so they
   // live at function scope alongside the other outcome flags. `sawResult` = the
@@ -76,6 +77,7 @@ export async function processMessage(runtime, prompt, opts = {}) {
       rateLimit = null;
       resultError = false;
       sawResult = false;
+      satisfactionAskSent = false;
       toolMap.clear();
       stderrBuf = '';
       // Per-attempt, not just pre-loop: a limit the subagent tailer flagged
@@ -136,17 +138,32 @@ export async function processMessage(runtime, prompt, opts = {}) {
         const text = extractText(event);
         if (text) {
           receivedText = true;
+          // %%ASK_SATISFACTION|<header>|<body>|<yes>|<no>%% — all fields optional.
+          const satisfactionMatch = text.match(/\n?%%ASK_SATISFACTION(?:\|([^|%\n]*)\|([^|%\n]*)\|([^|%\n]*)\|([^%\n]*))?%%\n?/);
+          const hasSatisfactionAsk = satisfactionMatch !== null;
+          const cleanText = hasSatisfactionAsk
+            ? text.replace(satisfactionMatch[0], '').trim()
+            : text;
           // Suppress consecutive duplicates. The COMPLEX flow makes the
           // orchestrator yield with the same "Working on it..." line on every
           // STATE C wake-up (which can be 20+ in a 4-ticket run) — those are
           // pure noise and pollute both the UI and the persisted log. We
           // still set lastAssistantText so other code that reads it (final
           // fallback message logic below) sees the last real text.
-          const isDuplicate = text.trim() === lastAssistantText.trim();
-          lastAssistantText = text;
-          if (!isDuplicate) {
-            broadcast(runtime, { type: 'message', role: 'assistant', content: text, ts: new Date().toISOString() });
-            runtime.session?.recordMessage('assistant', text).catch(() => {});
+          const isDuplicate = cleanText.trim() === lastAssistantText.trim();
+          lastAssistantText = cleanText;
+          if (!isDuplicate && cleanText) {
+            broadcast(runtime, { type: 'message', role: 'assistant', content: cleanText, ts: new Date().toISOString() });
+            runtime.session?.recordMessage('assistant', cleanText).catch(() => {});
+          }
+          if (hasSatisfactionAsk && !satisfactionAskSent) {
+            satisfactionAskSent = true;
+            const header = satisfactionMatch[1]?.trim() || null;
+            const body   = satisfactionMatch[2]?.trim() || null;
+            const yes    = satisfactionMatch[3]?.trim() || 'Yes, save the changes';
+            const no     = satisfactionMatch[4]?.trim() || 'No, I want to change something';
+            broadcast(runtime, { type: 'satisfaction_ask', header, body, yes, no });
+            runtime.session?.setSatisfactionAsk(true).catch(() => {});
           }
         }
 
