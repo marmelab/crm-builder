@@ -140,9 +140,8 @@ export async function processMessage(runtime, prompt, opts = {}) {
           receivedText = true;
           // %%ASK_SATISFACTION|<header>|<body>|<yes>|<no>%% — all fields optional.
           const satisfactionMatch = text.match(/\n?%%ASK_SATISFACTION(?:\|([^|%\n]*)\|([^|%\n]*)\|([^|%\n]*)\|([^%\n]*))?%%\n?/);
-          const hasSatisfactionAsk = satisfactionMatch !== null;
-          const cleanText = hasSatisfactionAsk
-            ? text.replace(satisfactionMatch[0], '').trim()
+          const cleanText = satisfactionMatch
+            ? (text.slice(0, satisfactionMatch.index) + text.slice(satisfactionMatch.index + satisfactionMatch[0].length)).trim()
             : text;
           // Suppress consecutive duplicates. The COMPLEX flow makes the
           // orchestrator yield with the same "Working on it..." line on every
@@ -156,14 +155,16 @@ export async function processMessage(runtime, prompt, opts = {}) {
             broadcast(runtime, { type: 'message', role: 'assistant', content: cleanText, ts: new Date().toISOString() });
             runtime.session?.recordMessage('assistant', cleanText).catch(() => {});
           }
-          if (hasSatisfactionAsk && !satisfactionAskSent) {
+          if (satisfactionMatch && !satisfactionAskSent) {
             satisfactionAskSent = true;
-            const header = satisfactionMatch[1]?.trim() || null;
-            const body   = satisfactionMatch[2]?.trim() || null;
-            const yes    = satisfactionMatch[3]?.trim() || 'Yes, save the changes';
-            const no     = satisfactionMatch[4]?.trim() || 'No, I want to change something';
-            broadcast(runtime, { type: 'satisfaction_ask', header, body, yes, no });
-            runtime.session?.setSatisfactionAsk(true).catch(() => {});
+            const payload = {
+              header: satisfactionMatch[1]?.trim() || null,
+              body:   satisfactionMatch[2]?.trim() || null,
+              yes:    satisfactionMatch[3]?.trim() || 'Yes, save the changes',
+              no:     satisfactionMatch[4]?.trim() || 'No, I want to change something',
+            };
+            broadcast(runtime, { type: 'satisfaction_ask', ...payload });
+            runtime.session?.setSatisfactionAsk(payload).catch(() => {});
           }
         }
 

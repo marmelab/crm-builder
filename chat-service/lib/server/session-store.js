@@ -305,9 +305,8 @@ export async function openSession(requestedId) {
       meta.rateLimitResetsAt = next;
       await saveMeta();
     },
-    setSatisfactionAsk: async (value) => {
-      if (meta.satisfactionAsk === value) return;
-      meta.satisfactionAsk = value;
+    setSatisfactionAsk: async (payload) => {
+      meta.satisfactionAsk = payload;
       await saveMeta();
     },
     // In-memory equivalent of patchSession — keeps the runtime's meta object

@@ -163,7 +163,8 @@ const connection = initConnection({
 });
 
 function clearMessageNodes() {
-  messages.querySelectorAll('.msg, .msg-choices, .msg-working, .msg-rate-limited, .msg-error, .msg-satisfaction-ask').forEach((n) => n.remove());
+  messages.querySelectorAll('.msg, .msg-choices, .msg-working, .msg-rate-limited, .msg-error').forEach((n) => n.remove());
+  removeSatisfactionAskUi();
 }
 
 function resetChatUi() {
@@ -605,7 +606,7 @@ function handleWsMessage(event) {
       // a reload or when switching back to the session.
       renderErrorUi();
     }
-    if (msg.satisfactionAsk) renderSatisfactionAskUi();
+    if (msg.satisfactionAsk) renderSatisfactionAskUi(typeof msg.satisfactionAsk === 'object' ? msg.satisfactionAsk : {});
     historyApi.refreshHistory();
     return;
   }
@@ -803,13 +804,17 @@ function appendChoices(content, options, seq = ++seqCounter) {
   placeIntoMessages(wrap, seq);
 }
 
+function removeSatisfactionAskUi() {
+  messages.querySelector('.msg-satisfaction-ask')?.remove();
+}
+
 function renderSatisfactionAskUi({
   header: headerText = 'Preview ready',
   body   = 'Your changes are visible in the preview — but they haven\'t been saved to your data yet. Are you happy with the result?',
   yes    = 'Yes, save the changes',
   no     = 'No, I want to change something',
 } = {}) {
-  messages.querySelectorAll('.msg-satisfaction-ask').forEach((n) => n.remove());
+  removeSatisfactionAskUi();
 
   const bubble = document.createElement('div');
   bubble.className = 'msg-satisfaction-ask';
@@ -846,8 +851,7 @@ function renderSatisfactionAskUi({
 
   btns.append(yesBtn, noBtn);
   bubble.append(header, bodyEl, btns);
-  messages.appendChild(bubble);
-  bubble.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  placeIntoMessages(bubble, ++seqCounter);
 }
 
 const ROLLBACK_ICON_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h2"/><path d="M16 21h2a2 2 0 0 0 2-2V8"/><path d="m9 15 3-3 3 3"/><path d="M12 12v9"/></svg>';
@@ -1266,7 +1270,7 @@ form.addEventListener('submit', (e) => {
     appendMessage('assistant', 'Connection lost. Please reload the page.');
     return;
   }
-  messages.querySelectorAll('.msg-satisfaction-ask').forEach((n) => n.remove());
+  removeSatisfactionAskUi();
   appendMessage('user', content, { queued: working });
   historyApi.refreshHistory();
   input.value = '';
