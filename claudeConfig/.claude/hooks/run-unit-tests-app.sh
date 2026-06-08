@@ -10,15 +10,38 @@ echo "[$(date -Iseconds)] unit-app START pwd=$(pwd) CLAUDE_PROJECT_DIR=$CLAUDE_P
 REPO="${CLAUDE_PROJECT_DIR:-/app}"
 cd "$REPO" || { echo "[$(date -Iseconds)] unit-app EXIT=0 cd_failed" >> "$LOG"; exit 0; }
 
-# VALIDATE_WORKTREE narrows to one worktree (set by the orchestrator or upstream caller).
-# See typecheck hook header for rationale.
 SESSION_SHORT=$(basename "${CHAT_SESSION_DIR:-}" | cut -d'-' -f1)
+
+# Scope to the STOPPING subagent's own worktree. Browser-mode vitest is heavy
+# and racy: when N developers stop near-simultaneously, the old "scan every
+# worktree" behaviour launched N parallel hooks × N worktrees = N² vitest runs,
+# all fighting over Vite dev-server ports and the shared Chromium pool. That is
+# the root cause of the 150s hangs. The SubagentStop stdin gives us the
+# subagent's transcript_path; the developer has been `cd`-ing into its worktree
+# all along, so the most-referenced /app/worktrees/<session>/(TASK-XXX|simple)
+# path in that transcript is its worktree. Fall back to scan-all only if we
+# can't parse it (e.g. transcript missing), preserving previous behaviour.
+WORKTREES=""
 if [ -n "${VALIDATE_WORKTREE:-}" ] && [ -d "$VALIDATE_WORKTREE" ]; then
   WORKTREES="$VALIDATE_WORKTREE"
-elif [ -n "$SESSION_SHORT" ]; then
-  WORKTREES=$(git worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2}' | grep "^/app/worktrees/${SESSION_SHORT}/" || true)
 else
-  WORKTREES=$(git worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2}' | grep "^/app/worktrees/" || true)
+  TRANSCRIPT=$(printf '%s' "$STDIN" | node -e 'try{const i=JSON.parse(require("fs").readFileSync(0,"utf8"));process.stdout.write(i.transcript_path||"")}catch(e){}' 2>/dev/null || true)
+  if [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ] && [ -n "$SESSION_SHORT" ]; then
+    OWN_WT=$(grep -oE "/app/worktrees/${SESSION_SHORT}/(TASK-[0-9]+|simple)" "$TRANSCRIPT" 2>/dev/null | sort | uniq -c | sort -rn | head -1 | grep -oE "/app/worktrees/[^ ]+" || true)
+    if [ -n "$OWN_WT" ] && [ -d "$OWN_WT" ]; then
+      WORKTREES="$OWN_WT"
+      echo "[$(date -Iseconds)] unit-app SCOPED wt=$OWN_WT (from transcript)" >> "$LOG"
+    fi
+  fi
+fi
+# Fallback: scan all session worktrees (couldn't determine the stopping agent's own).
+if [ -z "$WORKTREES" ]; then
+  if [ -n "$SESSION_SHORT" ]; then
+    WORKTREES=$(git worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2}' | grep "^/app/worktrees/${SESSION_SHORT}/" || true)
+  else
+    WORKTREES=$(git worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2}' | grep "^/app/worktrees/" || true)
+  fi
+  [ -n "$WORKTREES" ] && echo "[$(date -Iseconds)] unit-app SCAN-ALL (transcript scope unavailable)" >> "$LOG"
 fi
 
 if [ -z "$WORKTREES" ]; then
@@ -26,16 +49,32 @@ if [ -z "$WORKTREES" ]; then
   exit 0
 fi
 
-# Kill orphan Chromium processes from previous timed-out vitest runs.
-# `timeout 150 npx vitest` kills the vitest node process but leaves Chromium
-# children alive. They hold the ViteDevServer ports, so the next vitest run
-# spends 60-150s searching for a free port before tests can even start.
-ORPHAN_PIDS=$(pgrep -f 'chrome-headless-shell' 2>/dev/null || true)
-if [ -n "$ORPHAN_PIDS" ]; then
-  # shellcheck disable=SC2086
-  kill $ORPHAN_PIDS 2>/dev/null || true
-  echo "[$(date -Iseconds)] unit-app ORPHANS_KILLED pids=$ORPHAN_PIDS" >> "$LOG"
-fi
+# Kill ONLY orphan Chromium from previous timed-out runs, never a sibling hook's
+# live browser. `timeout 150 npx vitest` kills the vitest node process but leaves
+# its Chromium children alive, holding the Vite dev-server port — so the next run
+# wastes its whole budget searching for a free port. We must NOT kill a Chromium
+# that a concurrently-running sibling hook is still using (that reintroduces the
+# hang). A live browser tree always has a vitest node process somewhere up its
+# ancestor chain; an orphaned tree (parent vitest gone) does not. So: for each
+# chrome-headless-shell process, walk its PPID chain up to init — keep it if ANY
+# ancestor's cmdline contains "vitest", otherwise kill it.
+ancestor_has_vitest() {
+  local pid="$1" depth=0 cmd ppid
+  while [ "$pid" -gt 1 ] && [ "$depth" -lt 20 ]; do
+    cmd=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)
+    case "$cmd" in *vitest*) return 0 ;; esac
+    ppid=$(awk '{print $4}' "/proc/$pid/stat" 2>/dev/null || echo 1)
+    [ -z "$ppid" ] && ppid=1
+    pid="$ppid"; depth=$((depth + 1))
+  done
+  return 1
+}
+for CPID in $(pgrep -f 'chrome-headless-shell' 2>/dev/null || true); do
+  if ancestor_has_vitest "$CPID"; then
+    continue  # live browser owned by a running vitest → keep
+  fi
+  kill "$CPID" 2>/dev/null && echo "[$(date -Iseconds)] unit-app ORPHAN_KILLED pid=$CPID" >> "$LOG" || true
+done
 
 FAILED=0
 AGGREGATED_ERR=""
