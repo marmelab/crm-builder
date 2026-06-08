@@ -26,6 +26,17 @@ if [ -z "$WORKTREES" ]; then
   exit 0
 fi
 
+# Kill orphan Chromium processes from previous timed-out vitest runs.
+# `timeout 150 npx vitest` kills the vitest node process but leaves Chromium
+# children alive. They hold the ViteDevServer ports, so the next vitest run
+# spends 60-150s searching for a free port before tests can even start.
+ORPHAN_PIDS=$(pgrep -f 'chrome-headless-shell' 2>/dev/null || true)
+if [ -n "$ORPHAN_PIDS" ]; then
+  # shellcheck disable=SC2086
+  kill $ORPHAN_PIDS 2>/dev/null || true
+  echo "[$(date -Iseconds)] unit-app ORPHANS_KILLED pids=$ORPHAN_PIDS" >> "$LOG"
+fi
+
 FAILED=0
 AGGREGATED_ERR=""
 for WT in $WORKTREES; do
