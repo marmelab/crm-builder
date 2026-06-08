@@ -10,6 +10,7 @@ import { runtimes } from './runtime.js';
 import { handleSessionCommitsRequest, handleSessionRollbackRequest } from './rollback.js';
 import { broadcast, sendToWs } from './ws-bus.js';
 import { handleGetDeployStatus, handleConfigureDeploy, handleDeployRun, handleDeployEvents } from './deploy-routes.js';
+import { handleDebugRequest } from './debug-routes.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -209,6 +210,12 @@ async function handleModeNotify(req, res) {
   res.end(JSON.stringify({ ok: true }));
 }
 
+// Replay a recorded session log onto an active session's runtime, at N× speed.
+// All dir:'out' events (messages, debug, stats, progress, state…) are broadcast
+// to connected WS clients with their original relative timing compressed by speed.
+// Usage: GET /api/debug/replay?sessionId=<target>&source=<recordedId>&speed=20
+// `source` defaults to the built-in COMPLEX reference session.
+
 export function createRequestHandler({ publicDir }) {
   return async (req, res) => {
     if (req.url === '/api/mode' && req.method === 'GET') return handleGetMode(req, res);
@@ -223,6 +230,7 @@ export function createRequestHandler({ publicDir }) {
     if (req.url === '/api/deploy/configure' && req.method === 'POST') return handleConfigureDeploy(req, res);
     if (req.url === '/api/deploy/run' && req.method === 'POST') return handleDeployRun(req, res);
     if (req.url?.startsWith('/api/stats')) return handleStatsRequest(req, res);
+    if (req.url?.startsWith('/api/debug/')) return handleDebugRequest(req, res);
 
     const commitsMatch = req.url?.match(/^\/api\/sessions\/([0-9a-f-]+)\/commits$/i);
     if (commitsMatch && req.method === 'GET') {
