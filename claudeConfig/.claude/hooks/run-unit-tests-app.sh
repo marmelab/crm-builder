@@ -52,6 +52,15 @@ for WT in $WORKTREES; do
   # Use a temp file instead of $() -- avoids blocking if vitest worker processes
   # keep the stdout pipe open after the main process exits.
   TMPOUT=$(mktemp)
+  # Clear the Vite dep-optimization cache before running. The cache is created
+  # from /app and its _metadata.json contains absolute paths to /app/... .
+  # When vitest runs from a worktree (/app/worktrees/...) those paths are wrong
+  # and the browser mode hangs silently waiting for an optimisation that never
+  # resolves. cp -al hard-links files but not directories, so the worktree's
+  # node_modules/.vite/ is an independent directory — removing it here does not
+  # affect /app/node_modules/.vite/.
+  rm -rf "$WT/node_modules/.vite" 2>/dev/null || true
+  echo "[$(date -Iseconds)] unit-app CACHE_CLEARED wt=$WT" >> "$LOG"
   # Inner timeout is 150s, 30s shorter than the 180s Claude Code hook timeout,
   # so the script can detect the failure and return exit 2 before Claude Code
   # kills it (a timed-out hook is treated as exit 0, bypassing the gate).
