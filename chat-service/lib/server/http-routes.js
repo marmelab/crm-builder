@@ -210,14 +210,35 @@ async function handleModeNotify(req, res) {
   res.end(JSON.stringify({ ok: true }));
 }
 
-// Replay a recorded session log onto an active session's runtime, at N× speed.
-// All dir:'out' events (messages, debug, stats, progress, state…) are broadcast
-// to connected WS clients with their original relative timing compressed by speed.
-// Usage: GET /api/debug/replay?sessionId=<target>&source=<recordedId>&speed=20
-// `source` defaults to the built-in COMPLEX reference session.
+async function handleFake(req, res) {
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  const sessionId = url.searchParams.get('session');
+  const scenario  = url.searchParams.get('scenario') || 'satisfaction-ask';
+  const rawSpeed = parseFloat(url.searchParams.get('speed') ?? '');
+  const speed    = Number.isFinite(rawSpeed) ? Math.max(1, rawSpeed) : 5;
+  const targets  = sessionId
+    ? [runtimes.get(sessionId)].filter(Boolean)
+    : [...runtimes.values()];
+  if (targets.length === 0) {
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'no active session — open the chat UI first' }));
+    return;
+  }
+  try {
+    const { runFakeTurn } = await import('./synthetic-session.js');
+    await Promise.all(targets.map((rt) => runFakeTurn(rt, { scenario, speed })));
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, scenario, speed, sessions: targets.map((rt) => rt.session.id) }));
+  } catch (err) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: err.message }));
+  }
+}
 
 export function createRequestHandler({ publicDir }) {
   return async (req, res) => {
+    if (req.url?.startsWith('/api/debug/fake') && req.method === 'POST') return handleFake(req, res);
+
     if (req.url === '/api/mode' && req.method === 'GET') return handleGetMode(req, res);
     if (req.url === '/api/mode' && req.method === 'POST') return handleSetMode(req, res);
     if (req.url === '/api/mode/notify' && req.method === 'POST') return handleModeNotify(req, res);

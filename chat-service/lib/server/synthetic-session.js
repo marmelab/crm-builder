@@ -1,13 +1,18 @@
-// Synthetic COMPLEX session generator.
-// Creates a fully-formed session (meta.json + TASK-*.json + log.jsonl) with
-// realistic events across all types: debug_raw, message, progress, stats, state.
-// The session is immediately navigable in the UI — history shows everything —
-// and events are also broadcast live via WS so the user can watch them arrive
-// in real-time if they navigate to the URL right after creation.
+// Synthetic session helpers for UI testing without burning tokens.
 //
-// Usage: GET /api/debug/synthetic-session?scenario=simple3&speed=20
-//   scenario: 'simple3' (3 tickets, 1 wave) | 'complex4' (4 tickets, 2 waves)
-//   speed: playback multiplier — default 20 → ~20s demo
+// Slash command: /fake [scenario=<name>] [speed=<n>]
+//   Injects events into the current session without spawning Claude (zero tokens).
+//
+// HTTP endpoints (handled by debug-routes.js):
+//   GET /api/debug/synthetic-session?scenario=simple3|complex4&speed=20
+//     Creates a standalone COMPLEX session — navigate to the returned URL to watch.
+//   GET /api/debug/replay?sessionId=<target>&source=<recordedId>&speed=20
+//     Replays recorded dir:'out' events onto an open session.
+//
+// Available scenarios:
+//   satisfaction-ask  (default) — SIMPLE dev flow ending with the satisfaction widget
+//   simple3           — 3 tickets, 1 wave (COMPLEX)
+//   complex4          — 4 tickets, 2 waves (COMPLEX)
 
 import { writeFile, readFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
@@ -20,8 +25,16 @@ import { updateProgressBar, flowExpectedForTickets } from './progress-bar.ts';
 function uid() { return randomBytes(6).toString('hex'); }
 
 // ─── Scenarios ────────────────────────────────────────────────────────────────
+//
+// Two shapes are supported:
+//   { label, run }          — SIMPLE scenario; run(runtime, speed) schedules events
+//   { userMessage, tickets } — COMPLEX scenario; uses scheduleEvents()
 
 const SCENARIOS = {
+  'satisfaction-ask': {
+    label: 'SIMPLE dev → satisfaction widget',
+    run: runSatisfactionAsk,
+  },
   simple3: {
     userMessage: 'Add a notification badge on the bell, a status indicator on deals, and a sector filter on companies',
     tickets: [
@@ -41,7 +54,30 @@ const SCENARIOS = {
   },
 };
 
-// ─── Event builders ───────────────────────────────────────────────────────────
+export const SCENARIO_NAMES = Object.keys(SCENARIOS);
+
+// ─── satisfaction-ask scenario ────────────────────────────────────────────────
+
+function runSatisfactionAsk(runtime, speed) {
+  const ms = (s) => Math.round(s * 1000 / speed);
+  const at = (s, payload) => setTimeout(() => broadcast(runtime, payload), ms(s));
+
+  at(0,   { type: 'status', working: true });
+  at(0.5, { type: 'message', role: 'assistant', content: '⚙️ Applying your changes…' });
+  at(3,   { type: 'message', role: 'assistant', content: '🔀 Merging into the main branch…' });
+  at(5,   { type: 'message', role: 'assistant', content: 'Done — take a look in the preview.' });
+  at(5.2, {
+    type: 'satisfaction_ask',
+    header: 'Preview ready',
+    body: "Your changes are visible in the preview — but haven't been saved yet. Are you happy with the result?",
+    yes: 'Yes, save the changes',
+    no: 'No, I want to change something',
+  });
+  at(5.4, { type: 'status', working: false });
+  setTimeout(() => { runtime.busy = false; }, ms(5.5));
+}
+
+// ─── COMPLEX event builders ───────────────────────────────────────────────────
 
 function agentDispatchEvent(agents, teamName) {
   return {
@@ -326,7 +362,8 @@ function scheduleEvents(runtime, tickets, speed, sessionDir, initialDelayMs = 30
 
 export async function createSyntheticSession({ scenario = 'simple3', speed = 20 } = {}) {
   const sc = SCENARIOS[scenario];
-  if (!sc) throw new Error(`Unknown scenario: ${scenario}. Available: ${Object.keys(SCENARIOS).join(', ')}`);
+  if (!sc) throw new Error(`Unknown scenario: ${scenario}. Available: ${SCENARIO_NAMES.join(', ')}`);
+  if (sc.run) throw new Error(`Scenario "${scenario}" is a SIMPLE scenario — use runFakeTurn instead of createSyntheticSession`);
 
   const { userMessage, tickets } = sc;
 
@@ -343,7 +380,6 @@ export async function createSyntheticSession({ scenario = 'simple3', speed = 20 
   await Promise.all(tickets.map((t) =>
     writeFile(`${sessionDir}/${t.id}.json`, JSON.stringify(buildTicketJson(t), null, 2))));
 
-
   // Log user message (dir:'in') and update meta
   session.logWrite('in', { type: 'user_message', content: userMessage });
   await session.recordMessage('user', userMessage);
@@ -356,18 +392,23 @@ export async function createSyntheticSession({ scenario = 'simple3', speed = 20 
   return { sessionId, scenario, speed, tickets: tickets.length };
 }
 
-// Run a fake COMPLEX turn on an EXISTING runtime (called from /fake slash command).
-// No new session is created — events are injected into the current session.
-// initialDelayMs=0 because the WS client is already connected.
-export async function runFakeTurn(runtime, { scenario = 'simple3', speed = 20 } = {}) {
+// Run a fake turn on an EXISTING runtime (called from /fake slash command or
+// POST /api/debug/fake). No new session is created — events injected into the
+// current session. Supports both SIMPLE (run function) and COMPLEX (tickets) shapes.
+export async function runFakeTurn(runtime, { scenario = 'satisfaction-ask', speed = 5 } = {}) {
   const sc = SCENARIOS[scenario];
-  if (!sc) throw new Error(`Unknown scenario: ${scenario}. Available: ${Object.keys(SCENARIOS).join(', ')}`);
+  if (!sc) throw new Error(`Unknown scenario: "${scenario}". Available: ${SCENARIO_NAMES.join(', ')}`);
 
+  if (sc.run) {
+    // SIMPLE scenario — runs function schedules timers and manages runtime.busy itself
+    sc.run(runtime, speed);
+    return { scenario, speed };
+  }
+
+  // COMPLEX scenario — write tickets and schedule events
   const { tickets } = sc;
-  const session = runtime.session;
-  const sessionDir = `${LOG_DIR}/${session.id}`;
+  const sessionDir = `${LOG_DIR}/${runtime.session.id}`;
 
-  // Write / overwrite TASK-*.json for this scenario
   await Promise.all(tickets.map((t) =>
     writeFile(`${sessionDir}/${t.id}.json`, JSON.stringify(buildTicketJson(t), null, 2))));
 
@@ -380,7 +421,8 @@ export async function runFakeTurn(runtime, { scenario = 'simple3', speed = 20 } 
   runtime.stats.activeAgentIds = new Set();
   runtime.stats.activeAgents = 0;
 
-  // Schedule all events — WS already connected so no initial delay needed
+  // initialDelayMs=0: WS client is already connected, no navigation delay needed.
+  // runtime.busy is cleared by scheduleEvents' last timer callback.
   scheduleEvents(runtime, tickets, speed, sessionDir, 0);
 
   return { scenario, speed, tickets: tickets.length };
