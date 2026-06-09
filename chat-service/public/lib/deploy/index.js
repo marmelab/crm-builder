@@ -224,7 +224,7 @@ function applyStatus(status) {
     'configuredSecrets', 'configuredSecretFields',
     'projectRef', 'lastDeployAt',
     'cloudflareConfigured', 'cloudflareAccountId', 'cloudflareTokenStored',
-    'deployId', 'ok', 'exitCode', 'durationMs',
+    'deployId', 'ok', 'exitCode', 'durationMs', 'manualAuthUrl',
   ];
   for (const k of passthrough) {
     if (k in status) next[k] = status[k];
@@ -310,11 +310,12 @@ function paintTerminalStatus(ok, durationMs, exitCode) {
     elements.progressStatus.textContent = `✗ Deploy failed (exit ${exitCode}) — see log for details`;
     elements.progressStatus.className = 'deploy-progress-status deploy-fail';
   }
-  // Auth redirect URL reminder: only after a SUCCESSFUL deploy that published a
-  // Cloudflare Worker (the URL the redirect must point at). A Supabase-only or
-  // failed deploy has no worker URL to configure, so keep it hidden.
+  // Auth redirect URL reminder: the deploy now auto-binds the callback URL into
+  // Supabase, so this nag shows ONLY when the backend signalled it couldn't
+  // (manualAuthUrl) — an undeterminable worker URL or a failed PATCH. A clean
+  // auto-bind, a Supabase-only deploy, or a failed deploy all keep it hidden.
   if (elements.progressWarning) {
-    elements.progressWarning.hidden = !(ok && state.cloudflareConfigured);
+    elements.progressWarning.hidden = !(ok && state.manualAuthUrl);
   }
   elements.progressClose.disabled = false;
 }
@@ -376,6 +377,7 @@ function onDeployLog(msg) {
 
 function onDeployDone(msg) {
   state.running = false;
+  state.manualAuthUrl = !!msg.manualAuthUrl;
   refreshButtonLabel();
   paintTerminalStatus(msg.ok, msg.durationMs, msg.exitCode);
   // Re-fetch the public status to pick up lastDeployAt.

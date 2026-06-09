@@ -5,6 +5,7 @@ import { mkdtemp, mkdir, rm, readFile, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { createServer } from 'node:http';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FAKE_SUPABASE = join(__dirname, 'fixtures', 'fake-supabase.sh');
@@ -15,6 +16,18 @@ const SUPABASE_VARIANT = '// supabase variant\nexport default () => null;\n';
 
 let tmpDir;
 let mod;
+
+// Fake Supabase Management API. updateSupabaseAuthConfig GETs then PATCHes
+// /v1/projects/<ref>/config/auth; this server records every request so a test
+// can assert what got bound, and lets a test shape the GET response (the
+// existing uri_allow_list we merge into) and force error statuses.
+let authServer;
+const authApi = {
+  requests: [],        // { method, path, auth, body }
+  getAllowList: '',    // uri_allow_list the GET returns
+  patchStatus: 200,    // status the PATCH replies with (200 = ok)
+  reset() { this.requests = []; this.getAllowList = ''; this.patchStatus = 200; },
+};
 
 // Module reads DEPLOY_CONFIG_PATH/SUPABASE_BIN from process.env at module-import
 // time → set env BEFORE the dynamic import. SUPABASE_BIN points at a fake CLI
@@ -49,17 +62,44 @@ before(async () => {
   git('config', 'user.name', 'Deploy Test');
   git('add', '-A');
   git('commit', '-q', '-m', 'init');
+
+  // Fake Supabase Management API on an ephemeral port. Set SUPABASE_API_URL
+  // BEFORE the dynamic import — the module reads it at import time.
+  authServer = createServer((req, res) => {
+    let buf = '';
+    req.on('data', (c) => { buf += c; });
+    req.on('end', () => {
+      authApi.requests.push({
+        method: req.method,
+        path: req.url,
+        auth: req.headers.authorization || '',
+        body: buf ? JSON.parse(buf) : null,
+      });
+      if (req.method === 'GET') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ uri_allow_list: authApi.getAllowList }));
+      } else {
+        res.writeHead(authApi.patchStatus, { 'Content-Type': 'application/json' });
+        res.end(authApi.patchStatus < 300 ? '{}' : '{"message":"nope"}');
+      }
+    });
+  });
+  await new Promise((r) => authServer.listen(0, '127.0.0.1', r));
+  process.env.SUPABASE_API_URL = `http://127.0.0.1:${authServer.address().port}`;
+
   mod = await import('../lib/server/deploy-routes.js');
 });
 
 after(async () => {
   await rm(tmpDir, { recursive: true, force: true });
+  if (authServer) await new Promise((r) => authServer.close(r));
 });
 
 beforeEach(() => {
   mod._resetForTests();
+  authApi.reset();
   // Drop any FAKE_* env from previous tests so each starts clean.
-  for (const k of ['FAKE_SUPABASE_EXIT', 'FAKE_SUPABASE_STDERR', 'FAKE_SUPABASE_DELAY_MS', 'FAKE_SUPABASE_LEAK', 'FAKE_BUILD_EXIT', 'FAKE_WRANGLER_EXIT']) {
+  for (const k of ['FAKE_SUPABASE_EXIT', 'FAKE_SUPABASE_STDERR', 'FAKE_SUPABASE_DELAY_MS', 'FAKE_SUPABASE_LEAK', 'FAKE_BUILD_EXIT', 'FAKE_WRANGLER_EXIT', 'FAKE_WRANGLER_URL']) {
     delete process.env[k];
   }
 });
@@ -831,4 +871,92 @@ test('POST /api/deploy/run — a missing App.tsx variant aborts the deploy befor
   const steps = mod.deployState.tail.map((f) => f.line).join('\n');
   assert.match(steps, /Building CRM/);
   assert.ok(!steps.includes('Linking project'), 'Supabase must not run when the build aborts');
+});
+
+// --- Callback URL auto-binding -------------------------------------------
+
+test('parseWorkerUrl — scrapes the workers.dev URL out of wrangler output', () => {
+  const lines = [
+    'wrangler deploy --config x (fake)',
+    'Uploaded atomic-crm-abc (1.2 sec)',
+    '  https://atomic-crm-abc.my-team.workers.dev',
+    'Current Version ID: deadbeef',
+  ];
+  assert.equal(mod.parseWorkerUrl(lines), 'https://atomic-crm-abc.my-team.workers.dev');
+});
+
+test('parseWorkerUrl — null when no workers.dev URL is present', () => {
+  assert.equal(mod.parseWorkerUrl(['wrangler deploy (fake)', 'no url here']), null);
+  assert.equal(mod.parseWorkerUrl([]), null);
+  assert.equal(mod.parseWorkerUrl(undefined), null);
+});
+
+test('POST /api/deploy/run — binds the wrangler URL as the Supabase callback (site_url + merged allow-list)', async () => {
+  await writeFile(process.env.DEPLOY_CONFIG_PATH, JSON.stringify(cfConfig()), { mode: 0o600 });
+  const PROD_URL = 'https://atomic-crm-abcdefghijklmnopqrst.my-team.workers.dev';
+  process.env.FAKE_WRANGLER_URL = PROD_URL;
+  // A pre-existing localhost entry must survive the merge, not be clobbered.
+  authApi.getAllowList = 'http://localhost:5173';
+
+  const res = makeRes();
+  await mod.handleDeployRun(makeReq('POST'), res);
+  await res.done;
+  await waitUntilSettled();
+
+  assert.equal(mod.deployState.ok, true, mod.deployState.tail.map((f) => f.line).join('\n'));
+  const steps = mod.deployState.tail.map((f) => f.line).join('\n');
+  assert.match(steps, /Binding .*workers\.dev as the Supabase callback URL/);
+  assert.match(steps, /Supabase callback URL bound/);
+
+  // The orchestrator GET-then-PATCHed the project's auth config.
+  const patch = authApi.requests.find((r) => r.method === 'PATCH');
+  assert.ok(patch, 'a PATCH to the auth config must have been sent');
+  assert.match(patch.path, /\/v1\/projects\/abcdefghijklmnopqrst\/config\/auth$/);
+  assert.match(patch.auth, /^Bearer sbp_/);
+  assert.equal(patch.body.site_url, PROD_URL, 'site_url set to the prod URL');
+  const allow = patch.body.uri_allow_list.split(',');
+  assert.ok(allow.includes('http://localhost:5173'), 'existing allow-list entry preserved');
+  assert.ok(allow.includes(PROD_URL), 'prod URL added to allow-list');
+  assert.ok(allow.includes(`${PROD_URL}/**`), 'wildcard added to allow-list');
+  // A clean auto-bind must NOT raise the manual-auth nag.
+  assert.equal(mod.deployState.manualAuthUrl, false, 'manual-auth nag stays off on a successful bind');
+});
+
+test('POST /api/deploy/run — no workers.dev URL: warns, skips binding, deploy still succeeds', async () => {
+  await writeFile(process.env.DEPLOY_CONFIG_PATH, JSON.stringify(cfConfig()), { mode: 0o600 });
+  // FAKE_WRANGLER_URL unset → fake wrangler prints no URL → nothing to bind.
+
+  const res = makeRes();
+  await mod.handleDeployRun(makeReq('POST'), res);
+  await res.done;
+  await waitUntilSettled();
+
+  assert.equal(mod.deployState.ok, true, 'deploy succeeds even when the URL is undeterminable');
+  const steps = mod.deployState.tail.map((f) => f.line).join('\n');
+  assert.match(steps, /Could not determine the production URL/);
+  assert.equal(authApi.requests.length, 0, 'no auth API call without a URL');
+  assert.equal(mod.deployState.manualAuthUrl, true, 'manual-auth nag raised when no URL was found');
+});
+
+test('POST /api/deploy/run — auth-config PATCH failure warns but keeps the deploy successful', async () => {
+  await writeFile(process.env.DEPLOY_CONFIG_PATH, JSON.stringify(cfConfig()), { mode: 0o600 });
+  process.env.FAKE_WRANGLER_URL = 'https://atomic-crm-abcdefghijklmnopqrst.my-team.workers.dev';
+  authApi.patchStatus = 403; // Management API rejects the bind
+
+  const origErr = console.error;
+  console.error = () => {};
+  try {
+    const res = makeRes();
+    await mod.handleDeployRun(makeReq('POST'), res);
+    await res.done;
+    await waitUntilSettled();
+  } finally {
+    console.error = origErr;
+  }
+
+  assert.equal(mod.deployState.ok, true, 'a failed bind must not fail an already-shipped deploy');
+  const steps = mod.deployState.tail.map((f) => f.line).join('\n');
+  assert.match(steps, /Could not bind the callback URL.*403/);
+  assert.match(steps, /set it manually in Supabase Studio/);
+  assert.equal(mod.deployState.manualAuthUrl, true, 'manual-auth nag raised when the bind PATCH fails');
 });

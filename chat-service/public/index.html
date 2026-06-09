@@ -188,16 +188,10 @@
 
               <section class="deploy-section">
                 <h3 class="deploy-section-title">Authentication</h3>
-                <p class="deploy-warning">
-                  <span class="deploy-warning-icon" aria-hidden="true">⚠</span>
-                  <span>After your first deploy, set the authentication redirect URL in
-                  <strong>Your Project</strong> → <strong>Authentication</strong> → <strong>URL Configuration</strong>
-                  to the URL of your Cloudflare Worker
-                  (<code>https://atomic-crm-&lt;ref&gt;.&lt;account&gt;.workers.dev</code>) — otherwise sign-in
-                  links won't redirect back to your deployed app. Find the exact URL on the
-                  <a href="https://dash.cloudflare.com" target="_blank" rel="noopener">Cloudflare dashboard</a>
-                  under <strong>Workers &amp; Pages</strong>.</span>
-                </p>
+                <p class="deploy-field-hint">The deploy automatically binds your live Cloudflare Worker URL as the
+                Supabase authentication callback (site URL + redirect allow-list), so sign-in links redirect back to
+                your deployed app — no manual Studio step. If that step can't complete, the deploy log will tell you
+                to set it by hand.</p>
               </section>
             </div>
           </div>
@@ -236,7 +230,7 @@
         <pre class="deploy-progress-log" aria-live="polite"></pre>
         <p class="deploy-warning deploy-progress-warning" hidden>
           <span class="deploy-warning-icon" aria-hidden="true">⚠</span>
-          <span>One last step — set the authentication redirect URL in
+          <span>The callback URL couldn't be bound automatically. Set the authentication redirect URL by hand in
           <strong>Your Project</strong> → <strong>Authentication</strong> → <strong>URL Configuration</strong>
           to the URL of your Cloudflare Worker, otherwise sign-in links won't redirect back to your
           deployed app. Find the exact URL on the
