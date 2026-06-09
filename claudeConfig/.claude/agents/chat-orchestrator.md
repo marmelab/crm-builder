@@ -53,7 +53,7 @@ Check in this order — first match wins:
 | **COMPLEX** | everything else (2+ fields, cross-entity, import/export, new entity, relations, new custom component, ambiguous) — **default** | STATE A → B → C → D → (POST-DEV) |
 
 When the user message is a **reply to a pending PD-ASK or PD-LIVE-ASK** widget
-(the full button label text, e.g. *"Oui, enregistrer les modifications"*, *"No, keep
+(the full button label text, e.g. *"Yes, save changes"*, *"No, keep
 sample data"*, or any free-text equivalent), do NOT reclassify it as a new request —
 interpret it inside the matching POST-DEV state (STATE PD-RESPOND / STATE
 PD-LIVE-RESPOND). The CLASSIFICATION table only applies to the start of a fresh
@@ -678,14 +678,12 @@ line, append the marker with three fields translated into the user's language:
 %%ASK_SATISFACTION|<header>|<body_text>|<yes_label>|<no_label>%%
 ```
 
-- `header`: very short status label (≤ 30 chars), e.g. "Aperçu prêt" / "Preview ready".
+- `header`: very short status label (≤ 30 chars), e.g. "Preview ready".
 - `body_text`: one sentence explaining the situation in plain words (no tech terms).
 - `yes_label`: short confirmation label (≤ 40 chars).
 - `no_label`: short decline label (≤ 40 chars).
 
-Examples:
-- French: `%%ASK_SATISFACTION|Aperçu prêt|Vos modifications sont visibles dans l'aperçu, mais pas encore enregistrées définitivement. Êtes-vous satisfait ?|Oui, enregistrer les modifications|Non, je veux modifier quelque chose%%`
-- English: `%%ASK_SATISFACTION|Preview ready|Your changes are visible in the preview but haven't been saved yet. Are you happy with the result?|Yes, save the changes|No, I want to change something%%`
+Example: `%%ASK_SATISFACTION|Preview ready|Your changes are visible in the preview but haven't been saved yet. Are you happy with the result?|Yes, save the changes|No, I want to change something%%`
 
 The chat UI renders this as a styled widget — do NOT write a text question yourself.
 
@@ -694,13 +692,12 @@ The chat UI renders this as a styled widget — do NOT write a text question you
 ### STATE PD-RESPOND
 
 The user's reply is either the satisfaction widget button label (full text, e.g.
-"Oui, enregistrer les modifications" / "Non, je veux modifier quelque chose") or free
-text typed directly.
+"Yes, save the changes" / "No, I want to change something") or free text typed directly.
 
 | Meaning | Next |
 |---|---|
-| Satisfaction expressed (button label or free text: "yes", "oui", "perfect", "looks good"…) | Run `Bash("pending-deploys --app /app --session <SESSION_SHORT_ID>")`. Empty output → reply in the user's language (e.g. "Great, everything's set.") and STATE DONE. Non-empty → emit in the user's language (e.g. "Saving your changes — this can take a moment.") and enter STATE PD-MIG-DEV. |
-| Wants to adjust (button label or free text: "no", "non", "change something"…) | Reply asking what they'd like to change, then re-enter CLASSIFICATION on their next message; after the new wave completes, send `%%ASK_SATISFACTION|...|...|...|...%%` again (STATE PD-ASK). |
+| Satisfaction expressed (button label or free text: "yes", "perfect", "looks good"…) | Run `Bash("pending-deploys --app /app --session <SESSION_SHORT_ID>")`. Empty output → reply in the user's language (e.g. "Great, everything's set.") and STATE DONE. Non-empty → emit in the user's language (e.g. "Saving your changes — this can take a moment.") and enter STATE PD-MIG-DEV. |
+| Wants to adjust (button label or free text: "no", "change something"…) | Reply asking what they'd like to change, then re-enter CLASSIFICATION on their next message; after the new wave completes, send `%%ASK_SATISFACTION|...|...|...|...%%` again (STATE PD-ASK). |
 | Ambiguous | Ask once what they mean; stay in PD-RESPOND. |
 
 ### STATE PD-MIG-DEV — write the migration
@@ -754,9 +751,7 @@ terms), then on a new line the marker with all four fields translated:
 %%ASK_SATISFACTION|<header>|<body>|<yes>|<no>%%
 ```
 
-Examples:
-- French: `%%ASK_SATISFACTION|Modifications enregistrées|Vos modifications sont sauvegardées. Voulez-vous basculer vers vos vraies données maintenant, ou continuer avec les données de démonstration ?|Oui, utiliser mes vraies données|Non, garder les données de démo%%`
-- English: `%%ASK_SATISFACTION|Changes saved|Your changes have been saved. Want to switch the app to your real data now, or keep using sample data?|Yes, switch to real data|No, keep sample data%%`
+Example: `%%ASK_SATISFACTION|Changes saved|Your changes have been saved. Want to switch the app to your real data now, or keep using sample data?|Yes, switch to real data|No, keep sample data%%`
 
 **End this turn.** → Enter STATE PD-LIVE-RESPOND on the next user turn.
 
