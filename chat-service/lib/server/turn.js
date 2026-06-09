@@ -458,9 +458,19 @@ export async function processMessage(runtime, prompt, opts = {}) {
             scheduleAutoContinue(sessionId, runtimes);
           } else {
             if (decision.stalled) {
-              const stallText = "I couldn't finish every piece automatically — some work is still pending. Say \"continue\" and I'll pick it back up.";
+              const done = Math.max(0, total - pendingCount);
+              const stallText = `I finished ${done} of ${total} planned pieces, but ${pendingCount} ${pendingCount === 1 ? 'is' : 'are'} still unfinished. Say "continue" and I'll pick the rest back up.`;
               broadcast(runtime, { type: 'message', role: 'assistant', content: stallText, ts: new Date().toISOString() });
               await runtime.session?.recordMessage('assistant', stallText).catch(() => {});
+              // The wave did NOT finish — don't leave the session mislabelled
+              // 'completed' (set above). Settle on the resumable 'error' state so a
+              // Resume click / typed "continue" routes through resolveResumePlan →
+              // STATE RECOVERY, which rebuilds from disk and re-dispatches the
+              // non-merged tickets. A plain --resume from 'completed'/'waiting'
+              // would re-inject the dead "team is alive" belief and no-op.
+              // decideAutoContinue only reports `stalled` when pendingCount > 0,
+              // so this never mislabels a genuinely finished wave.
+              await transitionState(runtime, 'error');
             }
             runtime.autoContinue = { count: 0, noProgress: 0, prevSig: null };
             if (await sessionHasMergedTickets(sessionDir)) {
