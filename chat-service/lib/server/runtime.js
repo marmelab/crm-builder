@@ -92,8 +92,19 @@ export function createRuntime(session) {
       // keeps subagent_type in dispatch order — length is the dispatched
       // count; per-position role drives the remaining time in progress-bar.ts.
       agentsCompleted: 0,
+      // Completions counted PER ROLE (task_id→role via the spawning Agent
+      // tool_use). The progress frontier uses this so a fast role (a 30s
+      // reviewer) can't advance the bar past a slow one (a 500s developer) that
+      // is still running — agentsCompleted alone has no per-role attribution.
+      completedByRole: {},
       flowExpected: 0,
       dispatchedSubagentTypes: [],
+      // Per-wave ticket counts (e.g. [1,2,1]) once the planner reveals them.
+      // Lets the progress bar render the exact, stable wave topology instead of
+      // a lumped prediction that restructures (and lurches) wave by wave.
+      waveSizes: null,
+      inProgressSince: 0,
+      lastInProgressRole: null,
     },
   };
 }
