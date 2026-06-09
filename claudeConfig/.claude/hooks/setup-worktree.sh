@@ -71,6 +71,26 @@ if [ -z "$TASK_ID" ]; then
   TASK_ID=$(echo "$AGENT_TYPE" | grep -oE 'TASK-[0-9]+' || echo "")
 fi
 
+# Fallback 2 (no-team dispatch): the SubagentStart payload carries NO `prompt`
+# field — only session_id/cwd/agent_id/agent_type/agent_transcript_path (verified
+# against Claude Code 2.1.x). The dispatch prompt that holds "TASK_ID: TASK-XXX"
+# is the FIRST user message in the subagent's OWN transcript, so read it from
+# agent_transcript_path. Without this the hook hit "SKIP unknown agent_type=
+# developer" for every COMPLEX dev and the orchestrator had to create each
+# worktree by hand (extra turns / cost). The transcript can lag the hook by a
+# beat at start-up, so poll briefly (<=3.6s, well under the 60s hook timeout).
+if [ -z "$TASK_ID" ]; then
+  AGENT_TPATH=$(node -e 'try{const i=JSON.parse(process.argv[1]||"{}");process.stdout.write(i.agent_transcript_path||"")}catch{process.stdout.write("")}' "$STDIN" 2>/dev/null || echo "")
+  if [ -n "$AGENT_TPATH" ]; then
+    for _ in $(seq 1 12); do
+      [ -s "$AGENT_TPATH" ] && grep -q 'TASK_ID:' "$AGENT_TPATH" 2>/dev/null && break
+      sleep 0.3
+    done
+    TASK_ID=$(grep -aoE 'TASK_ID:[[:space:]]*TASK-[0-9]+' "$AGENT_TPATH" 2>/dev/null | head -1 | grep -oE 'TASK-[0-9]+' || echo "")
+    [ -n "$TASK_ID" ] && echo "[$(date -Iseconds)] setup-worktree TASK_ID=$TASK_ID (from agent transcript)" >> "$LOG" 2>/dev/null || true
+  fi
+fi
+
 # A (re)starting developer means the diff will change — invalidate any prior
 # review verdicts for this ticket so stale APPROVED flags can't let the merger
 # through before the new attempt is re-reviewed (see record-review-verdict.sh /
