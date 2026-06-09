@@ -12,15 +12,16 @@ cd "$REPO" || { echo "[$(date -Iseconds)] unit-app EXIT=0 cd_failed" >> "$LOG"; 
 
 SESSION_SHORT=$(basename "${CHAT_SESSION_DIR:-}" | cut -d'-' -f1)
 
-# Scope to the STOPPING subagent's own worktree. Browser-mode vitest is heavy
-# and racy: when N developers stop near-simultaneously, the old "scan every
-# worktree" behaviour launched N parallel hooks × N worktrees = N² vitest runs,
-# all fighting over Vite dev-server ports and the shared Chromium pool. That is
-# the root cause of the 150s hangs. The SubagentStop stdin gives us the
-# subagent's transcript_path; the developer has been `cd`-ing into its worktree
-# all along, so the most-referenced /app/worktrees/<session>/(TASK-XXX|simple)
-# path in that transcript is its worktree. Fall back to scan-all only if we
-# can't parse it (e.g. transcript missing), preserving previous behaviour.
+# Scope to the STOPPING subagent's own worktree. SubagentStop stdin does NOT say
+# which worktree the agent worked in, so the old hook conservatively LOOPED over
+# every session worktree and launched a separate vitest in each. With M worktrees
+# carrying changes × N developers stopping (each re-fires this hook), that's N×M
+# browser-mode vitest invocations, many concurrent — they thrash the shared
+# Chromium/CPU pool and a 30s run balloons past the timeout. (NB: each individual
+# run was already confined by `cd`; the problem was the sheer count, not a single
+# run crawling across worktrees.) Fix: derive the agent's OWN worktree from its
+# transcript_path — the most-referenced /app/worktrees/<session>/(TASK-XXX|simple)
+# path — and test only that one. Fall back to scan-all only if we can't parse it.
 WORKTREES=""
 if [ -n "${VALIDATE_WORKTREE:-}" ] && [ -d "$VALIDATE_WORKTREE" ]; then
   WORKTREES="$VALIDATE_WORKTREE"
@@ -102,23 +103,34 @@ for WT in $WORKTREES; do
   # Use a temp file instead of $() -- avoids blocking if vitest worker processes
   # keep the stdout pipe open after the main process exits.
   TMPOUT=$(mktemp)
-  # Inner timeout is 150s, 30s shorter than the 180s Claude Code hook timeout,
-  # so the script can detect the outcome and return before Claude Code kills it.
-  CI=true timeout 150 npx vitest run --config vitest.config.ts > "$TMPOUT" 2>&1
+  # CONFINE: --root "$WT" pins Vite's project root to this worktree, so the test
+  # glob and the dependency scan can never reach sibling worktrees nested under
+  # /app/worktrees (which carry Deno `jsr:`/`npm:` supabase imports Vite can't
+  # resolve — that breaks dep pre-bundling and stalls the run). `cd "$WT"` above
+  # already does this; --root makes it explicit and robust to stray worktrees.
+  #
+  # SERIALIZE: flock on a container-wide lock so only ONE browser-mode vitest runs
+  # at a time. Parallel developers in the same session each trigger this hook;
+  # without the lock their Chromium pools thrash the shared CPU and a 30s run
+  # balloons past the timeout. Serialized, every run gets full resources (~30s).
+  # Sessions in separate containers (up-instance) have their own lock and stay
+  # parallel. flock auto-releases if the hook is killed (fd close).
+  #
+  # Inner timeout 150s is well under the Claude Code hook timeout (see
+  # settings.json) so we always return our own exit code — the gate — even after
+  # waiting on the lock.
+  flock /tmp/vitest-app.lock \
+    env CI=true timeout 150 npx vitest run --config vitest.config.ts --root "$WT" > "$TMPOUT" 2>&1
   EXIT_CODE=$?
   OUTPUT=$(tail -40 "$TMPOUT")
   rm -f "$TMPOUT"
   if [ $EXIT_CODE -eq 124 ]; then
-    # A 150s timeout is an INFRASTRUCTURE problem, not a test failure: browser-mode
-    # vitest (Playwright/Chromium + un-pre-bundled module serving) intermittently
-    # stalls at startup in this worktree environment. Treating it as a failure was
-    # the original disaster — it injected "tests may be hanging" into the developer,
-    # who then abandoned its feature work to debug vitest internals, looping against
-    # the circuit breaker for hours and burning the session. A timeout tells us
-    # nothing about the developer's code, so we DO NOT block on it: log it for
-    # observability and move on. Real test failures (vitest exit 1) below still
-    # gate normally, and typecheck/prettier/unit-functions remain hard gates.
-    echo "[$(date -Iseconds)] unit-app TIMEOUT wt=$WT (150s) -- NON-BLOCKING (infra, vitest browser stall)" >> "$LOG"
+    # With confinement + serialization a clean run finishes in ~30s, so a 150s
+    # timeout now genuinely means this worktree's tests hang — block it like any
+    # failure so the developer investigates, instead of silently shipping.
+    FAILED=1
+    AGGREGATED_ERR+="=== unit-app TIMEOUT in $WT (>150s) -- tests did not finish. ===\n\n"
+    echo "[$(date -Iseconds)] unit-app TIMEOUT wt=$WT (150s) BLOCKING" >> "$LOG"
     continue
   fi
   if [ $EXIT_CODE -ne 0 ]; then

@@ -134,7 +134,7 @@
                     {
                         "type": "command",
                         "command": "/home/developer/.claude/hooks/run-unit-tests-app.sh",
-                        "timeout": 180,
+                        "timeout": 600,
                         "statusMessage": "Running unit tests (app)..."
                     },
                     {
