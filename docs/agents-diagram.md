@@ -4,7 +4,7 @@
 > - 🔵 `([...])` stadium → **agent** (spawned subprocess)
 > - 🟡 `{{...}}` hexagon → **hook** (auto-triggered by harness)
 > - 🟣 `{...}` diamond → **decision**
-> - Solid arrow → main flow &nbsp;·&nbsp; Dashed arrow `-.->` → hook fires on lifecycle event
+> - 🟢 `([...])` green stadium → **chat-service** internal logic (not an agent)
 
 ---
 
@@ -55,8 +55,7 @@ flowchart TD
 
  CASE -->|"no tickets\nno worktrees"| RETRY["Re-enter #1 classification\nwith original request"]
 
- CASE -->|">=1 ticket status != merged"| RC_TEAM["TeamCreate tickets-SID"]
-    H_WIPE{{hook Pre/TeamCreate\nteamcreate-wipe-orphan.sh}}:::hook -.-> RC_TEAM
+ CASE -->|">=1 ticket status != merged"| H_WIPE{{Pre/TeamCreate\nteamcreate-wipe-orphan.sh}}:::hook --> RC_TEAM["TeamCreate tickets-SID"]
  RC_TEAM --> RC_DISP["Re-dispatch for each non-merged ticket:\n- developer-TASK-XXX\n- quality-reviewer-TASK-XXX\n- test-validator-TASK-XXX\n+ merger (shared)\nGO prompt includes RESUME flag"]
  RC_DISP --> RC_WAIT["STATE C - passive wait\n(same as normal COMPLEX wave)\n-> #8 COMPLEX path from STATE C"]
 
@@ -82,14 +81,14 @@ flowchart TD
     START([intent:rollback-conflict]):::terminal
  START --> READ["Read turn payload\nBASE_BRANCH . FAILED_COMMIT . COMMITS_TO_REVERT"]
 
-    H_START{{hook SubagentStart\nsetup-worktree.sh\ncreates worktrees/SID/simple + hard-links node_modules}}:::hook
+    H_START{{SubagentStart\nsetup-worktree.sh\ncreates worktrees/SID/simple + hard-links node_modules}}:::hook
  READ --> H_START
 
  H_START --> DEV(["simple-developer\nROLLBACK_CONFLICT mode"]):::agent
  DEV --> WORK["git revert -m 1 sha for each commit\nresolve conflicts manually\nworktrees/SID/simple"]
 
  WORK --> H_STOP
-    H_STOP{{hook SubagentStop x 5\ntypecheck . prettier . unit-app . unit-fn . e2e\nBLOCKS blocks on failure}}:::hook
+    H_STOP{{SubagentStop x 5\ntypecheck . prettier . unit-app . unit-fn . e2e\nblocks on failure}}:::hook
 
  H_STOP --> DIFF{supabase/\nin diff?}:::decision
  DIFF -->|yes| QR(["quality-reviewer - SIMPLE mode\nsingle-shot, no team"]):::agent
@@ -98,11 +97,8 @@ flowchart TD
  QR -->|APPROVED| MG
  QR -->|BLOCKED| DEV
 
-    H_MG_START{{hook SubagentStart: setup-worktree.sh}}:::hook -.-> MG
-    MG(["merger - ROLLBACK mode"]):::agent
-    H_MG_STOP{{hook SubagentStop\ncleanup-worktree.sh}}:::hook -.-> MG
-
- MG --> SKIP["Stage A skipped\ngit merge --no-ff branch -> main directly\nsession/SID untouched\nflock /app/.promote.lock"]:::promote
+ MG(["merger - ROLLBACK mode\nSubagentStart: setup-worktree.sh"]):::agent
+ MG --> H_MG_STOP{{SubagentStop\ncleanup-worktree.sh}}:::hook --> SKIP["Stage A skipped\ngit merge --no-ff branch -> main directly\nsession/SID untouched\nflock /app/.promote.lock"]:::promote
  SKIP --> DONE(["DONE DONE - no POST-DEV\nsession rollback never triggers migration"]):::terminal
 ```
 
@@ -142,7 +138,7 @@ flowchart LR
     classDef terminal fill:#1F2937,stroke:#111827,color:#fff
 
     START([mode-switch request]):::terminal
- START --> BASH["Orchestrator - Bash only\nswitch demo ↔ real data\nno agent dispatched"]
+ START --> BASH["Orchestrator - Bash only\nswitch demo <-> real data\nno agent dispatched"]
  BASH --> DONE(["DONE MS-DONE"]):::terminal
 ```
 
@@ -150,15 +146,35 @@ flowchart LR
 
 ## 6. MEMORY / DOCUMENT
 
-```mermaid
-flowchart LR
- 
-    classDef agent fill:#2563EB,stroke:#1E40AF,color:#fff
-    classDef terminal fill:#1F2937,stroke:#111827,color:#fff
+Two independent triggers — Mode 1 is orchestrator-driven, Mode 2 is chat-service-driven.
 
-    START(["remember / document request"]):::terminal
- START --> DOC(["documentator\nMode 1 - pattern capture\nwrites artifact to ~/.claude/local/\nindexes in /app/docs/learnings/patterns.md"]):::agent
- DOC --> DONE(["DONE M-DONE"]):::terminal
+```mermaid
+flowchart TD
+
+    classDef agent fill:#2563EB,stroke:#1E40AF,color:#fff
+    classDef decision fill:#6D28D9,stroke:#4C1D95,color:#fff
+    classDef terminal fill:#1F2937,stroke:#111827,color:#fff
+    classDef svc fill:#16A34A,stroke:#14532D,color:#fff
+
+    subgraph MODE1 ["Mode 1 - Pattern capture (user request)"]
+        direction TB
+        U1([User: remember this / document this rule]):::terminal
+        D1(["documentator - Mode 1\nreads session logs + ADRs + patterns ledger\nwrites rules/skills/hooks/agents\nto ~/.claude/local/<type>/<slug>.md\nindexes in /app/docs/learnings/patterns.md"]):::agent
+        DONE1(["DONE M-DONE\n(response visible in chat)"]):::terminal
+        U1 --> D1 --> DONE1
+    end
+
+    subgraph MODE2 ["Mode 2 - Business-knowledge synthesis (automatic, silent)"]
+        direction TB
+        T1(["chat-service - turn.js\nturn lands on completed\n+ sessionHasMergedTickets = true"]):::svc
+        T2(["scheduleDocumentatorRun\n30s debounce timer\n(reset if user sends another message before timer fires)"]):::svc
+        BUSY{runtime\nbusy?}:::decision
+        T3(["documentator - Mode 2\nreads log.jsonl + git diff vs origin/main\nappends bullets to /app/MEMORY.md\n5 min hard ceiling\noutput -> documentator.log (silent, never broadcast)"]):::agent
+        DONE2(["DONE meta.json stamped\ndocumentatorLastRunAt + exit code"]):::terminal
+        T1 --> T2 --> BUSY
+        BUSY -->|"yes - new turn started\nbefore timer fired"| SKIP2["skip\nnext completed turn\nwill re-schedule"]
+        BUSY -->|no| T3 --> DONE2
+    end
 ```
 
 ---
@@ -179,14 +195,14 @@ flowchart TD
     classDef promote fill:#059669,stroke:#065F46,color:#fff
     START([SIMPLE request]):::terminal
 
-    H_START{{hook SubagentStart\nsetup-worktree.sh\ncreates worktrees/SID/simple\nhard-links node_modules}}:::hook
+    H_START{{SubagentStart\nsetup-worktree.sh\ncreates worktrees/SID/simple\nhard-links node_modules}}:::hook
  START --> H_START
 
  H_START --> DEV(["simple-developer"]):::agent
  DEV --> IMPL["implement change\ngit add -A && git commit"]
 
  IMPL --> H_STOP
-    H_STOP{{hook SubagentStop x 5  —  sequential, each blocks on failure\n1. typecheck  120s\n2. prettier   60s\n3. unit-app   180s\n4. unit-fn    180s\n5. e2e        600s}}:::hook
+    H_STOP{{SubagentStop x 5 - sequential, blocks on failure\n1. typecheck  120s\n2. prettier   60s\n3. unit-app   180s\n4. unit-fn    180s\n5. e2e        600s}}:::hook
 
  H_STOP --> DIFF{supabase/\nin diff?}:::decision
 
@@ -198,13 +214,11 @@ flowchart TD
     FIX(["simple-developer - fix cycle\nsame worktree, max 2 cycles"]):::agent
  FIX --> FIMPL["implement fix\ngit commit"]
  FIMPL --> H_FSTOP
-    H_FSTOP{{hook SubagentStop x 5}}:::hook
+    H_FSTOP{{SubagentStop x 5}}:::hook
  H_FSTOP --> QR
 
-    MG(["merger - SIMPLE mode"]):::agent
-    H_MG_STOP{{hook SubagentStop\ncleanup-worktree.sh}}:::hook -.-> MG
-
- MG --> SA["Stage A\ngit merge --no-ff SID/simple -> session/SID\nin _session worktree"]:::promote
+ MG(["merger - SIMPLE mode"]):::agent
+ MG --> H_MG_STOP{{SubagentStop\ncleanup-worktree.sh}}:::hook --> SA["Stage A\ngit merge --no-ff SID/simple -> session/SID\nin _session worktree"]:::promote
  SA --> SB["Stage B - flock /app/.promote.lock\ngit checkout main . apply-app-variant.sh\ngit merge --no-ff session/SID -> main"]:::promote
  SB --> PD["-> #9 POST-DEV\n(only if supabase/ was touched)"]
 ```
@@ -236,47 +250,33 @@ flowchart TD
         direction TB
 
         STATE_B["STATE B\nPick next batch - <=5 unscheduled tickets"]
-
-        H_WIPE{{hook Pre/TeamCreate\nteamcreate-wipe-orphan.sh\nremoves orphan team from dead previous run}}:::hook
-        H_WIPE -.-> TEAM
-
+        H_WIPE{{Pre/TeamCreate\nteamcreate-wipe-orphan.sh}}:::hook
         TEAM["TeamCreate  tickets-SID\n3N+1 members total"]
-
+        H_WS{{SubagentStart x N\nsetup-worktree.sh\ncreates worktrees/SID/TASK-XXX + hard-links node_modules}}:::hook
         DISPATCH["Dispatch per ticket (xN) + 1 shared merger\n---\n  developer-TASK-XXX        (Opus)   <- implements\n  quality-reviewer-TASK-XXX (Sonnet) <- code + security review\n  test-validator-TASK-XXX   (Haiku)  <- wiring + Playwright\n---\n  merger  (Haiku, shared singleton)   <- merges serially"]
-
-        H_WS{{hook SubagentStart x N\nsetup-worktree.sh\ncreates worktrees/SID/TASK-XXX + hard-links node_modules}}:::hook
-        H_WS -.-> DISPATCH
-
         GO["SendMessage GO -> each developer\n(worktree path . branch . counterpart names)\nreviewer + test-validator idle until contacted"]
-
         STATE_C["STATE C - orchestrator passive\nmonitors SendMessage from merger:\n'merged TASK-XXX, commit=sha'\ncounts confirmations"]
-
         DONE_Q{All N merges\nconfirmed?}:::decision
-
         SHUTDOWN["STATE D  -  wave teardown\nSendMessage shutdown_request -> all 3N+1 members\nwait for shutdown_approved (or 60s timeout)"]
-        H_TD_GATE{{hook Pre/TeamDelete\nteamdelete-gate.sh}}:::hook
-        H_TD_GATE -.-> TEAMDEL
+        H_TD_GATE{{Pre/TeamDelete\nteamdelete-gate.sh}}:::hook
         TEAMDEL["TeamDelete"]
-        H_TD_CLEAN{{hook Post/TeamDelete\nteamdelete-cleanup.sh}}:::hook
-        TEAMDEL -.-> H_TD_CLEAN
+        H_TD_CLEAN{{Post/TeamDelete\nteamdelete-cleanup.sh}}:::hook
 
- STATE_B --> H_WIPE
- TEAM --> DISPATCH --> GO --> STATE_C --> DONE_Q
- DONE_Q -->|"more unscheduled\ntickets"| SHUTDOWN --> H_TD_GATE
- H_TD_CLEAN --> STATE_B
+ STATE_B --> H_WIPE --> TEAM --> DISPATCH --> H_WS --> GO --> STATE_C --> DONE_Q
+ DONE_Q -->|"more unscheduled\ntickets"| SHUTDOWN --> H_TD_GATE --> TEAMDEL --> H_TD_CLEAN --> STATE_B
     end
 
  DONE_Q -->|last wave| PROMOTE_MSG["SendMessage merger\n'promote: session=SID'"]
 
  PROMOTE_MSG --> SA["Stage A already done per ticket\nStage B - flock /app/.promote.lock\ngit checkout main . apply-app-variant.sh\ngit merge --no-ff session/SID -> main"]:::promote
 
-    H_MG_STOP{{hook SubagentStop/merger\ncleanup-worktree.sh}}:::hook
+    H_MG_STOP{{SubagentStop/merger\ncleanup-worktree.sh}}:::hook
  SA --> H_MG_STOP
 
  H_MG_STOP --> PD["-> #9 POST-DEV"]
 ```
 
-### 8b. What happens inside a wave — developer lifecycle (1 ticket)
+### 8b. Communication inside one wave — per-ticket agent lifecycle
 
 ```mermaid
 sequenceDiagram
@@ -284,42 +284,50 @@ sequenceDiagram
     participant D  as developer-TASK-XXX
     participant QR as quality-reviewer-TASK-XXX
     participant TV as test-validator-TASK-XXX
-    participant MG as merger
+    participant MG as merger (shared)
 
-    Note over D: hook SubagentStart -> setup-worktree.sh
+    Note over O: TeamCreate done - all agents idle
 
-    O->>D:  SendMessage GO  (worktree . branch . counterparts)
-    O->>QR: SendMessage GO  (idle — waits for "ready, please review")
-    O->>TV: SendMessage GO  (idle — waits for "ready, please validate")
-    O->>MG: SendMessage GO  (idle — waits for "ready: TASK-XXX")
+    O->>D:  GO (worktree path, branch, reviewer+validator names)
+    O->>QR: GO (idle - wait for "ready, please review")
+    O->>TV: GO (idle - wait for "ready, please validate")
+    O->>MG: GO (idle - wait for "ready: TASK-XXX")
 
-    D->>D: implement . git commit . git rebase session/SID
+    Note over D: SubagentStart fires -> setup-worktree.sh<br/>creates worktrees/SID/TASK-XXX + hard-links node_modules
 
-    Note over D: hook Pre/SendMessage -> validate-before-review.sh<br/>runs typecheck . prettier . unit . e2e<br/>BLOCKS BLOCKS SendMessage on failure — developer fixes then retries
+    D->>D: implement changes in worktree
+    D->>D: git add -A && git commit
+    D->>D: git rebase session/SID
 
-    D->>QR: "ready, please review"
-    D->>TV: "ready, please validate"
+    Note over D: Pre/SendMessage hook: validate-before-review.sh<br/>typecheck (120s) + prettier (60s) + unit (180s) + e2e (600s)<br/>BLOCKS send on failure - developer must fix and retry
 
-    par
-        QR->>QR: code quality + security audit (rubric A1–A8, B1–B7)
- QR-->>D: APPROVED / BLOCKED (file . line . fix)
+    D->>QR: ready, please review (branch name)
+    D->>TV: ready, please validate (branch name)
+
+    par QR reviews in parallel with TV
+        QR->>QR: code quality + security (rubric A1-A8, B1-B7)
+        QR-->>D: APPROVED  or  BLOCKED: file:line - what to fix
     and
-        TV->>TV: wiring check + Playwright screenshots
- TV-->>D: Verdict GREEN / RED (with issues)
+        TV->>TV: integration wiring check + Playwright screenshots
+        TV-->>D: GREEN  or  RED: issues list
     end
 
-    alt BLOCKED or RED
+    alt any BLOCKED or RED
         D->>D: fix . commit . rebase
-        Note over D: hook validate-before-review fires again
-        D->>QR: "ready, please review"
-        D->>TV: "ready, please validate"
+        Note over D: Pre/SendMessage hook fires again
+        D->>QR: ready, please review
+        D->>TV: ready, please validate
+        QR-->>D: APPROVED
+        TV-->>D: GREEN
     end
 
-    D->>MG: "ready: TASK-XXX, branch=SID/task . all approved"
+    D->>MG: ready: TASK-XXX  branch=SID/TASK-XXX  all approved
 
-    Note over MG: Stage A — git merge --no-ff task-branch -> session/SID<br/>in _session worktree . updates ticket JSON -> "merged"
+    Note over MG: Stage A - git merge --no-ff SID/TASK-XXX -> session/SID<br/>in _session worktree<br/>updates TASK-XXX.json status -> merged
 
- MG-->>O: "merged TASK-XXX, commit=sha"
+    MG-->>O: merged TASK-XXX  commit=sha
+
+    Note over O: STATE C - counts confirmations<br/>when all N confirmed -> STATE D (wave teardown) or promote
 ```
 
 ---
@@ -356,9 +364,7 @@ flowchart TD
  MIG_MG --> DEPLOY["Bash apply-migrations\ntimeout 240s"]:::postdev
  DEPLOY --> DONE
 
-    DONE(["DONE PD-DONE"]):::terminal
- DONE --> DOC(["documentator - Mode 2\nbusiness-knowledge synthesis\nappend bullets to /app/MEMORY.md\ncommit as Documentator bot"]):::agent
- DOC --> SESSION_DONE(["DONE SESSION DONE"]):::terminal
+    DONE(["DONE PD-DONE\nchat-service schedules documentator Mode 2\nwith 30s debounce -> see #6"]):::terminal
 ```
 
 ---
