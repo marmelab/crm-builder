@@ -729,6 +729,46 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
   background: #3a3a3c; color: #8e8e93;
   cursor: not-allowed;
 }
+/* Satisfaction-ask bubble — appears after dev completes when schema files were
+   touched. Prompts the user to confirm before the migration round starts. */
+.msg-satisfaction-ask {
+  align-self: flex-start;
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 14px 16px;
+  background: rgba(59,130,246,.10);
+  border: 1px solid rgba(59,130,246,.35);
+  border-radius: 14px; border-bottom-left-radius: 4px;
+  width: min(90%, 380px);
+  flex-shrink: 0;
+}
+.satisfaction-ask-header {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 13px; font-weight: 600; color: #60a5fa;
+}
+.satisfaction-ask-icon { font-size: 14px; line-height: 1; }
+.satisfaction-ask-body {
+  font-size: 13px; color: #d1d1d6; line-height: 1.5; margin: 0;
+}
+.satisfaction-ask-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+.satisfaction-ask-yes {
+  background: #3b82f6; color: #fff;
+  border: none; border-radius: 8px;
+  padding: 7px 16px;
+  font-size: 13px; font-weight: 600;
+  cursor: pointer;
+  transition: background .15s;
+}
+.satisfaction-ask-yes:hover { background: #60a5fa; }
+.satisfaction-ask-no {
+  background: transparent; color: #aeaeb2;
+  border: 1px solid #3a3a3c; border-radius: 8px;
+  padding: 7px 16px;
+  font-size: 13px; font-weight: 500;
+  cursor: pointer;
+  transition: border-color .15s, color .15s;
+}
+.satisfaction-ask-no:hover { border-color: #636366; color: #f2f2f7; }
+
 #chat-form {
   display: flex; align-items: flex-end; gap: 10px;
   padding: 14px; border-top: 1px solid #2c2c2e;

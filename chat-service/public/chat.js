@@ -5,8 +5,8 @@ import { renderInlineMarkdown } from './lib/markdown.js';
 import { initRollback } from './lib/rollback/index.js';
 import { initDeploy } from './lib/deploy/index.js';
 
-const widget   = document.getElementById('chat-widget');
-const toggle   = document.getElementById('chat-toggle');
+const widget = document.getElementById('chat-widget');
+const toggle = document.getElementById('chat-toggle');
 const debugBtn = document.getElementById('chat-debug');
 const stateBtn = document.getElementById('chat-state');
 const newBtn = document.getElementById('chat-new');
@@ -15,9 +15,9 @@ const historyCollapseBtn = document.getElementById('history-collapse');
 const historyList = document.getElementById('history-list');
 const historyEmpty = document.getElementById('history-empty');
 const chatTitle = document.getElementById('chat-title');
-const form     = document.getElementById('chat-form');
-const input    = document.getElementById('chat-input');
-const send     = document.getElementById('chat-send');
+const form = document.getElementById('chat-form');
+const input = document.getElementById('chat-input');
+const send = document.getElementById('chat-send');
 const stopBtn = document.getElementById('chat-stop');
 const messages = document.getElementById('chat-messages');
 const stats = document.getElementById('chat-stats');
@@ -27,7 +27,7 @@ const statsPanelBody = document.getElementById('chat-stats-panel-body');
 const statsCloseBtn = document.getElementById('chat-stats-close');
 
 const restoreBtn = document.getElementById('chat-restore-btn');
-let working  = false;
+let working = false;
 // Last broadcast state of the *displayed* session. A rollback that hits a
 // conflict keeps the session `in_progress` for the whole background resolution,
 // so gating the restore button on this (plus `working`) keeps it disabled until
@@ -47,7 +47,7 @@ function refreshRestoreBtn() {
   if (restoreBtn) restoreBtn.disabled = isSessionBusy();
 }
 let progressTotal = 0;
-let progressDone  = 0;
+let progressDone = 0;
 let progressSteps = [];
 let progressIndeterminate = false;
 // Unix-seconds timestamp when the 5h usage limit window resets. Non-null while
@@ -96,20 +96,20 @@ function placeIntoMessages(el, seq) {
 
 const TOOL_LABELS = {
   orchestrator: '🎭 Orchestrator',
-  Task:         '🤖 Agent',
-  Agent:        '🤖 Agent',
+  Task: '🤖 Agent',
+  Agent: '🤖 Agent',
   agent_output: '💬 Agent reply',
-  TeamCreate:   '👥 Team spawned',
-  TeamDelete:   '✓  Team done',
-  Read:         '📖 Reading',
-  Write:        '✏️  Writing',
-  Edit:         '✏️  Editing',
-  Bash:         '⚡ Running command',
-  Glob:         '🔍 Searching files',
-  Grep:         '🔍 Searching code',
-  SendMessage:  '✉️  Message',
-  system:       '🔌 Session started',
-  result:       '✅ Turn complete',
+  TeamCreate: '👥 Team spawned',
+  TeamDelete: '✓  Team done',
+  Read: '📖 Reading',
+  Write: '✏️  Writing',
+  Edit: '✏️  Editing',
+  Bash: '⚡ Running command',
+  Glob: '🔍 Searching files',
+  Grep: '🔍 Searching code',
+  SendMessage: '✉️  Message',
+  system: '🔌 Session started',
+  result: '✅ Turn complete',
 };
 
 function switchSessionAndOpen(id) {
@@ -165,6 +165,7 @@ const connection = initConnection({
 
 function clearMessageNodes() {
   messages.querySelectorAll('.msg, .msg-choices, .msg-working, .msg-rate-limited, .msg-error').forEach((n) => n.remove());
+  removeSatisfactionAskUi();
 }
 
 function resetChatUi() {
@@ -580,9 +581,9 @@ function handleWsMessage(event) {
     const timeline = Array.isArray(msg.timeline) && msg.timeline.length
       ? msg.timeline
       : [
-          ...(msg.messages || []).map((m) => ({ kind: 'message', role: m.role, content: m.content })),
-          ...(msg.debugEvents || []).map((d) => ({ kind: 'debug', ...d })),
-        ];
+        ...(msg.messages || []).map((m) => ({ kind: 'message', role: m.role, content: m.content })),
+        ...(msg.debugEvents || []).map((d) => ({ kind: 'debug', ...d })),
+      ];
     // Tail user messages still in the queue: walk the timeline backwards and
     // mark the last N user-message items as queued (queue holds user-only).
     // queuedIds[i] pairs with the i-th queued tail message in chronological
@@ -637,6 +638,7 @@ function handleWsMessage(event) {
       // a reload or when switching back to the session.
       renderErrorUi();
     }
+    if (msg.satisfactionAsk) renderSatisfactionAskUi(typeof msg.satisfactionAsk === 'object' ? msg.satisfactionAsk : {});
     historyApi.refreshHistory();
     return;
   }
@@ -703,6 +705,11 @@ function handleWsMessage(event) {
     return;
   }
 
+  if (msg.type === 'satisfaction_ask') {
+    renderSatisfactionAskUi({ header: msg.header, body: msg.body, yes: msg.yes, no: msg.no });
+    return;
+  }
+
   if (msg.type === 'queue_updated') {
     applyQueueState(msg.queuedIds, msg.cancelledId);
     return;
@@ -710,7 +717,7 @@ function handleWsMessage(event) {
 
   if (msg.type === 'progress') {
     progressTotal = msg.total || 0;
-    progressDone  = msg.done  || 0;
+    progressDone = msg.done || 0;
     progressSteps = Array.isArray(msg.steps) ? msg.steps : [];
     // Indeterminate = the server doesn't yet know the total work (orchestrator
     // routing / planner decomposing). Render a shimmer + "Estimating…" instead
@@ -832,6 +839,62 @@ function appendChoices(content, options, seq = ++seqCounter) {
   });
 
   placeIntoMessages(wrap, seq);
+}
+
+function removeSatisfactionAskUi() {
+  messages.querySelector('.msg-satisfaction-ask')?.remove();
+}
+
+function renderSatisfactionAskUi({
+  header: headerText = 'Preview ready',
+  body = 'Your changes are visible in the preview but they haven\'t been saved to your data yet. Are you happy with the result?',
+  yes = 'Yes, save the changes',
+  no = 'No, I want to change something',
+} = {}) {
+  removeSatisfactionAskUi();
+
+  const bubble = document.createElement('div');
+  bubble.className = 'msg-satisfaction-ask';
+
+  const header = document.createElement('div');
+  header.className = 'satisfaction-ask-header';
+  const icon = document.createElement('span');
+  icon.className = 'satisfaction-ask-icon';
+  icon.setAttribute('aria-hidden', 'true');
+  icon.textContent = '👁️';
+  const headerLabel = document.createElement('span');
+  headerLabel.textContent = headerText;
+  header.append(icon, headerLabel);
+
+  const bodyEl = document.createElement('p');
+  bodyEl.className = 'satisfaction-ask-body';
+  bodyEl.textContent = body;
+
+  const btns = document.createElement('div');
+  btns.className = 'satisfaction-ask-buttons';
+
+  const sendChoice = (content, display) => {
+    if (!connection.safeSend({ content, display })) return;
+    bubble.remove();
+    appendMessage('user', display);
+    historyApi.refreshHistory();
+  };
+
+  const yesBtn = document.createElement('button');
+  yesBtn.type = 'button';
+  yesBtn.className = 'satisfaction-ask-yes';
+  yesBtn.textContent = yes;
+  yesBtn.addEventListener('click', () => sendChoice(yes, yes));
+
+  const noBtn = document.createElement('button');
+  noBtn.type = 'button';
+  noBtn.className = 'satisfaction-ask-no';
+  noBtn.textContent = no;
+  noBtn.addEventListener('click', () => sendChoice(no, no));
+
+  btns.append(yesBtn, noBtn);
+  bubble.append(header, bodyEl, btns);
+  placeIntoMessages(bubble, ++seqCounter);
 }
 
 const ROLLBACK_ICON_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h2"/><path d="M16 21h2a2 2 0 0 0 2-2V8"/><path d="m9 15 3-3 3 3"/><path d="M12 12v9"/></svg>';
@@ -1016,18 +1079,18 @@ function toolDetail(toolName, input) {
   if (!input) return null;
   const short = (s, n = 60) => s && s.length > n ? '…' + s.slice(-n) : s;
   switch (toolName) {
-    case 'Read':  return short(input.file_path);
+    case 'Read': return short(input.file_path);
     case 'Write': return short(input.file_path);
-    case 'Edit':  return short(input.file_path);
-    case 'Bash':  return short(input.command, 80);
-    case 'Grep':  return `"${input.pattern}"${input.path ? ' in ' + input.path : ''}`;
-    case 'Glob':  return input.pattern;
+    case 'Edit': return short(input.file_path);
+    case 'Bash': return short(input.command, 80);
+    case 'Grep': return `"${input.pattern}"${input.path ? ' in ' + input.path : ''}`;
+    case 'Glob': return input.pattern;
     case 'SendMessage': {
       const to = input.to ? `→ ${input.to}` : '→ ?';
       const body = (input.content || '').replace(/\s+/g, ' ').trim();
       return body ? `${to}: ${body.length > 200 ? body.slice(0, 200) + '…' : body}` : to;
     }
-    default:      return null;
+    default: return null;
   }
 }
 
@@ -1036,15 +1099,15 @@ function toolDetail(toolName, input) {
 const AGENT_COLORS = {
   'simple-developer': '#fb923c',
   'quality-reviewer': '#a78bfa',
-  'code-reviewer':    '#a78bfa',
-  'security-reviewer':'#f43f5e',
-  'test-validator':   '#38bdf8',
-  architect:          '#c084fc',
-  orchestrator:       '#fbbf24',
-  planner:            '#34d399',
-  developer:          '#f97316',
-  merger:             '#2dd4bf',
-  documentator:       '#facc15',
+  'code-reviewer': '#a78bfa',
+  'security-reviewer': '#f43f5e',
+  'test-validator': '#38bdf8',
+  architect: '#c084fc',
+  orchestrator: '#fbbf24',
+  planner: '#34d399',
+  developer: '#f97316',
+  merger: '#2dd4bf',
+  documentator: '#facc15',
 };
 
 function agentColor(label) {
@@ -1250,6 +1313,7 @@ form.addEventListener('submit', (e) => {
     appendMessage('assistant', 'Connection lost. Please reload the page.');
     return;
   }
+  removeSatisfactionAskUi();
   appendMessage('user', content, { queued: working });
   historyApi.refreshHistory();
   input.value = '';
@@ -1277,7 +1341,7 @@ const morePopup = initMorePopup();
 historyCollapseBtn.addEventListener('click', () => {
   const collapsed = !historyPanel.classList.contains('collapsed');
   applySidebarCollapsed(collapsed);
-  try { localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? '1' : '0'); } catch {}
+  try { localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? '1' : '0'); } catch { }
   // The popovers are anchored at open time; the sidebar width changes on
   // collapse, so close any open one rather than leaving it misplaced.
   morePopup.closeMorePopup();
@@ -1329,7 +1393,7 @@ async function enterStatsMode() {
     statsRefresh.markRefreshed();
   } catch (err) {
     const retry = el('button', { id: 'stats-retry-btn', onclick: enterStatsMode }, 'Retry');
-    const back  = el('button', { id: 'stats-back-btn',  onclick: exitStatsMode  }, '← Close');
+    const back = el('button', { id: 'stats-back-btn', onclick: exitStatsMode }, '← Close');
     const label = el('div', null, el('strong', null, 'Failed to load stats:'), ' ', String(err.message));
     statsPanelBody.replaceChildren(el('div', { className: 'stats-error' }, label, retry, back));
   }
@@ -1387,7 +1451,7 @@ async function pollMode() {
     if (!res.ok) return;
     const { mode, supabaseReady } = await res.json();
     updateModeBtn(mode, supabaseReady);
-  } catch {}
+  } catch { }
 }
 
 modeToggleBtn.addEventListener('click', async () => {
