@@ -224,7 +224,7 @@ function applyStatus(status) {
     'configuredSecrets', 'configuredSecretFields',
     'projectRef', 'lastDeployAt',
     'cloudflareConfigured', 'cloudflareAccountId', 'cloudflareTokenStored',
-    'deployId', 'ok', 'exitCode', 'durationMs', 'manualAuthUrl',
+    'deployId', 'ok', 'exitCode', 'durationMs', 'manualAuthUrl', 'callbackUrl',
   ];
   for (const k of passthrough) {
     if (k in status) next[k] = status[k];
@@ -311,13 +311,35 @@ function paintTerminalStatus(ok, durationMs, exitCode) {
     elements.progressStatus.className = 'deploy-progress-status deploy-fail';
   }
   // Auth redirect URL reminder: the deploy now auto-binds the callback URL into
-  // Supabase, so this nag shows ONLY when the backend signalled it couldn't
+  // Supabase, so this fallback shows ONLY when the backend signalled it couldn't
   // (manualAuthUrl) — an undeterminable worker URL or a failed PATCH. A clean
   // auto-bind, a Supabase-only deploy, or a failed deploy all keep it hidden.
-  if (elements.progressWarning) {
-    elements.progressWarning.hidden = !(ok && state.manualAuthUrl);
-  }
+  renderCallbackWarning(ok && state.manualAuthUrl);
   elements.progressClose.disabled = false;
+}
+
+// Populate (or hide) the manual-fallback callout. When the backend handed us the
+// exact callback URL, show it with a Copy button so the user can paste it
+// straight into Supabase; otherwise show a shorter "find it yourself" message.
+// The link always deep-links to the project's URL-configuration page.
+function renderCallbackWarning(show) {
+  if (!elements.progressWarning) return;
+  elements.progressWarning.hidden = !show;
+  if (!show) return;
+
+  const url = state.callbackUrl;
+  if (elements.callbackRow) elements.callbackRow.hidden = !url;
+  if (url && elements.callbackUrl) elements.callbackUrl.textContent = url;
+  if (elements.callbackMsg) {
+    elements.callbackMsg.textContent = url
+      ? "The callback URL couldn't be bound automatically. Copy it and add it by hand:"
+      : "Couldn't determine the production URL automatically. Grab your Worker URL from the Cloudflare dashboard, then add it by hand:";
+  }
+  if (elements.authLink) {
+    elements.authLink.href = state.projectRef
+      ? `https://supabase.com/dashboard/project/${state.projectRef}/auth/url-configuration`
+      : 'https://supabase.com/dashboard';
+  }
 }
 
 async function triggerDeploy() {
@@ -378,6 +400,7 @@ function onDeployLog(msg) {
 function onDeployDone(msg) {
   state.running = false;
   state.manualAuthUrl = !!msg.manualAuthUrl;
+  state.callbackUrl = msg.callbackUrl || null;
   refreshButtonLabel();
   paintTerminalStatus(msg.ok, msg.durationMs, msg.exitCode);
   // Re-fetch the public status to pick up lastDeployAt.
@@ -400,10 +423,40 @@ export function initDeploy() {
   elements.log = elements.modal.querySelector('.deploy-progress-log');
   elements.progressStatus = elements.modal.querySelector('.deploy-progress-status');
   elements.progressWarning = elements.modal.querySelector('.deploy-progress-warning');
+  elements.callbackMsg = elements.modal.querySelector('.deploy-callback-msg');
+  elements.callbackRow = elements.modal.querySelector('.deploy-callback-row');
+  elements.callbackUrl = elements.modal.querySelector('.deploy-callback-url');
+  elements.callbackCopy = elements.modal.querySelector('.deploy-callback-copy');
+  elements.authLink = elements.modal.querySelector('.deploy-auth-link');
   elements.progressClose = elements.modal.querySelector('.deploy-progress-close');
   elements.modalClose = elements.modal.querySelector('.deploy-modal-close');
   elements.tabs = [...elements.modal.querySelectorAll('.deploy-tab')];
   elements.panels = [...elements.modal.querySelectorAll('.deploy-tab-panel')];
+
+  // Copy the callback URL to the clipboard, with transient "Copied!" feedback.
+  if (elements.callbackCopy) {
+    elements.callbackCopy.addEventListener('click', async () => {
+      const url = state.callbackUrl;
+      if (!url) return;
+      try {
+        await navigator.clipboard.writeText(url);
+        elements.callbackCopy.textContent = 'Copied!';
+        elements.callbackCopy.classList.add('copied');
+        setTimeout(() => {
+          elements.callbackCopy.textContent = 'Copy';
+          elements.callbackCopy.classList.remove('copied');
+        }, 1500);
+      } catch {
+        // Clipboard blocked (e.g. insecure context): select the text so the
+        // user can copy it manually instead of silently failing.
+        const range = document.createRange();
+        range.selectNodeContents(elements.callbackUrl);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
+    });
+  }
   elements.chips = {
     supabase: elements.modal.querySelector('[data-deploy-chip="supabase"]'),
     cloudflare: elements.modal.querySelector('[data-deploy-chip="cloudflare"]'),

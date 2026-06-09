@@ -959,4 +959,5 @@ test('POST /api/deploy/run — auth-config PATCH failure warns but keeps the dep
   assert.match(steps, /Could not bind the callback URL.*403/);
   assert.match(steps, /set it manually in Supabase Studio/);
   assert.equal(mod.deployState.manualAuthUrl, true, 'manual-auth nag raised when the bind PATCH fails');
+  assert.equal(mod.deployState.callbackUrl, 'https://atomic-crm-abcdefghijklmnopqrst.my-team.workers.dev');
 });

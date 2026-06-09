@@ -79,11 +79,8 @@ export const deployState = {
   ok: null,
   exitCode: null,
   durationMs: null,
-  // Set true when a Cloudflare deploy shipped but the callback URL could NOT be
-  // auto-bound into Supabase (undeterminable URL or a failed PATCH) — the one
-  // case the UI still needs to nag the user to set it by hand. False whenever
-  // the bind succeeded or there was no frontend to bind.
   manualAuthUrl: false,
+  callbackUrl: null,
   tail: [],
 };
 
@@ -213,6 +210,7 @@ function publicStatus(config) {
     exitCode: deployState.exitCode,
     durationMs: deployState.durationMs,
     manualAuthUrl: deployState.manualAuthUrl,
+    callbackUrl: deployState.callbackUrl,
     tail: deployState.tail,
   };
 }
@@ -719,6 +717,7 @@ export async function runDeploy(config, deployId) {
   // Reset the per-deploy manual-auth nag; the Cloudflare branch below flips it on
   // only if the auto-bind doesn't land.
   deployState.manualAuthUrl = false;
+  deployState.callbackUrl = null;
 
   try {
     // Build the static CRM bundle FIRST when a Cloudflare target is configured: a
@@ -781,6 +780,7 @@ export async function runDeploy(config, deployId) {
       // a binding failure (or an undeterminable URL) warns and leaves the
       // deploy successful rather than failing after the fact. The user falls
       // back to the manual Studio edit they did before, nothing is broken.
+      deployState.callbackUrl = prodUrl;
       if (prodUrl) {
         emitStep(`▶ Binding ${prodUrl} as the Supabase callback URL`, deployId);
         try {
@@ -840,6 +840,7 @@ export async function handleDeployRun(req, res) {
   deployState.exitCode = null;
   deployState.durationMs = null;
   deployState.manualAuthUrl = false;
+  deployState.callbackUrl = null;
   // New deploy → fresh tail. Clients that reconnect mid-run will see only
   // this deploy's output, not noise from a previous one.
   deployState.tail = [];
@@ -903,6 +904,7 @@ async function finalize(config, deployId, t0, exitCode, errMessage) {
     durationMs,
     finishedAt,
     manualAuthUrl: deployState.manualAuthUrl,
+    callbackUrl: deployState.callbackUrl,
     ...(errMessage ? { errMessage } : {}),
   });
 }
@@ -919,6 +921,7 @@ export function deploySnapshot() {
     exitCode: deployState.exitCode,
     durationMs: deployState.durationMs,
     manualAuthUrl: deployState.manualAuthUrl,
+    callbackUrl: deployState.callbackUrl,
     tail: deployState.tail,
   };
 }
@@ -933,6 +936,7 @@ export function _resetForTests() {
   deployState.exitCode = null;
   deployState.durationMs = null;
   deployState.manualAuthUrl = false;
+  deployState.callbackUrl = null;
   deployState.tail = [];
   sseClients.clear();
 }
