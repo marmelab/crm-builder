@@ -172,9 +172,16 @@ export async function regenerateTitleWithHaiku(runtime) {
 }
 
 export function friendlyError({ exitCode, stderr, rateLimit, resultError }) {
-  if (rateLimit?.resetsAt) {
-    const minutes = Math.max(1, Math.ceil((rateLimit.resetsAt * 1000 - Date.now()) / 60000));
-    return `Usage limit reached. You can try again in about ${minutes} minute(s).`;
+  if (rateLimit) {
+    // Prefer the CLI's own user-facing text when present (the synthetic
+    // rate-limit message already reads "You've hit your session limit · resets
+    // <time>"); fall back to a computed countdown, then a generic limit line.
+    if (rateLimit.message) return rateLimit.message;
+    if (rateLimit.resetsAt) {
+      const minutes = Math.max(1, Math.ceil((rateLimit.resetsAt * 1000 - Date.now()) / 60000));
+      return `Usage limit reached. You can try again in about ${minutes} minute(s).`;
+    }
+    return "Usage limit reached. Please try again shortly.";
   }
   if (isAuthErrorStderr(stderr)) {
     return "Access has expired. Please contact your administrator to renew the session.";
