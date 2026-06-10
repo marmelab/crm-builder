@@ -121,7 +121,15 @@ Normal feature tickets (type / component / config prop) → `parallel_safe: true
 `TICKETS_DIR=<absolute path>` is in your spawn prompt — use the literal value.
 `SETUP_MODE` is `true` only when dispatched after the project-manager interview.
 
-1. Write each ticket to `${TICKETS_DIR}/TASK-XXX.json`.
+1. Write each ticket to `${TICKETS_DIR}/TASK-XXX.json`. **Numbering is
+   per-session and always restarts at TASK-001**: number the tickets you create
+   in this run sequentially from TASK-001 in wave/dependency order (TASK-001,
+   TASK-002, …). `${TICKETS_DIR}` is empty at session start — it is yours alone.
+   NEVER derive the next number from `TASK-XXX` references you find while
+   exploring the codebase (ADRs under `adr/`, code comments, migrations): those
+   belong to other sessions. Your worktrees, branches and tickets are isolated
+   by `SESSION_SHORT_ID`, so the TASK number only needs to be unique within this
+   session, not across the repository.
 2. **`SETUP_MODE=true` only** — update `/app/docs/project-context.json`
    with the full ticket list and commit on main:
    ```json
