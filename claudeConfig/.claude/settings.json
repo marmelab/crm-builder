@@ -91,6 +91,17 @@
                 ]
             }
         ],
+        "Stop": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "/home/developer/.claude/hooks/turn-complete.sh",
+                        "timeout": 5
+                    }
+                ]
+            }
+        ],
         "SubagentStop": [
             {
                 "matcher": "merger",
