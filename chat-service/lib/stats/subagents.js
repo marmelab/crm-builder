@@ -148,90 +148,90 @@ async function appendSubagentToolUses(files, phase, toolCounts, allToolCalls) {
     } catch { continue; }
     if (events.length) lastEventTs = events[events.length - 1].timestamp || lastEventTs;
 
-  // tool_result timestamps for duration computation
-  const toolResultTsById = new Map();
-  for (const e of events) {
-    if (e.type !== 'user' || !Array.isArray(e.message?.content)) continue;
-    for (const c of e.message.content) {
-      if (c.type === 'tool_result' && c.tool_use_id) {
-        toolResultTsById.set(c.tool_use_id, e.timestamp);
-      }
-    }
-  }
-
-  for (const e of events) {
-    if (e.type !== 'assistant' || !Array.isArray(e.message?.content)) continue;
-    const u = e.message?.usage;
-    const msgId = e.message?.id;
-    if (u && msgId && !tokensByMessageId.has(msgId)) {
-      tokensByMessageId.add(msgId);
-      // Track the full breakdown (input + cache_creation + output + cache_read)
-      // so the per-phase tooltip can show the same 4-way split as the global
-      // summary. tokensTotal is the legacy sum (cache_read excluded) kept for
-      // back-compat with any code still reading that field.
-      const b = breakdownFromUsage(u);
-      phase.tokensBreakdown = addBreakdown(phase.tokensBreakdown, b);
-      phase.tokensTotal += b.input + b.cacheCreate + b.output;
-      if (e.message.model) {
-        phase.costUsd = (phase.costUsd || 0) + costFromBreakdown(e.message.model, b);
-        const prev = tokensByModelMap.get(e.message.model) || emptyBreakdown();
-        tokensByModelMap.set(e.message.model, addBreakdown(prev, b));
-      }
-    }
-
-    for (const b of e.message.content) {
-      // Surface the agent's own narration ("text" blocks) as discrete children
-      // so the chronology can show the full prose, not just tool calls. Same
-      // data the live subagent-tail emits to debug mode — this is the on-disk
-      // equivalent for an after-the-fact stats view.
-      if (b.type === 'text' && typeof b.text === 'string' && b.text.trim()) {
-        phase.children.push({
-          kind: 'agent_text',
-          ts: e.timestamp,
-          text: b.text,
-        });
-        continue;
-      }
-      if (b.type !== 'tool_use' || SKIP_CHILD.has(b.name)) continue;
-      phase.opsCount = (phase.opsCount || 0) + 1;
-
-      const trTs = toolResultTsById.get(b.id) ?? null;
-      const durationMs = trTs ? Math.max(0, msBetween(e.timestamp, trTs)) : 0;
-      const isApprox = !trTs;
-      if (b.name === 'Skill') {
-        phase.children.push({
-          kind: 'skill', skill: b.input?.skill || 'unknown',
-          ts: e.timestamp, durationMs, isApprox,
-        });
-      } else {
-        const child = {
-          kind: 'tool_use',
-          tool: b.name, detail: toolDetail(b.name, b.input),
-          ts: e.timestamp, durationMs, isApprox,
-          agentType: phase.agentType,
-          verdict: b.name === 'SendMessage' ? sendMessageVerdictFromInput(b.input) : null,
-        };
-        // SendMessage carries the full inter-agent payload — stash it on the
-        // child so the renderer can expand it (the `detail` field is truncated
-        // to a one-line preview).
-        if (b.name === 'SendMessage') {
-          const raw = b.input?.message ?? b.input?.content ?? null;
-          if (typeof raw === 'string' && raw.trim()) child.fullContent = raw;
+    // tool_result timestamps for duration computation
+    const toolResultTsById = new Map();
+    for (const e of events) {
+      if (e.type !== 'user' || !Array.isArray(e.message?.content)) continue;
+      for (const c of e.message.content) {
+        if (c.type === 'tool_result' && c.tool_use_id) {
+          toolResultTsById.set(c.tool_use_id, e.timestamp);
         }
-        phase.children.push(child);
-        const tc = toolCounts.get(b.name) || { tool: b.name, count: 0, totalDurationMs: 0 };
-        tc.count++; tc.totalDurationMs += durationMs;
-        toolCounts.set(b.name, tc);
-        allToolCalls.push({
-          phaseId: phase.phaseId, tool: b.name, detail: toolDetail(b.name, b.input),
-          durationMs, isApprox,
-          teamName: phase.teamName ?? null,
-          flaggedSlow: durationMs > 30000,
-          ts: e.timestamp,
-        });
       }
     }
-  }
+
+    for (const e of events) {
+      if (e.type !== 'assistant' || !Array.isArray(e.message?.content)) continue;
+      const u = e.message?.usage;
+      const msgId = e.message?.id;
+      if (u && msgId && !tokensByMessageId.has(msgId)) {
+        tokensByMessageId.add(msgId);
+        // Track the full breakdown (input + cache_creation + output + cache_read)
+        // so the per-phase tooltip can show the same 4-way split as the global
+        // summary. tokensTotal is the legacy sum (cache_read excluded) kept for
+        // back-compat with any code still reading that field.
+        const b = breakdownFromUsage(u);
+        phase.tokensBreakdown = addBreakdown(phase.tokensBreakdown, b);
+        phase.tokensTotal += b.input + b.cacheCreate + b.output;
+        if (e.message.model) {
+          phase.costUsd = (phase.costUsd || 0) + costFromBreakdown(e.message.model, b);
+          const prev = tokensByModelMap.get(e.message.model) || emptyBreakdown();
+          tokensByModelMap.set(e.message.model, addBreakdown(prev, b));
+        }
+      }
+
+      for (const b of e.message.content) {
+        // Surface the agent's own narration ("text" blocks) as discrete children
+        // so the chronology can show the full prose, not just tool calls. Same
+        // data the live subagent-tail emits to debug mode — this is the on-disk
+        // equivalent for an after-the-fact stats view.
+        if (b.type === 'text' && typeof b.text === 'string' && b.text.trim()) {
+          phase.children.push({
+            kind: 'agent_text',
+            ts: e.timestamp,
+            text: b.text,
+          });
+          continue;
+        }
+        if (b.type !== 'tool_use' || SKIP_CHILD.has(b.name)) continue;
+        phase.opsCount = (phase.opsCount || 0) + 1;
+
+        const trTs = toolResultTsById.get(b.id) ?? null;
+        const durationMs = trTs ? Math.max(0, msBetween(e.timestamp, trTs)) : 0;
+        const isApprox = !trTs;
+        if (b.name === 'Skill') {
+          phase.children.push({
+            kind: 'skill', skill: b.input?.skill || 'unknown',
+            ts: e.timestamp, durationMs, isApprox,
+          });
+        } else {
+          const child = {
+            kind: 'tool_use',
+            tool: b.name, detail: toolDetail(b.name, b.input),
+            ts: e.timestamp, durationMs, isApprox,
+            agentType: phase.agentType,
+            verdict: b.name === 'SendMessage' ? sendMessageVerdictFromInput(b.input) : null,
+          };
+          // SendMessage carries the full inter-agent payload — stash it on the
+          // child so the renderer can expand it (the `detail` field is truncated
+          // to a one-line preview).
+          if (b.name === 'SendMessage') {
+            const raw = b.input?.message ?? b.input?.content ?? null;
+            if (typeof raw === 'string' && raw.trim()) child.fullContent = raw;
+          }
+          phase.children.push(child);
+          const tc = toolCounts.get(b.name) || { tool: b.name, count: 0, totalDurationMs: 0 };
+          tc.count++; tc.totalDurationMs += durationMs;
+          toolCounts.set(b.name, tc);
+          allToolCalls.push({
+            phaseId: phase.phaseId, tool: b.name, detail: toolDetail(b.name, b.input),
+            durationMs, isApprox,
+            teamName: phase.teamName ?? null,
+            flaggedSlow: durationMs > 30000,
+            ts: e.timestamp,
+          });
+        }
+      }
+    }
   } // end for (const file of files)
 
   // Materialise the per-model rows used by the cost-badge tooltip.
