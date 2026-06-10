@@ -39,13 +39,21 @@ export async function enrichSubagentChildren(phases, subagentsDir, toolCounts, a
   // entire team session up to that point — sharing the same first-message uuid.
   // Loading every file would replay every tool_use N times. Strategy:
   //
-  // 1. Read each .meta.json + the first JSONL line to get firstUuid + size.
-  // 2. Group files by (agentName, firstUuid) — that identifies one team session
-  //    activation. Keep only the LARGEST file per group (the latest snapshot
-  //    contains every prior event).
-  // 3. Sort the surviving files by mtime ASC, then align them with the phases
-  //    sorted by startTs ASC (same agentName can appear in multiple waves —
-  //    e.g. shared "merger" across two TeamCreate cycles).
+  // 1. Read each .meta.json + the first JSONL event → firstUuid + firstType + size.
+  // 2. Group files by (agentName, firstUuid). Keep only the LARGEST file per
+  //    group (the latest snapshot contains every prior event).
+  // 3. A group whose first event is `type:"system"` is NOT a fresh activation —
+  //    it is a CONTEXT-COMPACTION continuation (the agent overflowed its context
+  //    and resumed in a new conversation, so it gets a new firstUuid). Treat
+  //    those as continuations of the same agent life, not as separate
+  //    activations: a heavy agent that compacts would otherwise produce more
+  //    groups than phases, and the old 1:1 mtime alignment could bind its phase
+  //    to the tiny post-compaction stub and drop the real (largest) transcript —
+  //    making the agent show up empty in the stats UI (observed: developer-
+  //    TASK-005 in session 3d5730d9).
+  // 4. Align real activations 1:1 with phases (both sorted ascending). Merge
+  //    each compaction continuation into the last aligned phase of that agent,
+  //    so its post-compaction tool_uses are counted on the same phase.
   const fileMeta = [];
   for (const entry of dirEntries) {
     if (!entry.endsWith('.meta.json')) continue;
@@ -57,26 +65,28 @@ export async function enrichSubagentChildren(phases, subagentsDir, toolCounts, a
     if (!meta.agentType) continue;
     let st;
     try { st = await stat(jsonlPath); } catch { continue; }
-    const firstUuid = await readFirstUuid(jsonlPath);
+    const { firstUuid, firstType } = await readFirstEvent(jsonlPath);
     if (!firstUuid) continue;
     fileMeta.push({
       path: jsonlPath, agentName: meta.agentType,
-      firstUuid, size: st.size, mtimeMs: st.mtimeMs,
+      firstUuid, firstType, size: st.size, mtimeMs: st.mtimeMs,
     });
   }
 
   // Group by (agentName, firstUuid), pick largest per group.
-  const winnersByName = new Map(); // agentName → [{path, mtimeMs}, …]
   const groups = new Map(); // key=name|firstUuid → best
   for (const f of fileMeta) {
     const k = f.agentName + '|' + f.firstUuid;
     const cur = groups.get(k);
     if (!cur || cur.size < f.size) groups.set(k, f);
   }
+
+  // Split each agent's groups into real activations vs compaction continuations.
+  const byName = new Map(); // agentName → { activations:[], continuations:[] }
   for (const f of groups.values()) {
-    const list = winnersByName.get(f.agentName) || [];
-    list.push(f);
-    winnersByName.set(f.agentName, list);
+    const slot = byName.get(f.agentName) || { activations: [], continuations: [] };
+    (f.firstType === 'system' ? slot.continuations : slot.activations).push(f);
+    byName.set(f.agentName, slot);
   }
 
   const phasesByName = new Map();
@@ -87,31 +97,61 @@ export async function enrichSubagentChildren(phases, subagentsDir, toolCounts, a
   }
 
   for (const [name, phasesForName] of phasesByName) {
-    const winners = (winnersByName.get(name) || []).sort((a, b) => a.mtimeMs - b.mtimeMs);
+    const slot = byName.get(name) || { activations: [], continuations: [] };
+    const activations = [...slot.activations].sort((a, b) => a.mtimeMs - b.mtimeMs);
+    const continuations = [...slot.continuations].sort((a, b) => a.mtimeMs - b.mtimeMs);
     const phasesSorted = [...phasesForName].sort((a, b) => a.startTs.localeCompare(b.startTs));
-    const n = Math.min(winners.length, phasesSorted.length);
-    for (let i = 0; i < n; i++) {
-      await appendSubagentToolUses(winners[i].path, phasesSorted[i], toolCounts, allToolCalls);
+    if (phasesSorted.length === 0) continue;
+
+    // Build the file list each phase should aggregate: its aligned activation,
+    // plus (on the last phase) every compaction continuation for this agent.
+    const phaseFiles = phasesSorted.map(() => []);
+    const n = Math.min(activations.length, phasesSorted.length);
+    for (let i = 0; i < n; i++) phaseFiles[i].push(activations[i]);
+    for (const c of continuations) phaseFiles[phaseFiles.length - 1].push(c);
+
+    for (let i = 0; i < phasesSorted.length; i++) {
+      if (!phaseFiles[i].length) continue;
+      const paths = phaseFiles[i].sort((a, b) => a.mtimeMs - b.mtimeMs).map((f) => f.path);
+      await appendSubagentToolUses(paths, phasesSorted[i], toolCounts, allToolCalls);
     }
   }
 }
 
-async function readFirstUuid(jsonlPath) {
-  // Read just the first line to extract its uuid — used as a stable identity
-  // for "this team-session activation" across cumulative resume snapshots.
+async function readFirstEvent(jsonlPath) {
+  // Read just the first line to extract its uuid (stable identity for "this
+  // activation" across cumulative resume snapshots) and its type (`system` ⇒ a
+  // context-compaction continuation rather than a fresh dispatch).
   try {
     for await (const ev of readJsonl(jsonlPath)) {
-      return ev?.uuid ?? null;
+      return { firstUuid: ev?.uuid ?? null, firstType: ev?.type ?? null };
     }
   } catch { /* empty or unreadable */ }
-  return null;
+  return { firstUuid: null, firstType: null };
 }
 
-async function appendSubagentToolUses(file, phase, toolCounts, allToolCalls) {
-  const events = [];
-  try {
-    for await (const ev of readJsonl(file)) events.push(ev);
-  } catch { return; }
+async function appendSubagentToolUses(files, phase, toolCounts, allToolCalls) {
+  // `files` is the ordered list of transcripts that make up ONE phase: the
+  // activation's largest snapshot, plus any context-compaction continuations.
+  // Reset the phase once, then accumulate across all of them (message ids are
+  // unique per conversation, so cross-file token dedup is automatic).
+  phase.tokensTotal = 0;
+  phase.opsCount = 0;
+  phase.tokensBreakdown = emptyBreakdown();
+  phase.costUsd = 0;
+  const tokensByModelMap = new Map(); // model → breakdown
+  // Per-message dedup for tokens: each tool_use generates two assistant events
+  // sharing the same `message.id` — once we decide to use a tool, then again
+  // after streaming. Sum tokens only from the FIRST occurrence per message id.
+  const tokensByMessageId = new Set();
+  let lastEventTs = null;
+
+  for (const file of files) {
+    const events = [];
+    try {
+      for await (const ev of readJsonl(file)) events.push(ev);
+    } catch { continue; }
+    if (events.length) lastEventTs = events[events.length - 1].timestamp || lastEventTs;
 
   // tool_result timestamps for duration computation
   const toolResultTsById = new Map();
@@ -123,24 +163,6 @@ async function appendSubagentToolUses(file, phase, toolCounts, allToolCalls) {
       }
     }
   }
-
-  // Defensive reset before refilling from the subagent JSONL (the authoritative
-  // source for in_process_teammate phases). task_notification.usage is
-  // currently null for in_process_teammate so phase.tokensTotal / opsCount
-  // arrive at 0 from extractPhases — but if the SDK ever populates those
-  // fields, summing here would double-count. Same for the breakdown.
-  phase.tokensTotal = 0;
-  phase.opsCount = 0;
-  phase.tokensBreakdown = emptyBreakdown();
-  phase.costUsd = 0;
-  const tokensByModelMap = new Map(); // model → breakdown
-
-  // Per-message dedup for tokens: each tool_use generates two assistant events
-  // sharing the same `message.id` — once we decide to use a tool, then again
-  // after streaming. Only the second carries the final usage; both can have
-  // partial usage. Sum tokens only from the FIRST occurrence per message id
-  // to avoid double-count.
-  const tokensByMessageId = new Set();
 
   for (const e of events) {
     if (e.type !== 'assistant' || !Array.isArray(e.message?.content)) continue;
@@ -215,6 +237,7 @@ async function appendSubagentToolUses(file, phase, toolCounts, allToolCalls) {
       }
     }
   }
+  } // end for (const file of files)
 
   // Materialise the per-model rows used by the cost-badge tooltip.
   phase.tokensByModel = [...tokensByModelMap].map(([model, breakdown]) => ({
@@ -222,15 +245,12 @@ async function appendSubagentToolUses(file, phase, toolCounts, allToolCalls) {
   })).sort((a, b) => b.costUsd - a.costUsd);
 
   // If the phase never received a task_notification (endTs still null), derive
-  // timing from the subagent transcript's first/last event timestamps. This is
-  // more accurate than using session-end as a fallback.
-  if (!phase.endTs && events.length > 0) {
-    const lastTs = events[events.length - 1].timestamp;
-    if (lastTs) {
-      phase.endTs = lastTs;
-      phase.durationMs = msBetween(phase.startTs, lastTs);
-      phase.durationApprox = true;
-    }
+  // timing from the last event across all its transcripts (activation +
+  // compaction continuations). More accurate than the session-end fallback.
+  if (!phase.endTs && lastEventTs) {
+    phase.endTs = lastEventTs;
+    phase.durationMs = msBetween(phase.startTs, lastEventTs);
+    phase.durationApprox = true;
   }
 }
 
