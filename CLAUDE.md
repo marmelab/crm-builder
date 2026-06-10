@@ -52,15 +52,16 @@ Team layout (`agent-team` skill): one `TeamCreate` per wave, `3×N + 1` members 
 
 ### Hooks (`claudeConfig/.claude/settings.json`)
 
-- `PreToolUse / Bash|Read|Grep|Glob|SendMessage` → member-idle-gate
+No-team flow: the orchestrator dispatches every agent via the `Agent` tool (no `TeamCreate`/`SendMessage`), so the worktree + dispatch guards live on `PreToolUse / Agent`.
+
 - `PreToolUse / Bash` → silent-mode-check, circuit-breaker, block-bash-file-write, block-bash-validation, block-orchestrator-merge, restrict-documentator-bash
-- `PreToolUse / Write|Edit` → restrict-documentator-write
-- `PreToolUse / SendMessage` → block-premature-shutdowns, validate-before-review (typecheck + prettier + unit + e2e — blocks developer→reviewer/merger on failure)
-- `PreToolUse / TeamDelete` → teamdelete-gate (blocks if members not gracefully shut down)
-- `PostToolUse / TeamDelete` → teamdelete-cleanup
-- `SubagentStart / simple-developer|developer` → setup-worktree
+- `PreToolUse / Write|Edit` → restrict-documentator-write, block-migration-writes
+- `PreToolUse / Agent` → block-merger-without-review, **block-promote-unmerged** (refuses `MODE: promote` while any `<id>/*` task branch has commits not on `session/<id>`), enforce-dev-dispatch, **setup-worktree** (creates the worktree from the dispatch prompt's `WORKTREE_PATH`/`BRANCH_NAME`/`TASK_ID` BEFORE the agent starts — replaces the old `SubagentStart` trigger, which couldn't see the TASK id in no-team mode)
 - `SubagentStop / merger` → cleanup-worktree
-- `SubagentStop / simple-developer` → typecheck, prettier, unit-app, unit-functions, e2e
+- `SubagentStop / quality-reviewer|test-validator` → record-review-verdict
+- `SubagentStop / simple-developer|developer` → typecheck, prettier, unit-app, unit-functions, e2e
+
+> Why `setup-worktree` moved off `SubagentStart`: in agent-team mode (main) a team member's `agent_type` carries its name (`developer-TASK-001`), so the `SubagentStart` hook could grep the TASK id. In no-team mode the `Agent` tool sets `agent_type` to just `developer` (the `name` is not surfaced), and a parallel wave gives no way to tell which dev is starting — so identity is read from the dispatch prompt at `PreToolUse / Agent` instead. Same script, same conventions, different trigger.
 
 ### Worktree scope (critical)
 

@@ -73,17 +73,21 @@ If you cannot resolve the feedback (e.g. test infrastructure broken, missing con
 
 ---
 
-## MANDATORY FIRST ACTION — verify the worktree
+## MANDATORY FIRST ACTION — enter the worktree
 
-The `setup-worktree` hook has already created your worktree and hard-linked
-`node_modules` before you started. Your first action is to confirm it exists:
+Your worktree is created for you **before you start**: the `setup-worktree`
+hook runs on the orchestrator's dispatch (PreToolUse/Agent), forks
+`<WORKTREE_PATH>` from `session/<SESSION_SHORT_ID>`, and hard-links
+`node_modules`. You never create it yourself — that keeps every worktree on the
+same convention. Your first action is simply to enter it:
 
 ```bash
 cd <WORKTREE_PATH> && pwd
 ```
 
-If the directory is missing (hook failure), stop immediately and report
-`FAILED: worktree not found at <WORKTREE_PATH>`.
+Do NOT run `git worktree add` or create branches yourself. If the directory is
+genuinely missing, that is a real infrastructure failure — stop and report
+`FAILED: worktree not found at <WORKTREE_PATH>` (do not improvise a worktree).
 
 Every subsequent Read / Edit / Write / Bash runs inside the worktree, not in
 `/app`. See `.claude/rules/worktree-scope.md`.

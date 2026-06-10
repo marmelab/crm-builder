@@ -76,15 +76,12 @@
                     },
                     {
                         "type": "command",
+                        "command": "/home/developer/.claude/hooks/block-promote-unmerged.sh"
+                    },
+                    {
+                        "type": "command",
                         "command": "/home/developer/.claude/hooks/enforce-dev-dispatch.sh"
-                    }
-                ]
-            }
-        ],
-        "SubagentStart": [
-            {
-                "matcher": "simple-developer|developer",
-                "hooks": [
+                    },
                     {
                         "type": "command",
                         "command": "/home/developer/.claude/hooks/setup-worktree.sh",

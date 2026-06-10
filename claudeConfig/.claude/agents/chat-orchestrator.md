@@ -541,9 +541,9 @@ Agent({
 })
 ```
 
-Substitute the actual ticket id (e.g. `TASK-003`) for `TASK-XXX` in both the `name` and the prompt. **The `name:` field is required**: the `setup-worktree` SubagentStart hook reads the agent name from stdin (`agent_type`) and greps it for `TASK-[0-9]+` to derive the worktree path and branch. Without `name`, `agent_type` is just `developer`, the hook silently exits, and the developer fails on its first `cd` into the missing worktree.
+Substitute the actual ticket id (e.g. `TASK-003`) for `TASK-XXX` in both the `name` and the prompt. **The `WORKTREE_PATH` and `BRANCH_NAME` lines are required and must follow the template verbatim**: the `setup-worktree` hook runs on THIS dispatch (PreToolUse/Agent), reads `WORKTREE_PATH`/`BRANCH_NAME`/`TASK_ID` from the prompt, and creates the worktree (forked from `session/<SESSION_SHORT_ID>`, node_modules hard-linked) before the developer starts. `enforce-dev-dispatch` blocks the dispatch if `WORKTREE_PATH` is missing or if you add `isolation: "worktree"`. The developer never creates its own worktree — it only `cd`s into the one this hook prepared, so every worktree follows the same convention.
 
-The same naming convention (`<subagent_type>-<TASK_ID>`) is used for every subsequent dispatch in this state (reviewers, merger) — both to keep the hook contract working and to make background-agent activity easy to read in logs.
+The `name:` field (`<subagent_type>-<TASK_ID>`) is used for every dispatch in this state (developers, reviewers, merger) to make background-agent activity easy to read in logs. Keep it consistent.
 
 After the N developer dispatches, emit one short user-facing status line (in the user's language), e.g. *"Working on it..."*, and end the turn.
 
@@ -603,7 +603,14 @@ When every ticket of the wave is in a terminal state:
 
 1. Decide whether more waves remain (planner output may have other waves with `dependencies: [TASK-XXX]`).
 2. If more waves remain → in the SAME assistant message: emit a short business-language summary of this wave's per-ticket outcomes, then immediately re-enter Step 1 with the next wave's tickets (dispatch all N developers of wave N+1 with `run_in_background: true`, then end the turn). The mental state map carries forward — finished tickets stay `DONE`/`FAILED`, new wave tickets initialize at `{stage: "DEV", retries: 0}`.
-3. If this was the last wave, **promote the session branch to main before wrapping up** (both SETUP and COMPLEX). Per-ticket mergers only ran Stage A (each task → `session/<SESSION_SHORT_ID>`); nothing has reached `main` yet.
+3. If this was the last wave, **reconcile against disk before promoting** — your mental state can drift across many background turns, and a ticket that finished early can be lost between its developer's `DONE` and the REVIEW→MERGE transition. Run this read-only check (allowed — not a merge-class command):
+   ```
+   Bash("for b in $(git -C /app for-each-ref --format='%(refname:short)' refs/heads/<SESSION_SHORT_ID>); do n=$(git -C /app rev-list --count session/<SESSION_SHORT_ID>..$b 2>/dev/null); [ \"${n:-0}\" -gt 0 ] && echo \"$b: $n unmerged\"; done")
+   ```
+   - **Non-empty output** → one or more tickets were developed but never merged into `session/<SESSION_SHORT_ID>`. For each listed branch, resume that ticket's normal transitions: if it has no recorded reviews, dispatch its `quality-reviewer` + `test-validator`; once both `APPROVED`, dispatch its per-ticket `merger`. Do NOT promote yet — re-run this check on the next turn and only continue once it returns empty. (The `block-promote-unmerged` hook enforces this deterministically: a promotion dispatch is refused while the list is non-empty.)
+   - **Empty output** → every developed ticket is on the session branch; proceed to promotion below.
+
+   Then **promote the session branch to main before wrapping up** (both SETUP and COMPLEX). Per-ticket mergers only ran Stage A (each task → `session/<SESSION_SHORT_ID>`); nothing has reached `main` yet.
    - If at least one ticket reached `DONE` (i.e. merged into the session branch): dispatch the promotion merger (background) and end the turn — its completion is handled in Step 4:
      ```
      Agent({
