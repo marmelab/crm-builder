@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { LOG_DIR, claudeProjectDir, claudeSessionDir } from './config.js';
 import { broadcast, sendStats } from './ws-bus.js';
 import { runtimes, transitionState, noteRateLimit } from './runtime.js';
-import { spawnClaude, extractText, extractToolUses, friendlyError } from './claude-spawn.js';
+import { spawnClaude, extractText, extractToolUses, friendlyError, buildRecoveryPrompt } from './claude-spawn.js';
 import { endsWithQuestion } from './session-store.js';
 import { decideNextState, turnFailedFrom } from './turn-state.js';
 import { startSubagentTailer, stopSubagentTailer } from './subagent-tail.js';
@@ -13,7 +13,7 @@ import {
 } from '../stats/io.js';
 import { updateProgressBar, predictedFlowExpected, flowExpectedForTickets } from './progress-bar.ts';
 import {
-  sessionHasMergedTickets, scheduleDocumentatorRun, clearDocumentatorTimer,
+  sessionHasMergedTickets, sessionHasPendingTickets, scheduleDocumentatorRun, clearDocumentatorTimer,
 } from './documentator-spawn.js';
 import { loadTicketsAndWaves } from '../stats/tickets.js';
 
@@ -48,6 +48,47 @@ function emitDispatchPromptEvent(runtime, tool) {
   });
 }
 
+// --- Teardown-stall watcher -------------------------------------------------
+// A COMPLEX wave tears its team down with shutdown_request → shutdown_approved →
+// TeamDelete. A member that already finished and went idle may never wake to ack
+// its shutdown; the lead then waits passively for that ack, the inactivity
+// watchdog kills the spawn, and the next wave is never dispatched (the run dies
+// with tickets still pending — observed in session 3d5730d9). This watcher
+// re-spawns the orchestrator (recovery, like a manual resume) so it rebuilds
+// from disk and finishes. It fires ONLY for a stalled teardown — never during a
+// normal mid-wave idle (the lead waiting on live members), because that case is
+// neither idle-killed (subagents keep the stream alive) nor has shutdown begun.
+const AUTO_WAKE_DELAY_MS = 8_000;
+// Consecutive auto-wakes per session before giving up (reset by any real user
+// message). A backstop against an unrecoverable stall looping forever.
+const MAX_AUTO_WAKE = 5;
+const autoWakeTimers = new Map();
+
+export function clearAutoWakeTimer(sessionId) {
+  const t = autoWakeTimers.get(sessionId);
+  if (t) { clearTimeout(t); autoWakeTimers.delete(sessionId); }
+}
+
+function scheduleAutoWake(sessionId, runtimes) {
+  clearAutoWakeTimer(sessionId);
+  const t = setTimeout(() => {
+    autoWakeTimers.delete(sessionId);
+    const current = runtimes.get(sessionId);
+    if (!current || current.busy) return;
+    current.busy = true;
+    // Recovery (freshSession): the killed spawn's in-process team is gone, so a
+    // plain --resume would re-inject a dead "team is alive" belief. STATE
+    // RECOVERY instead reads the tickets from disk and re-dispatches the
+    // non-merged ones, recreating the team.
+    const nudge = buildRecoveryPrompt(
+      'A team teardown stalled on a member that never acknowledged shutdown and the run was killed mid-wave. Continue: finish any unfinished tickets and complete the request.',
+    );
+    processMessage(current, nudge, { auto: true, freshSession: true })
+      .catch(() => { current.busy = false; });
+  }, AUTO_WAKE_DELAY_MS);
+  autoWakeTimers.set(sessionId, t);
+}
+
 export async function processMessage(runtime, prompt, opts = {}) {
   if (!runtime) return;
 
@@ -56,6 +97,14 @@ export async function processMessage(runtime, prompt, opts = {}) {
   // runtime release/recreate between turns. We'll re-arm it when this turn
   // completes.
   if (runtime.session?.id) clearDocumentatorTimer(runtime.session.id);
+
+  // A real user message (not an auto-wake) means a human is steering again:
+  // cancel any pending auto-wake and reset its consecutive-attempt counter so a
+  // later genuine stall gets the full budget again.
+  if (!opts.auto && runtime.session?.id) {
+    clearAutoWakeTimer(runtime.session.id);
+    runtime.autoWakeCount = 0;
+  }
 
   // Reset per-turn agent step counters so the progress bar reflects only
   // work initiated by *this* prompt. Send the initial 0/1 (orchestrator
@@ -101,6 +150,12 @@ export async function processMessage(runtime, prompt, opts = {}) {
   // `stderrBuf` accumulates the spawn's stderr.
   let sawResult = false;
   let stderrBuf = '';
+  // Teardown-stall watcher state (see the post-close block). `shutdownRequestsSent`
+  // counts shutdown_request messages the lead emitted this turn; `idleKilled` is
+  // set by the inactivity watchdog. Together they identify a teardown that hung
+  // waiting for a member ack that never came (the agent-team deadlock).
+  let shutdownRequestsSent = 0;
+  let idleKilled = false;
   try {
     // A `--resume` whose target conversation no longer exists (e.g. the container
     // was recreated, wiping ~/.claude/projects) makes claude exit instantly with
@@ -114,6 +169,8 @@ export async function processMessage(runtime, prompt, opts = {}) {
       satisfactionAskSent = false;
       toolMap.clear();
       stderrBuf = '';
+      shutdownRequestsSent = 0;
+      idleKilled = false;
       // Per-attempt, not just pre-loop: a limit the subagent tailer flagged
       // during attempt 0 must not leak into attempt 1's outcome (it would fold
       // into `rateLimit` below and wrongly settle a clean retry as rate_limited).
@@ -150,6 +207,10 @@ export async function processMessage(runtime, prompt, opts = {}) {
       const idleTimer = setInterval(() => {
         if (Date.now() - runtime.lastStreamActivityMs < IDLE_KILL_MS) return;
         console.error(`[claude] no activity for ${IDLE_KILL_MS}ms — killing spawn`);
+        // Record that THIS close is an inactivity kill (not a clean exit). The
+        // post-close watcher uses it, together with shutdownRequestsSent, to tell
+        // a genuinely-stuck teardown from a normal finish.
+        idleKilled = true;
         try { proc.kill('SIGTERM'); } catch {}
         setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 5_000);
       }, 5_000);
@@ -210,6 +271,16 @@ export async function processMessage(runtime, prompt, opts = {}) {
           const alreadySeen = toolMap.has(tool.id);
           toolMap.set(tool.id, tool);
           if (alreadySeen) continue;
+          // Teardown-stall watcher: note each shutdown_request the lead sends to a
+          // team member. A teardown that later hangs (a member that already went
+          // idle never acks) is the agent-team deadlock the post-close block
+          // recovers from.
+          if (tool.name === 'SendMessage') {
+            const m = tool.input?.message;
+            const isShutdown = (m && typeof m === 'object' && m.type === 'shutdown_request')
+              || (typeof m === 'string' && m.includes('shutdown_request'));
+            if (isShutdown) shutdownRequestsSent += 1;
+          }
           // Count orchestrator Agent/Task dispatches eagerly (the tool_use
           // event lands before the runtime fires task_started), so the bar
           // shows "1/3" right away for SIMPLE instead of growing 1/2 → 2/3.
@@ -475,24 +546,50 @@ export async function processMessage(runtime, prompt, opts = {}) {
       const turnFailed = turnFailedFrom({ resultError, stderr: stderrBuf, sawResult, exitCode });
       const turnErrored = turnFailed || !receivedText || !!rateLimit;
       const asksQuestion = !wasStopped && !turnErrored && endsWithQuestion(lastAssistantText);
-      const nextState = decideNextState({ wasStopped, rateLimit: !!rateLimit, turnFailed, asksQuestion });
+      let nextState = decideNextState({ wasStopped, rateLimit: !!rateLimit, turnFailed, asksQuestion });
+      const sessionId = runtime.session?.id;
+      const sessionDir = sessionId ? `${LOG_DIR}/${sessionId}` : null;
+      // Teardown-stall watcher (see scheduleAutoWake). If the inactivity watchdog
+      // killed the spawn (idleKilled) AFTER a teardown began (shutdownRequestsSent
+      // > 0) and tickets are still unfinished, the wave deadlocked on a member
+      // that never acked its shutdown. Auto-resume the orchestrator (recovery) so
+      // it rebuilds from disk and finishes, instead of settling 'completed' —
+      // which would hide the unfinished work and clear the progress bar. Bounded
+      // by MAX_AUTO_WAKE; on give-up settle the resumable 'error' so the bar
+      // persists and a manual Resume can still finish it. This never fires on a
+      // normal mid-wave idle: that is neither idle-killed (live subagents keep the
+      // stream busy) nor has any shutdown_request been sent.
+      let autoWaking = false;
+      if (nextState === 'completed' && !turnErrored && idleKilled && shutdownRequestsSent > 0
+          && sessionDir && await sessionHasPendingTickets(sessionDir)) {
+        runtime.autoWakeCount = (runtime.autoWakeCount || 0) + 1;
+        if (runtime.autoWakeCount <= MAX_AUTO_WAKE) {
+          console.error(`[watcher] stalled teardown — auto-wake ${runtime.autoWakeCount}/${MAX_AUTO_WAKE}`);
+          nextState = 'in_progress';
+          autoWaking = true;
+        } else {
+          console.error('[watcher] auto-wake budget exhausted — settling error');
+          nextState = 'error';
+        }
+      }
       await transitionState(runtime, nextState);
-      // Schedule the documentator (Mode 2) once the turn lands on 'completed'
-      // and at least one ticket has been merged in this session. Debounced so
-      // a follow-up user message within DOCUMENTATOR_DEBOUNCE_MS cancels it
-      // (processMessage clears the timer at the top of the next turn). Timer
-      // state is keyed on sessionId in documentator-spawn.js so it survives
-      // runtime release between turns.
-      if (nextState === 'completed' && !turnErrored) {
-        const sessionId = runtime.session?.id;
-        const sessionDir = sessionId ? `${LOG_DIR}/${sessionId}` : null;
+      if (autoWaking) {
+        scheduleAutoWake(sessionId, runtimes);
+      } else if (nextState === 'completed' && !turnErrored) {
+        // Schedule the documentator (Mode 2) once the turn lands on 'completed'
+        // and at least one ticket has been merged in this session. Debounced so
+        // a follow-up user message within DOCUMENTATOR_DEBOUNCE_MS cancels it
+        // (processMessage clears the timer at the top of the next turn). Timer
+        // state is keyed on sessionId in documentator-spawn.js so it survives
+        // runtime release between turns.
         if (sessionDir && await sessionHasMergedTickets(sessionDir)) {
           scheduleDocumentatorRun(sessionId, runtimes);
         }
       }
-      // If no client is currently viewing this session, release the runtime
-      // now that the turn is done. A later reconnect will re-open it.
-      if (runtime.clients.size === 0) {
+      // If no client is currently viewing this session, release the runtime now
+      // that the turn is done — UNLESS an auto-wake is pending, in which case the
+      // runtime must stay so the scheduled resume can find it.
+      if (!autoWaking && runtime.clients.size === 0) {
         runtime.session?.close();
         runtimes.delete(runtime.session.id);
       }

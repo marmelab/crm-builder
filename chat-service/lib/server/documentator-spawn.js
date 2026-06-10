@@ -65,6 +65,28 @@ export async function sessionHasMergedTickets(sessionDir) {
   return false;
 }
 
+// True if the session has at least one ticket that is NOT in a terminal state
+// (merged/failed) — i.e. a COMPLEX wave that did not finish. Used by the
+// teardown-stall watcher to decide whether an idle-killed spawn left real work
+// undone (worth an auto-resume) vs a genuinely complete run.
+export async function sessionHasPendingTickets(sessionDir) {
+  let entries;
+  try {
+    entries = await readdir(sessionDir);
+  } catch {
+    return false;
+  }
+  const TERMINAL = new Set(['merged', 'failed']);
+  for (const entry of entries) {
+    if (!/^TASK-\d+\.json$/i.test(entry)) continue;
+    try {
+      const ticket = JSON.parse(await readFile(join(sessionDir, entry), 'utf8'));
+      if (!TERMINAL.has(ticket?.status)) return true;
+    } catch {}
+  }
+  return false;
+}
+
 // Spawns the documentator as an isolated `claude -p` call (no --resume).
 // Mode 2: reads the session log + git diff vs origin/main and appends
 // business-knowledge bullets to /app/MEMORY.md. Silent: output is captured to
