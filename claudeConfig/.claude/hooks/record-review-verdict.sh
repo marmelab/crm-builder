@@ -121,6 +121,8 @@ try {
       } else if (typeof content === "string" && content.trim()) {
         lastText = content;
       }
+      // Prefer TICKET_FILE path (spawn prompt) over any other TASK mention.
+      if (!task) { const m = ln.match(/TICKET_FILE[=\s]+\S*(TASK-\d+)/i); if (m) task = m[1]; }
       if (!task) { const m = ln.match(/TASK-\d+/); if (m) task = m[0]; }
     }
     const tail = (lastText.trim().split("\n").map((s) => s.trim()).filter(Boolean).pop() || "");
