@@ -19,14 +19,12 @@ const SKIP_CHILD = new Set();
 export async function enrichSubagentChildren(phases, subagentsDir, toolCounts, allToolCalls) {
   const baseDir = subagentsDir;
 
-  // Target COMPLEX team members (in_process_teammate) AND background local_agents
-  // (run_in_background: true). Sync local_agents (planner) have their messages in
-  // the main stream via parent_tool_use_id and are handled by accumulatePerPhaseTokens
-  // — loading their JSONL here would double-count.
-  const targets = phases.filter((p) =>
-    p.kind === 'agent' && p.agentName &&
-    (p.taskType === 'in_process_teammate' || p.isBackground)
-  );
+  // Target all agent phases. With PtySession/TranscriptWatcher the main stream
+  // is the orchestrator's own JSONL only — subagent messages no longer appear
+  // there with parent_tool_use_id, so every agent phase (in_process_teammate,
+  // isBackground, and sync local_agent alike) must be enriched from its own
+  // JSONL file.
+  const targets = phases.filter((p) => p.kind === 'agent' && p.agentName);
   if (targets.length === 0) return;
 
   let dirEntries;
@@ -132,14 +130,17 @@ async function appendSubagentToolUses(file, phase, toolCounts, allToolCalls) {
   }
 
   // Defensive reset before refilling from the subagent JSONL (the authoritative
-  // source for in_process_teammate phases). task_notification.usage is
-  // currently null for in_process_teammate so phase.tokensTotal / opsCount
-  // arrive at 0 from extractPhases — but if the SDK ever populates those
-  // fields, summing here would double-count. Same for the breakdown.
+  // source for agent phases). task_notification.usage is currently null for
+  // in_process_teammate so phase.tokensTotal / opsCount arrive at 0 from
+  // extractPhases — but if the SDK ever populates those fields, summing here
+  // would double-count. Same for the breakdown.
+  // Also clear children so replaying this file a second time doesn't duplicate
+  // tool_use / agent_text entries (double-count guard for PtySession re-reads).
   phase.tokensTotal = 0;
   phase.opsCount = 0;
   phase.tokensBreakdown = emptyBreakdown();
   phase.costUsd = 0;
+  phase.children = [];
   const tokensByModelMap = new Map(); // model → breakdown
 
   // Per-message dedup for tokens: each tool_use generates two assistant events
