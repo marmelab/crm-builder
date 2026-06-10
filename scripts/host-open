@@ -1,0 +1,4 @@
+#!/bin/sh
+# $BROWSER relay for `make claude`: the container has no display, so hand the
+# OAuth URL ($1) to the host watcher via the bind-mounted logs dir.
+printf '%s\n' "$1" > /chat-service/logs/.oauth-url

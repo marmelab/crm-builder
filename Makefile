@@ -95,7 +95,20 @@ shell: ## Open a shell inside the running container (pass INSTANCE=<name> to tar
 
 claude: ## Open Claude inside the running container (pass INSTANCE=<name>; also triggers OAuth on first run)
 	@$(RESOLVE_CONTAINER); \
-	docker exec -it -u developer -e HOME=/home/developer -w /app $$c claude --dangerously-skip-permissions
+	signal="sessions/.oauth-url"; rm -f "$$signal"; \
+	docker cp scripts/host-open $$c:/usr/local/bin/host-open >/dev/null; \
+	( while :; do \
+	    if [ -s "$$signal" ]; then \
+	      url=$$(cat "$$signal"); \
+	      printf '\n-> Opening the sign-in page in your browser...\n'; \
+	      { xdg-open "$$url" || open "$$url"; } >/dev/null 2>&1 || true; \
+	      break; \
+	    fi; \
+	    sleep 1; \
+	  done ) & \
+	watcher=$$!; \
+	trap 'kill $$watcher 2>/dev/null; rm -f "$$signal"' EXIT INT TERM HUP; \
+	docker exec -it -u developer -e HOME=/home/developer -e BROWSER=/usr/local/bin/host-open -w /app $$c claude --dangerously-skip-permissions
 
 test: ## Run all tests
 	$(MAKE) test-unit test-smoke
