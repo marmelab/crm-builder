@@ -315,7 +315,17 @@ function paintTerminalStatus(ok, durationMs, exitCode) {
   // (manualAuthUrl) — an undeterminable worker URL or a failed PATCH. A clean
   // auto-bind, a Supabase-only deploy, or a failed deploy all keep it hidden.
   renderCallbackWarning(ok && state.manualAuthUrl);
+  renderLiveUrl(ok && !!state.callbackUrl);
   elements.progressClose.disabled = false;
+}
+
+// Populate (or hide) the success callout with the live site URL.
+function renderLiveUrl(show) {
+  if (!elements.progressSuccess) return;
+  elements.progressSuccess.hidden = !show;
+  if (!show) return;
+  elements.liveUrl.textContent = state.callbackUrl;
+  elements.liveUrl.href = state.callbackUrl;
 }
 
 // Populate (or hide) the manual-fallback callout. When the backend handed us the
@@ -348,6 +358,7 @@ async function triggerDeploy() {
   elements.progressStatus.textContent = 'Deploying…';
   elements.progressStatus.className = 'deploy-progress-status';
   if (elements.progressWarning) elements.progressWarning.hidden = true;
+  if (elements.progressSuccess) elements.progressSuccess.hidden = true;
   elements.progressClose.disabled = true;
   if (elements.title) elements.title.textContent = 'Deploying';
   showView('progress');
@@ -382,6 +393,7 @@ function onDeployStarted(msg) {
     elements.progressStatus.textContent = 'Deploying…';
     elements.progressStatus.className = 'deploy-progress-status';
     if (elements.progressWarning) elements.progressWarning.hidden = true;
+    if (elements.progressSuccess) elements.progressSuccess.hidden = true;
     elements.progressClose.disabled = true;
     if (elements.title) elements.title.textContent = 'Deploying';
     showView('progress');
@@ -428,6 +440,9 @@ export function initDeploy() {
   elements.callbackUrl = elements.modal.querySelector('.deploy-callback-url');
   elements.callbackCopy = elements.modal.querySelector('.deploy-callback-copy');
   elements.authLink = elements.modal.querySelector('.deploy-auth-link');
+  elements.progressSuccess = elements.modal.querySelector('.deploy-progress-success');
+  elements.liveUrl = elements.modal.querySelector('.deploy-live-url');
+  elements.liveCopy = elements.modal.querySelector('.deploy-live-copy');
   elements.progressClose = elements.modal.querySelector('.deploy-progress-close');
   elements.modalClose = elements.modal.querySelector('.deploy-modal-close');
   elements.tabs = [...elements.modal.querySelectorAll('.deploy-tab')];
@@ -457,6 +472,31 @@ export function initDeploy() {
       }
     });
   }
+
+  // Copy the live site URL to the clipboard, with transient "Copied!" feedback.
+  // Mirrors the callback-URL copy handler above (same clipboard + selection fallback).
+  if (elements.liveCopy) {
+    elements.liveCopy.addEventListener('click', async () => {
+      const url = state.callbackUrl;
+      if (!url) return;
+      try {
+        await navigator.clipboard.writeText(url);
+        elements.liveCopy.textContent = 'Copied!';
+        elements.liveCopy.classList.add('copied');
+        setTimeout(() => {
+          elements.liveCopy.textContent = 'Copy';
+          elements.liveCopy.classList.remove('copied');
+        }, 1500);
+      } catch {
+        const range = document.createRange();
+        range.selectNodeContents(elements.liveUrl);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
+    });
+  }
+
   elements.chips = {
     supabase: elements.modal.querySelector('[data-deploy-chip="supabase"]'),
     cloudflare: elements.modal.querySelector('[data-deploy-chip="cloudflare"]'),

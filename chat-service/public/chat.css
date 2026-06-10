@@ -1386,6 +1386,32 @@ details.child-row[open] > summary .child-detail {
 .deploy-callback-copy { flex: 0 0 auto; padding: 3px 10px; font-size: 11px; }
 .deploy-callback-copy.copied { color: #34d399; }
 
+/* Success callout: the live site URL shown when a deploy completes cleanly.
+   Same shape as .deploy-warning, recoloured green (the .deploy-ok accent). */
+.deploy-success {
+  display: flex; gap: 8px;
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  background: rgba(74, 222, 128, .10);
+  border: 1px solid rgba(74, 222, 128, .35);
+  border-radius: 8px;
+  font-size: 13px; line-height: 1.5; color: #d1d1d6;
+}
+.deploy-success[hidden] { display: none; }
+.deploy-success-icon { flex-shrink: 0; }
+.deploy-success-body { display: flex; flex-direction: column; min-width: 0; }
+.deploy-success-body p { margin: 0; }
+.deploy-success-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.deploy-live-url {
+  flex: 1 1 auto; min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px; word-break: break-all;
+  color: #60a5fa; text-decoration: none;
+}
+.deploy-live-url:hover { text-decoration: underline; }
+.deploy-live-copy { flex: 0 0 auto; padding: 3px 10px; font-size: 11px; }
+.deploy-live-copy.copied { color: #34d399; }
+
 .deploy-form-errors {
   background: rgba(244, 63, 94, .12);
   border: 1px solid rgba(244, 63, 94, .35);
