@@ -148,6 +148,13 @@ export async function processMessage(runtime, prompt, opts = {}) {
     let bgLastText = '';
 
     const bgHandler = (event) => {
+      if (event.type === 'background_result') {
+        // A background agent completed. Schedule (or re-schedule) an
+        // auto-continue so the wave driver picks it up — even if the
+        // session previously stalled waiting for this very agent.
+        const bgSessionId = runtime.session?.id;
+        if (bgSessionId && !runtime.busy) scheduleAutoContinue(bgSessionId, runtimes);
+      }
       if (runtime.busy) return;
       const text = extractText(event);
       if (text) {

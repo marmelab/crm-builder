@@ -32,7 +32,9 @@ export const MAX_AUTO_CONTINUE = 40;
 // Stop auto-continuing if this many consecutive resumes leave the set of
 // pending tickets byte-for-byte unchanged — i.e. resuming is no longer making
 // progress (genuinely stuck), so further spawns would just burn tokens.
-export const MAX_NO_PROGRESS = 3;
+// Set high enough to outlast a slow developer agent (each cycle ≈ 30–60 s
+// orchestrator RTT + 8 s delay, so 10 ≈ 6–10 min of patience before stalling).
+export const MAX_NO_PROGRESS = 10;
 
 const TERMINAL_STATUSES = new Set(['merged', 'failed']);
 
