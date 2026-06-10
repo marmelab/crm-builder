@@ -19,6 +19,25 @@ import { loadTicketsAndWaves } from '../stats/tickets.js';
 
 const AGENT_DISPATCH_TOOLS = new Set(['Agent', 'Task']);
 
+// Best-effort parse of the reset time the CLI embeds in a rate-limit message
+// ("...resets 5pm (UTC)" / "...resets 6:10pm (UTC)") into a unix-seconds
+// timestamp for the UI countdown. Assumes the stated hour is UTC and picks the
+// next occurrence. Returns null when no time is found — the message text still
+// tells the user when it resets, and resume just isn't gated on a countdown.
+function parseResetsAtFromText(text) {
+  const m = /resets?\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b.*?\butc\b/i.exec(text || '');
+  if (!m) return null;
+  let h = parseInt(m[1], 10);
+  const min = m[2] ? parseInt(m[2], 10) : 0;
+  const ap = (m[3] || '').toLowerCase();
+  if (ap === 'pm' && h < 12) h += 12;
+  if (ap === 'am' && h === 12) h = 0;
+  const now = new Date();
+  const reset = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), h, min, 0, 0));
+  if (reset.getTime() <= now.getTime()) reset.setUTCDate(reset.getUTCDate() + 1);
+  return Math.floor(reset.getTime() / 1000);
+}
+
 function emitDispatchPromptEvent(runtime, tool) {
   const target = tool.input.name || tool.input.subagent_type;
   broadcast(runtime, {
@@ -218,6 +237,20 @@ export async function processMessage(runtime, prompt, opts = {}) {
           // turn ends. (Subagent-triggered limits take the same path from the
           // subagent tailer, surfacing via runtime.pendingRateLimit below.)
           rateLimit = event.rate_limit_info;
+          noteRateLimit(runtime, rateLimit);
+        }
+
+        // A token/session rate limit can also surface as a SYNTHETIC assistant
+        // message (top-level `error: "rate_limit"`, `apiErrorStatus: 429`) rather
+        // than a rate_limit_event — newer CLI behaviour. The old detection only
+        // caught rate_limit_event, so this form fell through to a generic
+        // 'error' instead of 'rate_limited' (no countdown, wrong message). Reuse
+        // the CLI's own user-facing text ("You've hit your session limit ·
+        // resets <time>"), derive a reset timestamp from it when possible, mark
+        // the limit and kill the spawn so the turn settles on 'rate_limited'.
+        if (!rateLimit && event.type === 'assistant' && event.error === 'rate_limit') {
+          const txt = event.message?.content?.find?.((b) => b?.type === 'text')?.text || '';
+          rateLimit = { resetsAt: parseResetsAtFromText(txt), message: txt || null };
           noteRateLimit(runtime, rateLimit);
         }
 
