@@ -54,14 +54,16 @@ RUN npm install -g typescript-language-server typescript
 # ── Wrangler (Cloudflare Workers deploy — used by the frontend deploy phase) ──
 RUN npm install -g wrangler@${WRANGLER_VERSION}
 
-# ── Download project (zip from main branch) ──────────────────
+# ── Download project (zip from main branch or SHA) ────────────
 # GitHub automatically generates a zip for any branch at:
 # /archive/refs/heads/BRANCH_NAME.zip
 # The zip extracts into a folder named atomic-crm-main/
-RUN wget -q https://github.com/marmelab/atomic-crm/archive/refs/heads/main.zip \
+ARG ATOMIC_CRM_REF=95948381e3074f3bdb0ed388a58335c14ac74d26
+ARG ATOMIC_CRM_DIR=atomic-crm-95948381e3074f3bdb0ed388a58335c14ac74d26
+RUN wget -q "https://github.com/marmelab/atomic-crm/archive/${ATOMIC_CRM_REF}.zip" \
     -O /tmp/atomic-crm.zip \
     && unzip -q /tmp/atomic-crm.zip -d /tmp \
-    && mv /tmp/atomic-crm-main ${APP_DIR} \
+    && mv /tmp/${ATOMIC_CRM_DIR} ${APP_DIR} \
     && rm /tmp/atomic-crm.zip
 
 WORKDIR ${APP_DIR}
