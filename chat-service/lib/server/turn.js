@@ -17,12 +17,23 @@ import {
   sessionHasMergedTickets, scheduleDocumentatorRun, clearDocumentatorTimer,
 } from './documentator-spawn.js';
 import {
-  decideAutoContinue, readTicketStatuses,
-  AUTO_CONTINUE_DELAY_MS, AUTO_CONTINUE_NUDGE,
+  readTicketStatuses, AUTO_CONTINUE_NUDGE,
 } from './auto-continue.js';
 import { loadTicketsAndWaves } from '../stats/tickets.js';
 
 const AGENT_DISPATCH_TOOLS = new Set(['Agent', 'Task']);
+
+// ── Background-turn driver tuning ───────────────────────────────────────────
+// While the session is idle with pending tickets, a heartbeat nudges the PTY so
+// the runtime delivers pending background-agent completions → the orchestrator
+// runs its Step 2 background turn → Stop hook → `background_result`. This is the
+// primary wave driver (chat-orchestrator.md is built for event-driven background
+// turns). The heavyweight AUTO_CONTINUE resume is only a stall escalation.
+const HEARTBEAT_MS = 6_000;
+// Consecutive heartbeat ticks with an unchanged pending-ticket set before each
+// escalation. ~6 s/tick: 30 ticks ≈ 3 min (one slow developer), 60 ≈ 6 min.
+const HEARTBEAT_STALL_TICKS = 30;   // → one heavyweight AUTO_CONTINUE resume
+const HEARTBEAT_GIVEUP_TICKS = 60;  // → surface stall message, settle on error
 
 function parseResetsAtFromText(text) {
   const m = /resets?\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b.*?\butc\b/i.exec(text || '');
@@ -38,24 +49,123 @@ function parseResetsAtFromText(text) {
   return Math.floor(reset.getTime() / 1000);
 }
 
-const autoContinueTimers = new Map();
+// ── Background-turn driver ───────────────────────────────────────────────────
+// Per-session heartbeat timers + state, keyed by session id.
+const bgDrivers = new Map();
 
-function clearAutoContinueTimer(sessionId) {
-  const t = autoContinueTimers.get(sessionId);
-  if (t) { clearTimeout(t); autoContinueTimers.delete(sessionId); }
+function clearBgDriver(sessionId) {
+  const d = bgDrivers.get(sessionId);
+  if (d) { clearInterval(d.timer); bgDrivers.delete(sessionId); }
 }
 
-function scheduleAutoContinue(sessionId, runtimes) {
-  clearAutoContinueTimer(sessionId);
-  const t = setTimeout(() => {
-    autoContinueTimers.delete(sessionId);
+// Start (or restart) the heartbeat that nudges the idle PTY so background turns
+// fire. Reads ticket statuses each tick: all terminal → finish; otherwise nudge
+// and track no-progress for stall escalation.
+function startBgDriver(runtime, runtimes) {
+  const sessionId = runtime.session?.id;
+  if (!sessionId) return;
+  clearBgDriver(sessionId);
+  const sDir = `${LOG_DIR}/${sessionId}`;
+  const state = { prevSig: null, noProgress: 0, resumed: false, timer: null };
+
+  state.timer = setInterval(async () => {
     const current = runtimes.get(sessionId);
-    if (!current || current.busy) return;
-    current.busy = true;
-    processMessage(current, AUTO_CONTINUE_NUDGE, { auto: true })
-      .catch(() => { current.busy = false; });
-  }, AUTO_CONTINUE_DELAY_MS);
-  autoContinueTimers.set(sessionId, t);
+    // Stop the heartbeat if the runtime is gone, an active turn is running, or
+    // the PTY has died (a fresh PTY's exit handler / next turn re-arms it).
+    if (!current) { clearBgDriver(sessionId); return; }
+    if (current.busy) return;
+    if (!current.ptySession || current.ptySession.closed) { clearBgDriver(sessionId); return; }
+
+    const { total, pendingCount, pendingSig } = await readTicketStatuses(sDir);
+    if (total === 0) { clearBgDriver(sessionId); return; }          // not a COMPLEX wave
+    if (pendingCount === 0) {                                       // wave finished
+      clearBgDriver(sessionId);
+      await transitionState(current, 'completed');
+      if (await sessionHasMergedTickets(sDir)) scheduleDocumentatorRun(sessionId, runtimes);
+      return;
+    }
+
+    if (pendingSig === state.prevSig) state.noProgress += 1;
+    else { state.noProgress = 0; state.resumed = false; state.prevSig = pendingSig; }
+
+    if (state.noProgress >= HEARTBEAT_GIVEUP_TICKS) {
+      // Genuinely stuck — surface the stall once and stop nudging.
+      clearBgDriver(sessionId);
+      const done = Math.max(0, total - pendingCount);
+      const stallText = `I finished ${done} of ${total} planned pieces, but ${pendingCount} ${pendingCount === 1 ? 'is' : 'are'} still unfinished. Say "continue" and I'll pick the rest back up.`;
+      broadcast(current, { type: 'message', role: 'assistant', content: stallText, ts: new Date().toISOString() });
+      await current.session?.recordMessage('assistant', stallText).catch(() => {});
+      await transitionState(current, 'error');
+      return;
+    }
+
+    if (state.noProgress >= HEARTBEAT_STALL_TICKS && !state.resumed) {
+      // Nudges alone haven't advanced the wave — escalate once to a heavyweight
+      // resume that re-states the STATE B instructions, then keep nudging.
+      state.resumed = true;
+      current.busy = true;
+      processMessage(current, AUTO_CONTINUE_NUDGE, { auto: true })
+        .catch(() => { current.busy = false; });
+      return;
+    }
+
+    // Normal tick: poke the idle TUI so it delivers pending background-agent
+    // completions and runs its Step 2 background turn.
+    current.ptySession.nudge();
+  }, HEARTBEAT_MS);
+
+  bgDrivers.set(sessionId, { timer: state.timer });
+}
+
+// Shared per-event stats accounting, run identically by the active-turn loop and
+// by the background listener so the progress bar advances during background
+// turns. ctx carries the sessionDir; correlation maps live on the runtime.
+async function processStatsEvent(runtime, event, sessionDir) {
+  let dispatchedThisEvent = false;
+  for (const tool of extractToolUses(event)) {
+    const alreadySeen = runtime.toolMap.has(tool.id);
+    runtime.toolMap.set(tool.id, tool);
+    if (alreadySeen) continue;
+    if (AGENT_DISPATCH_TOOLS.has(tool.name) && tool.input?.subagent_type) {
+      if (runtime.stats.dispatchedSubagentTypes.length === 0) {
+        runtime.stats.flowExpected = predictedFlowExpected(tool.input.subagent_type);
+      }
+      runtime.stats.dispatchedSubagentTypes.push(tool.input.subagent_type);
+      dispatchedThisEvent = true;
+      if (event.parent_tool_use_id == null && tool.input?.prompt) {
+        emitDispatchPromptEvent(runtime, tool);
+      }
+    }
+  }
+  if (dispatchedThisEvent) updateProgressBar(runtime);
+
+  if (event.type === 'system') {
+    const isAgentTaskType =
+      event.task_type === 'local_agent' || event.task_type === 'in_process_teammate';
+    if (event.subtype === 'task_started' && isAgentTaskType && event.task_id) {
+      runtime.stats.activeAgentIds.add(event.task_id);
+      runtime.stats.activeAgents = runtime.stats.activeAgentIds.size;
+      const role = runtime.toolMap.get(event.tool_use_id)?.input?.subagent_type;
+      if (role) runtime.taskRole.set(event.task_id, role);
+      sendStats(runtime);
+    } else if (event.subtype === 'task_notification' && event.status === 'completed' && event.task_id && runtime.stats.activeAgentIds.has(event.task_id)) {
+      runtime.stats.activeAgentIds.delete(event.task_id);
+      runtime.stats.activeAgents = runtime.stats.activeAgentIds.size;
+      runtime.stats.agentsCompleted++;
+      const doneRole = runtime.taskRole.get(event.task_id);
+      if (doneRole) runtime.stats.completedByRole[doneRole] = (runtime.stats.completedByRole[doneRole] || 0) + 1;
+      if (runtime.stats.agentsCompleted === 1
+          && runtime.stats.dispatchedSubagentTypes[0] === 'planner') {
+        const result = await loadTicketsAndWaves(sessionDir);
+        if (result && result.tickets.length > 0) {
+          runtime.stats.flowExpected = flowExpectedForTickets(result.tickets.length, result.waves.length);
+          runtime.stats.waveSizes = result.waves.map((w) => w.length);
+        }
+      }
+      sendStats(runtime);
+      updateProgressBar(runtime);
+    }
+  }
 }
 
 function emitDispatchPromptEvent(runtime, tool) {
@@ -99,8 +209,13 @@ export async function processMessage(runtime, prompt, opts = {}) {
 
   if (runtime.session?.id) {
     clearDocumentatorTimer(runtime.session.id);
-    clearAutoContinueTimer(runtime.session.id);
-    if (!isAutoContinue) runtime.autoContinue = { count: 0, noProgress: 0, prevSig: null };
+    clearBgDriver(runtime.session.id);
+    if (!isAutoContinue) {
+      runtime.autoContinue = { count: 0, noProgress: 0, prevSig: null };
+      // Fresh user turn — drop stale dispatch/task correlation from a prior request.
+      runtime.toolMap.clear();
+      runtime.taskRole.clear();
+    }
   }
 
   // Always reset per-turn live state (active agents, animation anchor).
@@ -127,8 +242,6 @@ export async function processMessage(runtime, prompt, opts = {}) {
   broadcast(runtime, { type: 'status', working: true });
   runtime.pendingRateLimit = null;
 
-  const toolMap = new Map();
-  const taskRole = new Map();
   let receivedText = false;
   let rateLimit = null;
   let resultError = false;
@@ -148,14 +261,13 @@ export async function processMessage(runtime, prompt, opts = {}) {
     let bgLastText = '';
 
     const bgHandler = (event) => {
-      if (event.type === 'background_result') {
-        // A background agent completed. Schedule (or re-schedule) an
-        // auto-continue so the wave driver picks it up — even if the
-        // session previously stalled waiting for this very agent.
-        const bgSessionId = runtime.session?.id;
-        if (bgSessionId && !runtime.busy) scheduleAutoContinue(bgSessionId, runtimes);
-      }
+      // While an active turn is running, ptyEventsUntilResult owns the events —
+      // skip here to avoid double-processing.
       if (runtime.busy) return;
+      broadcast(runtime, { type: 'debug_raw', event });
+      // Advance progress/stats from this background turn's events, identical to
+      // the active-turn loop, so the bar keeps moving between user turns.
+      processStatsEvent(runtime, event, sessionDir).catch(() => {});
       const text = extractText(event);
       if (text) {
         const isDuplicate = text.trim() === bgLastText.trim();
@@ -168,6 +280,8 @@ export async function processMessage(runtime, prompt, opts = {}) {
       if (event.type === 'background_result') {
         updateProgressBar(runtime);
         sendStats(runtime);
+        // A background turn just landed — the heartbeat's no-progress counter is
+        // reset naturally on the next tick when the pending-ticket set changes.
       }
     };
     ptyRef.on('event', bgHandler);
@@ -237,23 +351,7 @@ export async function processMessage(runtime, prompt, opts = {}) {
         }
       }
 
-      let dispatchedThisEvent = false;
-      for (const tool of extractToolUses(event)) {
-        const alreadySeen = toolMap.has(tool.id);
-        toolMap.set(tool.id, tool);
-        if (alreadySeen) continue;
-        if (AGENT_DISPATCH_TOOLS.has(tool.name) && tool.input?.subagent_type) {
-          if (runtime.stats.dispatchedSubagentTypes.length === 0) {
-            runtime.stats.flowExpected = predictedFlowExpected(tool.input.subagent_type);
-          }
-          runtime.stats.dispatchedSubagentTypes.push(tool.input.subagent_type);
-          dispatchedThisEvent = true;
-          if (event.parent_tool_use_id == null && tool.input?.prompt) {
-            emitDispatchPromptEvent(runtime, tool);
-          }
-        }
-      }
-      if (dispatchedThisEvent) updateProgressBar(runtime);
+      await processStatsEvent(runtime, event, sessionDir);
 
       if (!rateLimit && event.type === 'assistant' && event.error === 'rate_limit') {
         const txt = event.message?.content?.find?.((b) => b?.type === 'text')?.text || '';
@@ -264,34 +362,6 @@ export async function processMessage(runtime, prompt, opts = {}) {
       if (!rateLimit && event.type === 'rate_limit_event' && event.rate_limit_info?.status === 'blocked') {
         rateLimit = event.rate_limit_info;
         noteRateLimit(runtime, rateLimit);
-      }
-
-      if (event.type === 'system') {
-        const isAgentTaskType =
-          event.task_type === 'local_agent' || event.task_type === 'in_process_teammate';
-        if (event.subtype === 'task_started' && isAgentTaskType && event.task_id) {
-          runtime.stats.activeAgentIds.add(event.task_id);
-          runtime.stats.activeAgents = runtime.stats.activeAgentIds.size;
-          const role = toolMap.get(event.tool_use_id)?.input?.subagent_type;
-          if (role) taskRole.set(event.task_id, role);
-          sendStats(runtime);
-        } else if (event.subtype === 'task_notification' && event.status === 'completed' && event.task_id && runtime.stats.activeAgentIds.has(event.task_id)) {
-          runtime.stats.activeAgentIds.delete(event.task_id);
-          runtime.stats.activeAgents = runtime.stats.activeAgentIds.size;
-          runtime.stats.agentsCompleted++;
-          const doneRole = taskRole.get(event.task_id);
-          if (doneRole) runtime.stats.completedByRole[doneRole] = (runtime.stats.completedByRole[doneRole] || 0) + 1;
-          if (runtime.stats.agentsCompleted === 1
-              && runtime.stats.dispatchedSubagentTypes[0] === 'planner') {
-            const result = await loadTicketsAndWaves(sessionDir);
-            if (result && result.tickets.length > 0) {
-              runtime.stats.flowExpected = flowExpectedForTickets(result.tickets.length, result.waves.length);
-              runtime.stats.waveSizes = result.waves.map((w) => w.length);
-            }
-          }
-          sendStats(runtime);
-          updateProgressBar(runtime);
-        }
       }
 
       if (event.type === 'result') {
@@ -396,34 +466,15 @@ export async function processMessage(runtime, prompt, opts = {}) {
         const sessionId = runtime.session?.id;
         const sDir = sessionId ? `${LOG_DIR}/${sessionId}` : null;
         if (sDir) {
-          const { total, pendingCount, pendingSig } = await readTicketStatuses(sDir);
-          const ac = runtime.autoContinue || { count: 0, noProgress: 0, prevSig: null };
-          const decision = decideAutoContinue({
-            nextState, turnErrored,
-            totalTickets: total, pendingCount, pendingSig,
-            prevPendingSig: ac.prevSig,
-            autoContinueCount: ac.count,
-            noProgressCount: ac.noProgress,
-          });
-          if (decision.go) {
-            runtime.autoContinue = {
-              count: ac.count + 1,
-              noProgress: decision.noProgressCount ?? 0,
-              prevSig: pendingSig,
-            };
-            scheduleAutoContinue(sessionId, runtimes);
-          } else {
-            if (decision.stalled) {
-              const done = Math.max(0, total - pendingCount);
-              const stallText = `I finished ${done} of ${total} planned pieces, but ${pendingCount} ${pendingCount === 1 ? 'is' : 'are'} still unfinished. Say "continue" and I'll pick the rest back up.`;
-              broadcast(runtime, { type: 'message', role: 'assistant', content: stallText, ts: new Date().toISOString() });
-              await runtime.session?.recordMessage('assistant', stallText).catch(() => {});
-              await transitionState(runtime, 'error');
-            }
-            runtime.autoContinue = { count: 0, noProgress: 0, prevSig: null };
-            if (await sessionHasMergedTickets(sDir)) {
-              scheduleDocumentatorRun(sessionId, runtimes);
-            }
+          const { total, pendingCount } = await readTicketStatuses(sDir);
+          if (total > 0 && pendingCount > 0) {
+            // COMPLEX wave still in flight: hand off to the background-turn
+            // driver. It nudges the idle PTY so the orchestrator's Step 2
+            // background turns fire (→ background_result), driving the wave
+            // without flooding chat with auto-continue narration.
+            startBgDriver(runtime, runtimes);
+          } else if (await sessionHasMergedTickets(sDir)) {
+            scheduleDocumentatorRun(sessionId, runtimes);
           }
         }
       }
