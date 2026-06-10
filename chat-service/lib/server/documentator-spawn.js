@@ -44,11 +44,8 @@ export function scheduleDocumentatorRun(sessionId, runtimes) {
   sessionTimers.set(sessionId, t);
 }
 
-// Returns true if at least one TASK-*.json file in the session dir has
-// status === "merged". The documentator's Mode 2 only has anything to do when
-// real work was merged on this branch — pure question/answer turns produce
-// nothing for it to synthesise.
-export async function sessionHasMergedTickets(sessionDir) {
+// True if any TASK-*.json in the session dir has a status matching `predicate`.
+async function anyTicketStatus(sessionDir, predicate) {
   let entries;
   try {
     entries = await readdir(sessionDir);
@@ -59,33 +56,23 @@ export async function sessionHasMergedTickets(sessionDir) {
     if (!/^TASK-\d+\.json$/i.test(entry)) continue;
     try {
       const ticket = JSON.parse(await readFile(join(sessionDir, entry), 'utf8'));
-      if (ticket?.status === 'merged') return true;
+      if (predicate(ticket?.status)) return true;
     } catch {}
   }
   return false;
 }
 
-// True if the session has at least one ticket that is NOT in a terminal state
-// (merged/failed) — i.e. a COMPLEX wave that did not finish. Used by the
-// teardown-stall watcher to decide whether an idle-killed spawn left real work
-// undone (worth an auto-resume) vs a genuinely complete run.
-export async function sessionHasPendingTickets(sessionDir) {
-  let entries;
-  try {
-    entries = await readdir(sessionDir);
-  } catch {
-    return false;
-  }
-  const TERMINAL = new Set(['merged', 'failed']);
-  for (const entry of entries) {
-    if (!/^TASK-\d+\.json$/i.test(entry)) continue;
-    try {
-      const ticket = JSON.parse(await readFile(join(sessionDir, entry), 'utf8'));
-      if (!TERMINAL.has(ticket?.status)) return true;
-    } catch {}
-  }
-  return false;
-}
+// Mode 2 only has something to synthesise when real work was merged on this
+// branch — pure question/answer turns produce nothing for it.
+export const sessionHasMergedTickets = (sessionDir) =>
+  anyTicketStatus(sessionDir, (status) => status === 'merged');
+
+// A ticket not in a terminal state means a COMPLEX wave did not finish. The
+// teardown-stall watcher uses this to tell an idle-killed spawn that left work
+// undone (worth an auto-resume) from a genuinely complete run.
+const TERMINAL = new Set(['merged', 'failed']);
+export const sessionHasPendingTickets = (sessionDir) =>
+  anyTicketStatus(sessionDir, (status) => !TERMINAL.has(status));
 
 // Spawns the documentator as an isolated `claude -p` call (no --resume).
 // Mode 2: reads the session log + git diff vs origin/main and appends
