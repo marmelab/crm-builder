@@ -14,6 +14,9 @@ export const LOG_DIR = process.env.CHAT_LOG_DIR || '/chat-service/logs';
 const CLAUDE_PROJECT_SLUG = CWD.replace(/\//g, '-');
 export const claudeProjectDir = () =>
   join(CLAUDE_HOME, '.claude', 'projects', CLAUDE_PROJECT_SLUG);
+// Static constant form — required by pty-session.js which imports it at
+// module load time. Equivalent to claudeProjectDir().
+export const PROJECT_DIR = join(CLAUDE_HOME, '.claude', 'projects', CWD.replace(/\//g, '-'));
 export const claudeSessionDir = (csid) => join(claudeProjectDir(), csid);
 export const claudeSubagentsDir = (csid) => join(claudeSessionDir(csid), 'subagents');
 

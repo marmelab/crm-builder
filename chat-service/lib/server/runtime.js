@@ -32,6 +32,7 @@ export function createRuntime(session) {
     queueIdSeq: 0,
     stopping: false,
     currentProc: null,
+    ptySession: null,       // PtySession instance, null when no PTY is alive
     // Set when a blocked rate_limit_event is seen — either on the main stream
     // (turn.js) or in a subagent transcript (subagent-tail.js). The turn's read
     // loop reconciles it into the local `rateLimit` so a subagent-triggered
