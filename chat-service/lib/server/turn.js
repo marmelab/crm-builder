@@ -103,13 +103,18 @@ export async function processMessage(runtime, prompt, opts = {}) {
     if (!isAutoContinue) runtime.autoContinue = { count: 0, noProgress: 0, prevSig: null };
   }
 
+  // Always reset per-turn live state (active agents, animation anchor).
+  // Cumulative progress state (which agents ran, wave topology) is preserved
+  // across auto-continue turns so the progress bar doesn't reset mid-COMPLEX.
   runtime.stats = {
     ...runtime.stats,
-    agentsCompleted: 0,
-    completedByRole: {},
-    flowExpected: 0,
-    dispatchedSubagentTypes: [],
-    waveSizes: null,
+    ...(isAutoContinue ? {} : {
+      agentsCompleted: 0,
+      completedByRole: {},
+      flowExpected: 0,
+      dispatchedSubagentTypes: [],
+      waveSizes: null,
+    }),
     inProgressSince: Date.now(),
     lastInProgressRole: null,
     activeAgentIds: new Set(),
