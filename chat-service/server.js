@@ -275,7 +275,12 @@ wss.on('connection', async (ws, req) => {
     // Only tear down when the session is fully idle. If a turn is still
     // running, processMessage's finally block will release the runtime once
     // it finishes (if no clients are left by then).
-    if (r.clients.size === 0 && !r.busy) {
+    if (
+      r.clients.size === 0 &&
+      !r.busy &&
+      (!r.ptySession || r.ptySession.closed) &&
+      !r.ptyRestartPending
+    ) {
       const id = r.session.id;
       const empty = (r.session.meta.messageCount || 0) === 0;
       // Await the log stream flush before rm so we don't race writes against
