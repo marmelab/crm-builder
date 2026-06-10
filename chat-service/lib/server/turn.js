@@ -49,15 +49,11 @@ function emitDispatchPromptEvent(runtime, tool) {
 }
 
 // --- Teardown-stall watcher -------------------------------------------------
-// A COMPLEX wave tears its team down with shutdown_request → shutdown_approved →
-// TeamDelete. A member that already finished and went idle may never wake to ack
-// its shutdown; the lead then waits passively for that ack, the inactivity
-// watchdog kills the spawn, and the next wave is never dispatched (the run dies
-// with tickets still pending — observed in session 3d5730d9). This watcher
-// re-spawns the orchestrator (recovery, like a manual resume) so it rebuilds
-// from disk and finishes. It fires ONLY for a stalled teardown — never during a
-// normal mid-wave idle (the lead waiting on live members), because that case is
-// neither idle-killed (subagents keep the stream alive) nor has shutdown begun.
+// A teardown can stall: a member that went idle never wakes to ack its
+// shutdown_request, the lead waits, the watchdog kills the spawn, and the next
+// wave is never dispatched. This re-spawns the orchestrator (like a manual
+// resume) to finish from disk. Fires ONLY for a stalled teardown — not a normal
+// mid-wave idle, which is neither idle-killed nor past a shutdown_request.
 const AUTO_WAKE_DELAY_MS = 8_000;
 // Consecutive auto-wakes per session before giving up (reset by any real user
 // message). A backstop against an unrecoverable stall looping forever.

@@ -42,18 +42,13 @@ export async function enrichSubagentChildren(phases, subagentsDir, toolCounts, a
   // 1. Read each .meta.json + the first JSONL event → firstUuid + firstType + size.
   // 2. Group files by (agentName, firstUuid). Keep only the LARGEST file per
   //    group (the latest snapshot contains every prior event).
-  // 3. A group whose first event is `type:"system"` is NOT a fresh activation —
-  //    it is a CONTEXT-COMPACTION continuation (the agent overflowed its context
-  //    and resumed in a new conversation, so it gets a new firstUuid). Treat
-  //    those as continuations of the same agent life, not as separate
-  //    activations: a heavy agent that compacts would otherwise produce more
-  //    groups than phases, and the old 1:1 mtime alignment could bind its phase
-  //    to the tiny post-compaction stub and drop the real (largest) transcript —
-  //    making the agent show up empty in the stats UI (observed: developer-
-  //    TASK-005 in session 3d5730d9).
+  // 3. A group whose first event is `type:"system"` is NOT a fresh activation
+  //    but a context-compaction continuation (new firstUuid). Treat it as a
+  //    continuation, not a separate activation — otherwise an agent that
+  //    compacts has more groups than phases, and the 1:1 mtime alignment can
+  //    bind its phase to the tiny stub and drop the real transcript.
   // 4. Align real activations 1:1 with phases (both sorted ascending). Merge
-  //    each compaction continuation into the last aligned phase of that agent,
-  //    so its post-compaction tool_uses are counted on the same phase.
+  //    each compaction continuation into the last aligned phase of that agent.
   const fileMeta = [];
   for (const entry of dirEntries) {
     if (!entry.endsWith('.meta.json')) continue;
