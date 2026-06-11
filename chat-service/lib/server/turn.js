@@ -72,7 +72,7 @@ function startBgDriver(runtime, runtimes) {
   if (!sessionId) return;
   clearBgDriver(sessionId);
   const sDir = `${LOG_DIR}/${sessionId}`;
-  const state = { prevSig: null, noProgress: 0, resumed: false, timer: null };
+  const state = { prevSig: null, noProgress: 0, resumed: false, timer: null, seenBgCount: runtime.bgResultCount || 0 };
   driverLog(`heartbeat started session=${sessionId}`);
 
   state.timer = setInterval(async () => {
@@ -98,8 +98,17 @@ function startBgDriver(runtime, runtimes) {
       return;
     }
 
-    if (pendingSig === state.prevSig) state.noProgress += 1;
-    else { state.noProgress = 0; state.resumed = false; state.prevSig = pendingSig; }
+    // Progress = either the pending-ticket set changed (a merge landed) OR a
+    // background turn fired since the last tick (reviewer/merger completion the
+    // orchestrator reacted to). Ticket status alone stays `pending` through the
+    // whole dev→review→merge chain, so without the background_result signal a
+    // healthy single-ticket wave would look stalled and trigger a needless resume.
+    const bgCount = current.bgResultCount || 0;
+    const madeProgress = pendingSig !== state.prevSig || bgCount !== state.seenBgCount;
+    if (madeProgress) { state.noProgress = 0; state.resumed = false; }
+    else state.noProgress += 1;
+    state.prevSig = pendingSig;
+    state.seenBgCount = bgCount;
 
     if (state.noProgress >= HEARTBEAT_GIVEUP_TICKS) {
       // Genuinely stuck — surface the stall once and stop nudging.
@@ -296,10 +305,11 @@ export async function processMessage(runtime, prompt, opts = {}) {
         }
       }
       if (event.type === 'background_result') {
+        // Count background turns so the heartbeat treats them as progress and
+        // doesn't escalate to a heavyweight resume while the wave is advancing.
+        runtime.bgResultCount = (runtime.bgResultCount || 0) + 1;
         updateProgressBar(runtime);
         sendStats(runtime);
-        // A background turn just landed — the heartbeat's no-progress counter is
-        // reset naturally on the next tick when the pending-ticket set changes.
       }
     };
     ptyRef.on('event', bgHandler);

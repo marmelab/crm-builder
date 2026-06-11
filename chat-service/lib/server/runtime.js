@@ -48,6 +48,9 @@ export function createRuntime(session) {
     // (non-auto-continue) user message.
     toolMap: new Map(),
     taskRole: new Map(),
+    // Monotonic count of background turns (background_result events). The bg
+    // driver's heartbeat reads it to treat a background turn as wave progress.
+    bgResultCount: 0,
     clients: new Set(),
     // Subagent-transcript tailer state. Lives on the runtime so it survives
     // across turns: a long-running session re-dispatches the same subagent
