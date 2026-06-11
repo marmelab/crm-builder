@@ -31,6 +31,7 @@ const HEARTBEAT_MS = 6_000;
 // escalation. ~6 s/tick: 30 ticks ≈ 3 min (one slow developer), 60 ≈ 6 min.
 const HEARTBEAT_STALL_TICKS = 30;   // → one heavyweight AUTO_CONTINUE resume
 const HEARTBEAT_GIVEUP_TICKS = 60;  // → surface stall message, settle on error
+const MAX_BG_ESCALATIONS = 3;       // hard cap on AUTO_CONTINUE resumes per wave
 // When every ticket is merged the wave isn't done yet: promotion (session→main)
 // and any follow-up (e.g. a translation fix) still run as background turns. Stay
 // in_progress (bar visible) and only settle `completed` after this many ticks
@@ -80,6 +81,7 @@ function clearBgDriver(sessionId) {
 export async function stopBackgroundWave(runtime) {
   if (!runtime?.waveActive) return false;
   runtime.waveActive = false;
+  runtime.bgDriverState = null;
   clearBgDriver(runtime.session?.id);
   if (runtime.busy) return false;   // an active turn is taking over — its finally settles
   await stopSubagentTailer(runtime).catch(() => {});
@@ -101,7 +103,16 @@ function startBgDriver(runtime, runtimes) {
   if (!sessionId) return;
   clearBgDriver(sessionId);
   const sDir = `${LOG_DIR}/${sessionId}`;
-  const state = { prevSig: null, noProgress: 0, resumed: false, timer: null, seenBgCount: runtime.bgResultCount || 0, drainQuiet: 0 };
+  // Driver state survives the AUTO_CONTINUE escalation cycle (clearBgDriver →
+  // resume turn → startBgDriver): it lives on the runtime, not in the closure,
+  // so noProgress keeps climbing toward the give-up threshold across restarts.
+  // Reset only by a real user message (processMessage non-auto) or a wave end.
+  const state = runtime.bgDriverState ??= {
+    prevSig: null, noProgress: 0, resumed: false, escalations: 0,
+    seenBgCount: runtime.bgResultCount || 0, drainQuiet: 0,
+  };
+  state.resumed = false;          // each (re)start allows one new escalation
+  state.timer = null;
   driverLog(`heartbeat started session=${sessionId}`);
 
   state.timer = setInterval(async () => {
@@ -122,12 +133,13 @@ function startBgDriver(runtime, runtimes) {
     if (!current.ptySession || current.ptySession.closed) {
       driverLog(`heartbeat stop: PTY gone session=${sessionId}`);
       current.waveActive = false;
+      current.bgDriverState = null;
       clearBgDriver(sessionId);
       return;
     }
 
     const { total, pendingCount, pendingSig } = await readTicketStatuses(sDir);
-    if (total === 0) { current.waveActive = false; clearBgDriver(sessionId); return; }          // not a COMPLEX wave
+    if (total === 0) { current.waveActive = false; current.bgDriverState = null; clearBgDriver(sessionId); return; }          // not a COMPLEX wave
 
     const bgCount = current.bgResultCount || 0;
 
@@ -141,6 +153,7 @@ function startBgDriver(runtime, runtimes) {
       if (state.drainQuiet >= HEARTBEAT_DRAIN_QUIET_TICKS) {
         driverLog(`heartbeat done: drained quiet session=${sessionId}`);
         current.waveActive = false;
+        current.bgDriverState = null;
         clearBgDriver(sessionId);
         await stopSubagentTailer(current).catch(() => {});
         await transitionState(current, 'completed');
@@ -178,6 +191,7 @@ function startBgDriver(runtime, runtimes) {
       // Genuinely stuck — surface the stall once and stop nudging.
       driverLog(`heartbeat give-up: stall ${state.noProgress} ticks pending=${pendingCount} session=${sessionId}`);
       current.waveActive = false;
+      current.bgDriverState = null;
       clearBgDriver(sessionId);
       await stopSubagentTailer(current).catch(() => {});
       const done = Math.max(0, total - pendingCount);
@@ -196,11 +210,17 @@ function startBgDriver(runtime, runtimes) {
       return;
     }
 
-    if (state.noProgress >= HEARTBEAT_STALL_TICKS && !state.resumed) {
+    if (state.noProgress >= HEARTBEAT_STALL_TICKS && !state.resumed
+        && state.escalations < MAX_BG_ESCALATIONS) {
       // Nudges alone haven't advanced the wave — escalate once to a heavyweight
       // resume that re-states the STATE B instructions, then keep nudging.
-      driverLog(`heartbeat escalate: AUTO_CONTINUE after ${state.noProgress} ticks pending=${pendingCount} session=${sessionId}`);
+      // The escalation clears + restarts the driver, but bgDriverState survives
+      // (it lives on the runtime), so noProgress keeps climbing and escalations
+      // is capped — after MAX_BG_ESCALATIONS this branch falls through to the
+      // give-up threshold instead of resuming forever.
+      driverLog(`heartbeat escalate: AUTO_CONTINUE after ${state.noProgress} ticks (escalation ${state.escalations + 1}/${MAX_BG_ESCALATIONS}) pending=${pendingCount} session=${sessionId}`);
       state.resumed = true;
+      state.escalations += 1;
       current.busy = true;
       processMessage(current, AUTO_CONTINUE_NUDGE, { auto: true })
         .catch(() => { current.busy = false; });
@@ -223,6 +243,7 @@ async function settleBackgroundRateLimit(runtime, info) {
   if (runtime.bgRateLimitSettling) return;          // idempotent (main + subagent may both fire)
   runtime.bgRateLimitSettling = true;
   runtime.waveActive = false;
+  runtime.bgDriverState = null;
   clearBgDriver(runtime.session?.id);
   try { runtime.ptySession?.kill(); } catch {}      // the CLI hangs on a blocked limit
   await stopSubagentTailer(runtime).catch(() => {});
@@ -386,7 +407,7 @@ export async function processMessage(runtime, prompt, opts = {}) {
     if (!isAutoContinue) {
       // A real user turn takes over the session — any background wave is now moot.
       runtime.waveActive = false;
-      runtime.autoContinue = { count: 0, noProgress: 0, prevSig: null };
+      runtime.bgDriverState = null;   // fresh user turn resets the give-up counters
       // Fresh user turn — drop stale dispatch/task correlation from a prior request.
       runtime.toolMap.clear();
       runtime.taskRole.clear();

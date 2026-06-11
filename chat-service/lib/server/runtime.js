@@ -43,10 +43,6 @@ export function createRuntime(session) {
     // limit settles the session on `rate_limited` instead of hanging forever.
     pendingRateLimit: null,
     bgRateLimitSettling: false,  // terminal guard: set once a background-turn rate limit settles; cleared at next turn entry
-    // Per-wave auto-continue state (see auto-continue.js). count = consecutive
-    // auto-resumes; noProgress = consecutive resumes with an unchanged pending
-    // set; prevSig = last pending-ticket signature. Reset by any real user msg.
-    autoContinue: { count: 0, noProgress: 0, prevSig: null },
     // tool_use_id → tool, and task_id → role. Persisted on the runtime (not
     // local to a turn) so a background turn can correlate a `task_notification`
     // with the dispatch that started it on an earlier turn. Reset on a fresh
