@@ -12,8 +12,7 @@ import {
 // dispatch) a team. Resume routing uses this: if a wave was in flight when the
 // process was killed, --resume would reinject the dead "team is running" belief,
 // so the resume must spawn fresh and re-evaluate real state instead. Takes the
-// session dir (not an id) so it's testable without LOG_DIR coupling — mirrors
-// sessionHasMergedTickets in documentator-spawn.js.
+// session dir (not an id) so it's testable without LOG_DIR coupling.
 const TASK_FILE_RE = /^TASK-\d+\.json$/i;
 
 export async function sessionHasTickets(sessionDir) {

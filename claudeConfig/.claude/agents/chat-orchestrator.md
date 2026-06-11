@@ -764,9 +764,25 @@ The job-title field is visible in the demo. Do you want to save these changes? �
 The user's reply is either the satisfaction widget button label (full text, e.g.
 "Yes, save the changes" / "No, I want to change something") or free text typed directly.
 
+**On satisfaction — capture business knowledge (once, fire-and-forget):** the user
+confirmed the work is good, so dispatch ONE Mode-2 documentator in the background
+(no `team_name`, no worktree; do NOT wait for it — it runs while migration/wrap-up
+proceeds and its output never shows in the chat):
+
+```
+Agent({
+  subagent_type: "documentator",
+  description: "Capture business knowledge",
+  prompt: "ROLE: documentator (Mode 2)\nSESSION_LOG: <session_dir>/log.jsonl\nSESSION_DIFF_BASE: origin/main\nreason: business-knowledge\n\nFollow your Mode 2 instructions: read the session diff vs origin/main and append business-knowledge bullets to /app/MEMORY.md (silently do nothing if there is nothing concrete to capture).",
+  run_in_background: true
+})
+```
+
+Then proceed per the table:
+
 | Meaning | Next |
 |---|---|
-| Satisfaction expressed (button label or free text: "yes", "perfect", "looks good"…) | Run `Bash("pending-deploys --app /app --session <SESSION_SHORT_ID>")`. Empty output → reply in the user's language (e.g. "Great, everything's set.") and STATE DONE. Non-empty → emit in the user's language (e.g. "Saving your changes — this can take a moment.") and enter STATE PD-MIG-DEV. |
+| Satisfaction expressed (button label or free text: "yes", "perfect", "looks good"…) | (Dispatch the Mode-2 documentator above first.) Run `Bash("pending-deploys --app /app --session <SESSION_SHORT_ID>")`. Empty output → reply in the user's language (e.g. "Great, everything's set.") and STATE DONE. Non-empty → emit in the user's language (e.g. "Saving your changes — this can take a moment.") and enter STATE PD-MIG-DEV. |
 | Wants to adjust (button label or free text: "no", "change something"…) | Reply asking what they'd like to change, then re-enter CLASSIFICATION on their next message; after the new wave completes, send `%%ASK_SATISFACTION|...|...|...|...%%` again (STATE PD-ASK). |
 | Ambiguous | Ask once what they mean; stay in PD-RESPOND. |
 

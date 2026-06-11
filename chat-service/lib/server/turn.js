@@ -14,9 +14,6 @@ import {
 } from '../stats/io.js';
 import { updateProgressBar, predictedFlowExpected, flowExpectedForTickets } from './progress-bar.ts';
 import {
-  sessionHasMergedTickets, scheduleDocumentatorRun, clearDocumentatorTimer,
-} from './documentator-spawn.js';
-import {
   readTicketStatuses, AUTO_CONTINUE_NUDGE,
 } from './auto-continue.js';
 import { loadTicketsAndWaves } from '../stats/tickets.js';
@@ -112,14 +109,9 @@ function startBgDriver(runtime, runtimes) {
         await stopSubagentTailer(current).catch(() => {});
         await transitionState(current, 'completed');
         broadcast(current, { type: 'status', working: false });
-        // Documentator (Mode 2) ownership: when a satisfaction widget is in play
-        // (COMPLEX / schema-touching SIMPLE), the orchestrator dispatches the
-        // documentator itself at PD-RESPOND once the user confirms — so we skip
-        // the chat-service fallback here to avoid a double run. The fallback only
-        // covers flows with no widget (cosmetic SIMPLE) that still merged work.
-        if (!current.session?.meta?.satisfactionAsk && await sessionHasMergedTickets(sDir)) {
-          scheduleDocumentatorRun(sessionId, runtimes);
-        }
+        // The documentator (Mode 2) is now dispatched by the orchestrator itself
+        // (Agent, at PD-RESPOND once the user confirms) — chat-service no longer
+        // spawns it. Nothing to do here.
         return;
       }
       driverLog(`heartbeat drain: quiet=${state.drainQuiet} session=${sessionId}`);
@@ -311,7 +303,6 @@ export async function processMessage(runtime, prompt, opts = {}) {
 
   driverLog(`processMessage enter auto=${isAutoContinue} session=${runtime.session?.id} ptyAlive=${!!runtime.ptySession && !runtime.ptySession.closed}`);
   if (runtime.session?.id) {
-    clearDocumentatorTimer(runtime.session.id);
     clearBgDriver(runtime.session.id);
     if (!isAutoContinue) {
       runtime.autoContinue = { count: 0, noProgress: 0, prevSig: null };
@@ -604,13 +595,8 @@ export async function processMessage(runtime, prompt, opts = {}) {
         await stopSubagentTailer(runtime).catch(() => {});
         await transitionState(runtime, nextState);
         broadcast(runtime, { type: 'status', working: false });
-        // See the bg-driver branch: skip the fallback when a satisfaction widget
-        // is in play — the orchestrator dispatches the documentator at PD-RESPOND.
-        if (nextState === 'completed' && !turnErrored && sDir
-            && !runtime.session?.meta?.satisfactionAsk
-            && await sessionHasMergedTickets(sDir)) {
-          scheduleDocumentatorRun(sessionId, runtimes);
-        }
+        // Documentator (Mode 2) is dispatched by the orchestrator at PD-RESPOND,
+        // not spawned by chat-service — nothing to schedule here.
       }
 
       // Keep runtime alive while PTY is live — background turns may still fire.

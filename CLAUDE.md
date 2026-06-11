@@ -28,7 +28,6 @@ Key modules:
 - `server/session-store.js` — chat UUID, `meta.json`, `TASK-*.json` detection
 - `server/subagent-tail.js` — polls subagents/ every 2500ms → WS broadcast
 - `lib/stats/` (8 modules) — read-only aggregation, `GET /api/stats` — see [docs/stats.md](docs/stats.md)
-- `server/documentator-spawn.js` — 30s debounce after turn=completed + merged tickets (Mode 2)
 - `server/deploy-routes.js` — SSE `/api/deploy/events`, 6-phase pipeline (vite build → supabase link → db push → functions → secrets → wrangler), independent of chat WS — see [docs/deploy.md](docs/deploy.md)
 
 Tests: `cd chat-service && npm test` — uses glob `'test/**/*.test.js'` (directory form broken on Node 25).
@@ -44,7 +43,7 @@ Tests: `cd chat-service && npm test` — uses glob `'test/**/*.test.js'` (direct
 | quality-reviewer | sonnet | Semantic code + security review only. Never re-runs validation. |
 | test-validator | haiku | Integration wiring + e2e presence. |
 | merger | haiku | `git merge --no-ff` only. **Never `git add`/`git commit`**. |
-| documentator | sonnet | Mode 1 — captures rules/skills to `~/.claude/local/` on explicit user request. Mode 2 — auto-runs at the end of every COMPLEX session, appends business knowledge to `/app/MEMORY.md` from the diff vs `origin/main`. |
+| documentator | sonnet | Mode 1 — captures rules/skills to `~/.claude/local/` on explicit user request. Mode 2 — dispatched by the orchestrator (via `Agent`, run_in_background) at POST-DEV once the user validates the result; appends business knowledge to `/app/MEMORY.md` from the diff vs `origin/main`. Both modes run via the Agent tool (no `claude -p`); confined by `restrict-documentator-{write,bash}` (which trigger on `agent_type=documentator` or the legacy `DOCUMENTATOR_RUN=1`). |
 
 Team layout (`agent-team` skill): one `TeamCreate` per wave, `3×N + 1` members in one dispatch (developer + 2 reviewers per ticket + one shared merger). Constraint: one team per lead, no nested teams. Single merger eliminates `.git/index.lock` contention.
 

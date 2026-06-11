@@ -70,8 +70,9 @@ export class TranscriptWatcher extends EventEmitter {
     }
 
     // Latch onto a new JSONL only if it belongs to an interactive session.
-    // Sessions started with --print (e.g. the documentator's `claude -p`, which
-    // shares this project dir) begin with queue-operation entries. Interactive
+    // Defensive guard: any `--print` (`claude -p`) session that might land in this
+    // shared project dir begins with queue-operation entries (chat-service no
+    // longer spawns one itself, but this keeps the watcher robust). Interactive
     // sessions begin with either:
     //   - agent-setting  (when --agent is used, written first)
     //   - permission-mode (written immediately after, or as the very first entry

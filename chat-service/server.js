@@ -6,7 +6,6 @@ import { WebSocketServer } from 'ws';
 import { PORT, MODE_DEMO, MODE_FULL, LOG_DIR } from './lib/server/config.js';
 import {
   loadSystemPrompt, applySystemPrompt,
-  loadDocumentatorPrompt, applyDocumentatorPrompt,
 } from './lib/server/system-prompt.js';
 import { openSession, deleteSession, readMessages, sessionHasTickets } from './lib/server/session-store.js';
 import { createRequestHandler, switchMode } from './lib/server/http-routes.js';
@@ -292,18 +291,13 @@ wss.on('connection', async (ws, req) => {
 });
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  // Await both prompt loads before accepting connections — otherwise a turn
-  // can complete in the window between listen() and the .then callback and
-  // spawn the documentator with an empty prompt.
+  // Load the orchestrator model before accepting connections. The documentator
+  // is no longer spawned headless by chat-service (the orchestrator dispatches it
+  // via Agent, which loads documentator.md directly), so nothing to preload for it.
   Promise.all([
     loadSystemPrompt().then((parsed) => {
       applySystemPrompt(parsed);
-      const t = parsed.tools?.length ? parsed.tools.join(',') : 'default';
-      console.log(parsed.content ? `Orchestrator loaded (model: ${parsed.model || 'default'}, tools: ${t}).` : 'No orchestrator prompt, using default.');
-    }),
-    loadDocumentatorPrompt().then((parsed) => {
-      applyDocumentatorPrompt(parsed);
-      console.log(parsed.content ? `Documentator loaded (model: ${parsed.model || 'default'}).` : 'No documentator prompt, post-turn synthesis disabled.');
+      console.log(parsed.content ? `Orchestrator loaded (model: ${parsed.model || 'default'}).` : 'No orchestrator prompt, using default.');
     }),
   ]).then(() => {
     httpServer.listen(PORT, '0.0.0.0', () => {
