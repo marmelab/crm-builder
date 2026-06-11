@@ -3,6 +3,7 @@ import { LOG_DIR } from './config.js';
 import { sendToWs, broadcast } from './ws-bus.js';
 import { patchSession } from './session-store.js';
 import { emptyBreakdown } from '../stats/io.js';
+import { readTicketStatuses } from './auto-continue.js';
 
 // One runtime per open session. Multiple WebSockets (tabs, reconnects
 // after navigating away and back) share the same runtime — so a turn that
@@ -33,6 +34,8 @@ export function createRuntime(session) {
     stopping: false,
     currentProc: null,
     ptySession: null,       // PtySession instance, null when no PTY is alive
+    idleTimer: null,        // armed on last-client disconnect, reaps an idle PTY
+    tearingDown: false,     // set by the reaper so turn.js's exit handler won't restart
     // Set when a blocked rate_limit_event is seen — either on the main stream
     // (turn.js) or in a subagent transcript (subagent-tail.js). The turn's read
     // loop reconciles it into the local `rateLimit` so a subagent-triggered
@@ -117,6 +120,42 @@ export function createRuntime(session) {
       lastInProgressRole: null,
     },
   };
+}
+
+// ── Idle teardown ────────────────────────────────────────────────────────────
+// An interactive claude TUI never exits on its own, so a session whose last
+// tab closed would otherwise keep its PTY process (plus watchers) alive until
+// chat-service restarts. Armed on the last WS disconnect; cancelled by any
+// reconnect or new turn. A COMPLEX wave still running in background turns
+// re-arms instead of killing.
+export const IDLE_TEARDOWN_MS = 10 * 60 * 1000;
+
+export function cancelIdleTeardown(runtime) {
+  if (runtime?.idleTimer) {
+    clearTimeout(runtime.idleTimer);
+    runtime.idleTimer = null;
+  }
+}
+
+export function scheduleIdleTeardown(runtime, { delayMs = IDLE_TEARDOWN_MS } = {}) {
+  if (!runtime?.session) return;
+  cancelIdleTeardown(runtime);
+  runtime.idleTimer = setTimeout(async () => {
+    runtime.idleTimer = null;
+    if (runtime.clients.size > 0 || runtime.busy) return;
+    const { total, pendingCount } = await readTicketStatuses(`${LOG_DIR}/${runtime.session.id}`)
+      .catch(() => ({ total: 0, pendingCount: 0 }));
+    if (total > 0 && pendingCount > 0) {            // wave still running headless
+      scheduleIdleTeardown(runtime, { delayMs });
+      return;
+    }
+    runtime.tearingDown = true;                      // turn.js exit handler: no restart
+    try { runtime.ptySession?.kill(); } catch {}
+    await runtime.subagentTailerStop?.().catch(() => {});
+    await runtime.session.close();
+    runtimes.delete(runtime.session.id);
+  }, delayMs);
+  runtime.idleTimer.unref?.();
 }
 
 // Kill the current claude spawn with SIGTERM, falling back to SIGKILL after 2s

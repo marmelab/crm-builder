@@ -3,7 +3,7 @@ import { cp, copyFile, mkdir, chmod, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { LOG_DIR, claudeProjectDir, claudeSessionDir } from './config.js';
 import { broadcast, sendStats } from './ws-bus.js';
-import { runtimes, transitionState, noteRateLimit } from './runtime.js';
+import { runtimes, transitionState, noteRateLimit, cancelIdleTeardown } from './runtime.js';
 import { rewriteUserMessage, extractText, extractToolUses, friendlyError } from './claude-spawn.js';
 import { PtySession } from './pty-session.js';
 import { endsWithQuestion } from './session-store.js';
@@ -302,6 +302,8 @@ export async function processMessage(runtime, prompt, opts = {}) {
   const isAutoContinue = opts.auto === true;
 
   driverLog(`processMessage enter auto=${isAutoContinue} session=${runtime.session?.id} ptyAlive=${!!runtime.ptySession && !runtime.ptySession.closed}`);
+  runtime.tearingDown = false;
+  cancelIdleTeardown(runtime);
   if (runtime.session?.id) {
     clearBgDriver(runtime.session.id);
     if (!isAutoContinue) {
@@ -400,6 +402,7 @@ export async function processMessage(runtime, prompt, opts = {}) {
     attachBgListener(runtime.ptySession);
 
     runtime.ptySession.once('exit', () => {
+      if (runtime.tearingDown) { runtime.ptySession = null; return; }
       runtime.ptySession = null;
       const restartCount = runtime.ptyRestartCount || 0;
       if (!runtime.busy && restartCount < 1) {

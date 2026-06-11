@@ -9,7 +9,7 @@ import {
 } from './lib/server/system-prompt.js';
 import { openSession, deleteSession, readMessages, sessionHasTickets } from './lib/server/session-store.js';
 import { createRequestHandler, switchMode } from './lib/server/http-routes.js';
-import { runtimes, wsToRuntime, runtimeForWs, createRuntime, safeSend, killCurrentProc } from './lib/server/runtime.js';
+import { runtimes, wsToRuntime, runtimeForWs, createRuntime, safeSend, killCurrentProc, scheduleIdleTeardown, cancelIdleTeardown } from './lib/server/runtime.js';
 import { sendToWs, broadcast } from './lib/server/ws-bus.js';
 import { updateProgressBar } from './lib/server/progress-bar.ts';
 import { extractText, extractToolUses, planResume } from './lib/server/claude-spawn.js';
@@ -76,6 +76,7 @@ wss.on('connection', async (ws, req) => {
     session.close();
   }
   runtime.clients.add(ws);
+  cancelIdleTeardown(runtime);
   wsToRuntime.set(ws, runtime.session.id);
   console.log(`Session ${session.isNew ? 'created' : joining ? 'rejoined' : 'resumed'}: ${runtime.session.id}`);
 
@@ -137,6 +138,7 @@ wss.on('connection', async (ws, req) => {
 
     const r = runtimeForWs(ws);
     if (!r) return;
+    cancelIdleTeardown(r);
 
     // Resume button: user clicked "Resume" after the 5h limit reset, or after a
     // turn errored. Replay the last user message so the orchestrator picks up
@@ -286,6 +288,9 @@ wss.on('connection', async (ws, req) => {
       await r.session?.close();
       runtimes.delete(id);
       if (empty) await deleteSession(id);
+    } else if (r.clients.size === 0) {
+      // PTY (or a turn) still alive with nobody watching: arm the idle reaper.
+      scheduleIdleTeardown(r);
     }
   });
 });
