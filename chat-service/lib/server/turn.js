@@ -526,6 +526,9 @@ export async function processMessage(runtime, prompt, opts = {}) {
   function spawnOrResumePty() {
     runtime.ptySession = new PtySession(runtime.claudeSessionId, sessionDir);
     attachBgListener(runtime.ptySession);
+    if (runtime.claudeSessionId) {
+      startSubagentTailer(runtime).catch((e) => console.error('[subagent-tail]', e));
+    }
 
     runtime.ptySession.once('exit', () => {
       if (runtime.tearingDown || runtime.suppressNextPtyRestart) {
@@ -568,6 +571,12 @@ export async function processMessage(runtime, prompt, opts = {}) {
   }
 
   runtime.ptySession.send(buildPrompt(prompt));
+  // The session_id discovery event only fires once per brand-new conversation;
+  // resumed sessions and turn 2+ must (re)start the tailer themselves. The call
+  // is idempotent, so this is safe when it is already running.
+  if (runtime.claudeSessionId) {
+    startSubagentTailer(runtime).catch((e) => console.error('[subagent-tail]', e));
+  }
   runtime.currentProc = { kill: () => runtime.ptySession?.kill() };
 
   try {
