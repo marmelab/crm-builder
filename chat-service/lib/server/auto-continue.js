@@ -1,5 +1,6 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { TASK_FILE_RE } from './session-store.js';
 
 // --- Why this exists -------------------------------------------------------
 // This module provides two things that turn.js needs for the heartbeat-driven
@@ -46,7 +47,7 @@ export async function readTicketStatuses(sessionDir) {
   const pending = [];
   let total = 0;
   for (const entry of entries) {
-    if (!/^TASK-\d+\.json$/i.test(entry)) continue;
+    if (!TASK_FILE_RE.test(entry)) continue;
     total += 1;
     let status = 'unknown';
     try {
