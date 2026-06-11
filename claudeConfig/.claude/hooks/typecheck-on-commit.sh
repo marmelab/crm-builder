@@ -16,17 +16,12 @@ cd "$REPO" || { echo "[$(date -Iseconds)] typecheck EXIT=0 cd_failed" >> "$LOG";
 # previous sessions caused a regression where a developer deviated from its task
 # to "fix" unrelated typecheck errors.
 #
-# VALIDATE_WORKTREE: when set by the orchestrator or upstream caller, restrict
-# to that single worktree. Avoids the "shared brakes" issue where one dev's
-# broken state blocks all parallel stops (one bad TASK poisoning N reviewers).
+# Scope to the stopping subagent's own worktree via the shared resolver — see
+# resolve-validate-worktree.sh for why fanning out to every worktree is harmful.
 SESSION_SHORT=$(basename "${CHAT_SESSION_DIR:-}" | cut -d'-' -f1)
-if [ -n "${VALIDATE_WORKTREE:-}" ] && [ -d "$VALIDATE_WORKTREE" ]; then
-  WORKTREES="$VALIDATE_WORKTREE"
-elif [ -n "$SESSION_SHORT" ]; then
-  WORKTREES=$(git worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2}' | grep "^/app/worktrees/${SESSION_SHORT}/" || true)
-else
-  WORKTREES=$(git worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2}' | grep "^/app/worktrees/" || true)
-fi
+HOOK_TAG="typecheck"
+. /home/developer/.claude/hooks/resolve-validate-worktree.sh
+resolve_validate_worktree
 
 if [ -z "$WORKTREES" ]; then
   echo "[$(date -Iseconds)] typecheck EXIT=0 no_active_worktree" >> "$LOG"

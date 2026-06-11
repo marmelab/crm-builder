@@ -10,40 +10,16 @@ echo "[$(date -Iseconds)] unit-app START pwd=$(pwd) CLAUDE_PROJECT_DIR=$CLAUDE_P
 REPO="${CLAUDE_PROJECT_DIR:-/app}"
 cd "$REPO" || { echo "[$(date -Iseconds)] unit-app EXIT=0 cd_failed" >> "$LOG"; exit 0; }
 
+# Scope to the STOPPING subagent's own worktree via the shared resolver. The old
+# hook LOOPED over every session worktree and launched a separate vitest in each;
+# with M worktrees × N developers stopping that's N×M browser-mode vitest runs,
+# many concurrent — they thrash the shared Chromium/CPU pool and a 30s run
+# balloons past the timeout. resolve-validate-worktree.sh derives the agent's OWN
+# worktree from its transcript and excludes _session (the merger's tree).
 SESSION_SHORT=$(basename "${CHAT_SESSION_DIR:-}" | cut -d'-' -f1)
-
-# Scope to the STOPPING subagent's own worktree. SubagentStop stdin does NOT say
-# which worktree the agent worked in, so the old hook conservatively LOOPED over
-# every session worktree and launched a separate vitest in each. With M worktrees
-# carrying changes × N developers stopping (each re-fires this hook), that's N×M
-# browser-mode vitest invocations, many concurrent — they thrash the shared
-# Chromium/CPU pool and a 30s run balloons past the timeout. (NB: each individual
-# run was already confined by `cd`; the problem was the sheer count, not a single
-# run crawling across worktrees.) Fix: derive the agent's OWN worktree from its
-# transcript_path — the most-referenced /app/worktrees/<session>/(TASK-XXX|simple)
-# path — and test only that one. Fall back to scan-all only if we can't parse it.
-WORKTREES=""
-if [ -n "${VALIDATE_WORKTREE:-}" ] && [ -d "$VALIDATE_WORKTREE" ]; then
-  WORKTREES="$VALIDATE_WORKTREE"
-else
-  TRANSCRIPT=$(printf '%s' "$STDIN" | node -e 'try{const i=JSON.parse(require("fs").readFileSync(0,"utf8"));process.stdout.write(i.transcript_path||"")}catch(e){}' 2>/dev/null || true)
-  if [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ] && [ -n "$SESSION_SHORT" ]; then
-    OWN_WT=$(grep -oE "/app/worktrees/${SESSION_SHORT}/(TASK-[0-9]+|simple)" "$TRANSCRIPT" 2>/dev/null | sort | uniq -c | sort -rn | head -1 | grep -oE "/app/worktrees/[^ ]+" || true)
-    if [ -n "$OWN_WT" ] && [ -d "$OWN_WT" ]; then
-      WORKTREES="$OWN_WT"
-      echo "[$(date -Iseconds)] unit-app SCOPED wt=$OWN_WT (from transcript)" >> "$LOG"
-    fi
-  fi
-fi
-# Fallback: scan all session worktrees (couldn't determine the stopping agent's own).
-if [ -z "$WORKTREES" ]; then
-  if [ -n "$SESSION_SHORT" ]; then
-    WORKTREES=$(git worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2}' | grep "^/app/worktrees/${SESSION_SHORT}/" || true)
-  else
-    WORKTREES=$(git worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2}' | grep "^/app/worktrees/" || true)
-  fi
-  [ -n "$WORKTREES" ] && echo "[$(date -Iseconds)] unit-app SCAN-ALL (transcript scope unavailable)" >> "$LOG"
-fi
+HOOK_TAG="unit-app"
+. /home/developer/.claude/hooks/resolve-validate-worktree.sh
+resolve_validate_worktree
 
 if [ -z "$WORKTREES" ]; then
   echo "[$(date -Iseconds)] unit-app EXIT=0 no_active_worktree" >> "$LOG"

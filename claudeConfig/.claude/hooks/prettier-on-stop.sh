@@ -12,15 +12,11 @@ cd "$REPO" || { echo "[$(date -Iseconds)] prettier EXIT=0 cd_failed" >> "$LOG"; 
 
 # Only check ACTIVE feature worktrees under /app/worktrees/. See typecheck hook
 # for the rationale (skip main repo — pre-existing state is not our concern).
-# VALIDATE_WORKTREE narrows to one worktree (set by the orchestrator or upstream caller).
+# Scope to the stopping subagent's own worktree via the shared resolver.
 SESSION_SHORT=$(basename "${CHAT_SESSION_DIR:-}" | cut -d'-' -f1)
-if [ -n "${VALIDATE_WORKTREE:-}" ] && [ -d "$VALIDATE_WORKTREE" ]; then
-  WORKTREES="$VALIDATE_WORKTREE"
-elif [ -n "$SESSION_SHORT" ]; then
-  WORKTREES=$(git worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2}' | grep "^/app/worktrees/${SESSION_SHORT}/" || true)
-else
-  WORKTREES=$(git worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2}' | grep "^/app/worktrees/" || true)
-fi
+HOOK_TAG="prettier"
+. /home/developer/.claude/hooks/resolve-validate-worktree.sh
+resolve_validate_worktree
 
 if [ -z "$WORKTREES" ]; then
   echo "[$(date -Iseconds)] prettier EXIT=0 no_active_worktree" >> "$LOG"
