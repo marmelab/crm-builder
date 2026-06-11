@@ -33,28 +33,17 @@ set -u
 LOG="${CHAT_SESSION_DIR:-/chat-service/logs}/hooks.log"
 mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
 
-STDIN=$(cat)
+INPUT=$(cat)
 
 # PreToolUse/Agent schema: { tool_input: { subagent_type, prompt, ... } }.
-# Extract the dispatched type and the identity fields from the prompt in one
-# node pass. enforce-dev-dispatch already blocks developer dispatches missing
-# WORKTREE_PATH, so it is reliably present here for both dev variants.
-INFO=$(node -e '
-try {
-  const i = JSON.parse(process.argv[1] || "{}");
-  const t = i.tool_input || {};
-  const st = t.subagent_type || "";
-  const pr = t.prompt || "";
-  const wt = (pr.match(/WORKTREE_PATH:\s*(\S+)/) || [])[1] || "";
-  const br = (pr.match(/BRANCH_NAME:\s*(\S+)/) || [])[1] || "";
-  const tk = (pr.match(/TASK_ID:\s*(TASK-\d+)/) || [])[1] || "";
-  process.stdout.write([st, wt, br, tk].join("|"));
-} catch (e) { process.stdout.write("|||"); }
-' "$STDIN" 2>/dev/null || echo "|||")
-
-AGENT_TYPE="${INFO%%|*}"; REST="${INFO#*|}"
-WORKTREE_PATH="${REST%%|*}"; REST="${REST#*|}"
-BRANCH_NAME="${REST%%|*}"; TASK_ID="${REST##*|}"
+# The canonical parser (lib-dispatch-parse.js) extracts the dispatched type and
+# the identity fields from the prompt in one place; we source its SUBAGENT_TYPE,
+# WORKTREE_PATH, BRANCH_NAME, TASK_ID. enforce-dev-dispatch already blocks
+# developer dispatches missing WORKTREE_PATH, so it is reliably present here for
+# both dev variants. TASK_ID is anchored (TASK-\d+|SIMPLE|PROMOTE|ROLLBACK), so
+# the per-ticket review-flag reset below only fires on a real TASK-\d+.
+eval "$(node "$(dirname "$0")/lib-dispatch-parse.js" <<<"$INPUT" 2>/dev/null)"
+AGENT_TYPE="$SUBAGENT_TYPE"
 
 # Only act on dev dispatches. Reviewers / mergers / planner / documentator reuse
 # (or never touch) a worktree — exit silently so the dispatch proceeds.

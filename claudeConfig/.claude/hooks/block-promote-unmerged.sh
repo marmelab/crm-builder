@@ -25,27 +25,15 @@ set -u
 
 STDIN=$(cat)
 
-INFO=$(node -e '
-try {
-  const i = JSON.parse(process.argv[1] || "{}");
-  const at = i.agent_type || "";              // "" for the main orchestrator
-  const t = i.tool_input || {};
-  const st = t.subagent_type || "";
-  const pr = t.prompt || "";
-  const promote = /MODE:\s*promote/.test(pr) ? "1" : "0";
-  const short = (pr.match(/SESSION_SHORT_ID:\s*(\S+)/) || [])[1] || "";
-  process.stdout.write([at, st, promote, short].join("|"));
-} catch (e) { process.stdout.write("||0|"); }
-' "$STDIN" 2>/dev/null || echo "||0|")
-
-AGENT_TYPE="${INFO%%|*}"; REST="${INFO#*|}"
-SUBAGENT="${REST%%|*}"; REST="${REST#*|}"
-IS_PROMOTE="${REST%%|*}"; SHORT="${REST##*|}"
+# Source the canonical parser: AGENT_TYPE ("" for the main orchestrator),
+# SUBAGENT_TYPE, MODE (=promote for the promotion dispatch), SESSION_SHORT_ID.
+eval "$(node "$(dirname "$0")/lib-dispatch-parse.js" <<<"$STDIN" 2>/dev/null)"
+SHORT="$SESSION_SHORT_ID"
 
 # Only gate the orchestrator's promotion-merger dispatch.
 [ -z "$AGENT_TYPE" ] || exit 0          # a subagent is calling — not our concern
-[ "$SUBAGENT" = "merger" ] || exit 0
-[ "$IS_PROMOTE" = "1" ] || exit 0
+[ "$SUBAGENT_TYPE" = "merger" ] || exit 0
+[ "$MODE" = "promote" ] || exit 0
 
 [ -z "$SHORT" ] && SHORT=$(basename "${CHAT_SESSION_DIR:-}" | cut -d'-' -f1)
 [ -z "$SHORT" ] && exit 0

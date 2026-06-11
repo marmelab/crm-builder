@@ -20,34 +20,34 @@ SESSION_SHORT=$(basename "${CHAT_SESSION_DIR:-}" | cut -d'-' -f1)
 
 STDIN=$(cat)
 
-INFO=$(node -e '
-try {
-  const i = JSON.parse(process.argv[1] || "{}");
-  const t = i.tool_input || {};
-  const st = t.subagent_type || "";
-  const pr = t.prompt || "";
-  const task = (pr.match(/TASK-\d+/) || [""])[0];
-  const skip = (/TASK_ID:\s*(SIMPLE|PROMOTE)/.test(pr) || /MODE:\s*promote/.test(pr)) ? "1" : "0";
-  process.stdout.write([st, task, skip].join("|"));
-} catch (e) { process.stdout.write("||") }
-' "$STDIN" 2>/dev/null || echo "||")
+# Source the canonical parser. TASK_ID is anchored at line start and only
+# accepts TASK-\d+|SIMPLE|PROMOTE|ROLLBACK — so prose mentioning another ticket
+# (e.g. "TASK-001 is merged; now ...") can no longer mis-key this gate, which
+# was the Bug #12 root cause (the old bare /TASK-\d+/ scan keyed on the FIRST
+# match anywhere in the prompt).
+eval "$(node "$(dirname "$0")/lib-dispatch-parse.js" <<<"$STDIN" 2>/dev/null)"
 
-ST="${INFO%%|*}"; REST="${INFO#*|}"; TASK="${REST%%|*}"; SKIP="${REST##*|}"
+[ "$SUBAGENT_TYPE" = "merger" ] || exit 0   # only gate merger dispatches
+# SIMPLE / promotion-only / rollback dispatches carry no per-ticket review.
+# (TASK_ID: SIMPLE is now structural in the orchestrator template — Step 4 — so
+# this skip is reachable; previously the SIMPLE template carried no TASK_ID line
+# and the skip regex was dead, accidentally relying on the empty-TASK fail-open.)
+[ "$TASK_ID" = "SIMPLE" ] || [ "$TASK_ID" = "PROMOTE" ] || [ "$TASK_ID" = "ROLLBACK" ] && exit 0
+[ "$MODE" = "promote" ] && exit 0
+# Can't identify a per-ticket TASK: fail open (e.g. a merger dispatch without a
+# TASK_ID line — same posture as before, never wedge the flow).
+[ -z "$TASK_ID" ] && exit 0
 
-[ "$ST" = "merger" ] || exit 0       # only gate merger dispatches
-[ "$SKIP" = "1" ] && exit 0          # SIMPLE flow / promotion-only: no per-ticket review
-[ -z "$TASK" ] && exit 0             # can't identify the ticket: fail open
-
-Q="/tmp/review-${SESSION_SHORT}-${TASK}-quality-reviewer"
-T="/tmp/review-${SESSION_SHORT}-${TASK}-test-validator"
+Q="/tmp/review-${SESSION_SHORT}-${TASK_ID}-quality-reviewer"
+T="/tmp/review-${SESSION_SHORT}-${TASK_ID}-test-validator"
 MISSING=""
 [ -f "$Q" ] || MISSING="quality-reviewer"
 [ -f "$T" ] || MISSING="${MISSING:+$MISSING and }test-validator"
 [ -z "$MISSING" ] && exit 0          # both APPROVED: allow the merge
 
 cat >&2 <<EOF
-[block-merger-without-review] Refusing to dispatch the merger for ${TASK}: no APPROVED verdict from ${MISSING} yet.
+[block-merger-without-review] Refusing to dispatch the merger for ${TASK_ID}: no APPROVED verdict from ${MISSING} yet.
 The no-team flow is: developer -> quality-reviewer + test-validator -> (BOTH return APPROVED) -> merger.
-Dispatch quality-reviewer-${TASK} and test-validator-${TASK} first (STATE B transition table), then dispatch the merger only after both APPROVED.
+Dispatch quality-reviewer-${TASK_ID} and test-validator-${TASK_ID} first (STATE B transition table), then dispatch the merger only after both APPROVED.
 EOF
 exit 2

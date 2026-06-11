@@ -442,6 +442,7 @@ The dev's (or reviewer's) final response is in your context.
 
 ```
 ROLE: merger (SIMPLE mode — single-shot, no team)
+TASK_ID: SIMPLE
 SESSION_SHORT_ID: <SESSION_SHORT_ID>
 BRANCH_NAME: <SESSION_SHORT_ID>/simple
 WORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/simple
@@ -457,6 +458,7 @@ The SIMPLE merger does Stage A (branch → session branch) then PROMOTION (Stage
 
 ```
 ROLE: merger (ROLLBACK mode — single-shot, no team)
+TASK_ID: ROLLBACK
 SESSION_SHORT_ID: <SESSION_SHORT_ID>
 BRANCH_NAME: <SESSION_SHORT_ID>/simple
 
@@ -815,7 +817,7 @@ Bash("touch /tmp/notified-merger-<SESSION_SHORT_ID>-simple")
 Agent({
   subagent_type: "merger",
   description: "Merge SIMPLE branch <SESSION_SHORT_ID>/simple with migration",
-  prompt: "ROLE: merger (SIMPLE mode — single-shot, no team)\nSESSION_SHORT_ID: <SESSION_SHORT_ID>\nBRANCH_NAME: <SESSION_SHORT_ID>/simple\nWORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/simple\nTICKETS_DIR: <absolute per-session path>\n\nFollow the WORKFLOW in your agent file (merger.md). Use the SIMPLE-mode columns.\nOutput: \"DONE: commit=<short sha>. files=[<paths>]\" OR \"FAILED: <reason>\""
+  prompt: "ROLE: merger (SIMPLE mode — single-shot, no team)\nTASK_ID: SIMPLE\nSESSION_SHORT_ID: <SESSION_SHORT_ID>\nBRANCH_NAME: <SESSION_SHORT_ID>/simple\nWORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/simple\nTICKETS_DIR: <absolute per-session path>\n\nFollow the WORKFLOW in your agent file (merger.md). Use the SIMPLE-mode columns.\nOutput: \"DONE: commit=<short sha>. files=[<paths>]\" OR \"FAILED: <reason>\""
 })
 ```
 
