@@ -12,6 +12,16 @@ import { toolDetail, sendMessageVerdictFromInput } from './tools.js';
 // the planner's reply and the first dev's GO.
 const SKIP_CHILD = new Set();
 
+// Per-file parse cache: path → { size, mtimeMs, events }
+// Keyed on { size, mtimeMs } — subagent transcripts are append-only, so any
+// append changes both fields, guaranteeing a miss on stale entries. We cache
+// the raw events array (not the post-processed result) so that per-call state
+// (phase mutation, toolCounts/allToolCalls accumulators, token dedup Set) is
+// always applied fresh — caching the derived result would incorrectly embed
+// external accumulator state into the cache value.
+// Bound: clear when > 500 entries to prevent unbounded growth over long runs.
+const parseCache = new Map(); // path → { size, mtimeMs, events }
+
 // Enrich COMPLEX team members (task_type='in_process_teammate') with their
 // tool calls — those live in `~/.claude/projects/-app/<claudeSessionId>/subagents/agent-<task_id>.jsonl`,
 // never streamed into the orchestrator's main log. Without this, every
@@ -146,9 +156,18 @@ async function appendSubagentToolUses(files, phase, toolCounts, allToolCalls) {
   let lastEventTs = null;
 
   for (const file of files) {
-    const events = [];
+    let events;
     try {
-      for await (const ev of readJsonl(file)) events.push(ev);
+      const fileStat = await stat(file);
+      const cached = parseCache.get(file);
+      if (cached && cached.size === fileStat.size && cached.mtimeMs === fileStat.mtimeMs) {
+        events = cached.events;
+      } else {
+        events = [];
+        for await (const ev of readJsonl(file)) events.push(ev);
+        if (parseCache.size > 500) parseCache.clear();
+        parseCache.set(file, { size: fileStat.size, mtimeMs: fileStat.mtimeMs, events });
+      }
     } catch { continue; }
     if (events.length) lastEventTs = events[events.length - 1].timestamp || lastEventTs;
 
