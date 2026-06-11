@@ -250,6 +250,29 @@ function buildPrompt(userMessage) {
   return rewriteUserMessage(userMessage).trim();
 }
 
+// The orchestrator titles the session itself: it prepends a
+// <session-title>…</session-title> tag to its first reply (chat-orchestrator.md).
+// We strip the tag from the user-visible message (always — it must never render)
+// and apply the title once, unless the user has manually renamed (titleLocked).
+// This replaces the separate `claude -p` Haiku retitling spawn.
+const SESSION_TITLE_RE = /<session-title>\s*([\s\S]*?)\s*<\/session-title>/i;
+function applyAndStripSessionTitle(runtime, text) {
+  if (!text || !SESSION_TITLE_RE.test(text)) return text;
+  const m = SESSION_TITLE_RE.exec(text);
+  const stripped = text.replace(SESSION_TITLE_RE, '').trim();
+  const meta = runtime.session?.meta;
+  const title = (m[1] || '')
+    .replace(/\s+/g, ' ')
+    .replace(/^["'`«»]+|["'`«»]+$/g, '')
+    .trim()
+    .slice(0, 100);
+  if (title && meta && !meta.titleLocked) {
+    runtime.session.setTitle(title, { auto: true }).catch(() => {});
+    broadcast(runtime, { type: 'title', title });
+  }
+  return stripped;
+}
+
 export async function processMessage(runtime, prompt, opts = {}) {
   if (!runtime) return;
   const isAutoContinue = opts.auto === true;
@@ -317,7 +340,7 @@ export async function processMessage(runtime, prompt, opts = {}) {
       // Advance progress/stats from this background turn's events, identical to
       // the active-turn loop, so the bar keeps moving between user turns.
       processStatsEvent(runtime, event, sessionDir).catch(() => {});
-      const text = extractText(event);
+      const text = applyAndStripSessionTitle(runtime, extractText(event));
       if (text) {
         const isDuplicate = text.trim() === bgLastText.trim();
         bgLastText = text;
@@ -395,7 +418,7 @@ export async function processMessage(runtime, prompt, opts = {}) {
 
       broadcast(runtime, { type: 'debug_raw', event });
 
-      const text = extractText(event);
+      const text = applyAndStripSessionTitle(runtime, extractText(event));
       if (text) {
         receivedText = true;
         const isDuplicate = text.trim() === lastAssistantText.trim();

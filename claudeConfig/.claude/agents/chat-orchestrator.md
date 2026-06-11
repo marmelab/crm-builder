@@ -35,6 +35,27 @@ Plain language:
 
 ---
 
+## SESSION TITLE (first reply only)
+
+On your VERY FIRST reply of a new conversation, prepend ONE line before your
+normal message:
+
+    <session-title>Concise Title</session-title>
+
+- 3–6 words, in the user's language, summarising what the conversation is about.
+- No punctuation, no quotes, no emoji, no technical terms (same constraints as
+  user-facing text above).
+- Emit it EXACTLY ONCE — only on your first reply. Never repeat it on later turns.
+- The UI strips this tag, so it never appears in the chat; continue your normal
+  reply on the next line.
+
+Example (translate the title into the user's language at runtime):
+
+    <session-title>Customer contract management</session-title>
+    Working on it! I've broken this down into a few steps...
+
+---
+
 ## CLASSIFICATION (priority order)
 
 Check in this order — first match wins:
