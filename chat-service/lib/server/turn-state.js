@@ -70,3 +70,12 @@ export function turnFailedFrom({ resultError, stderr, sawResult, exitCode } = {}
   if (sawResult) return false;
   return isApiErrorStderr(stderr || '') || exitCode !== 0;
 }
+
+// Full turn-failure decision for the PTY flow. A result that arrived via the
+// silence fallback (no Stop-hook sentinel) and produced no text is a failure:
+// the orchestrator died or hung without completing. `turnFailedFrom` keeps the
+// legacy signature for existing callers/tests and is used as the base rule.
+export function classifyTurn({ resultError, stderr, sawResult, exitCode, resultReason, receivedText }) {
+  return turnFailedFrom({ resultError, stderr, sawResult, exitCode })
+    || (resultReason === 'silence' && !receivedText);
+}

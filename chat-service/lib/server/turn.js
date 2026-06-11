@@ -7,7 +7,7 @@ import { runtimes, transitionState, noteRateLimit, cancelIdleTeardown } from './
 import { rewriteUserMessage, extractText, extractToolUses, friendlyError } from './claude-spawn.js';
 import { PtySession } from './pty-session.js';
 import { endsWithQuestion } from './session-store.js';
-import { decideNextState, turnFailedFrom } from './turn-state.js';
+import { decideNextState, turnFailedFrom, classifyTurn } from './turn-state.js';
 import { startSubagentTailer, stopSubagentTailer } from './subagent-tail.js';
 import {
   emptyBreakdown, addBreakdown, breakdownFromModelUsage, costFromBreakdown,
@@ -390,6 +390,7 @@ export async function processMessage(runtime, prompt, opts = {}) {
   let resultError = false;
   let lastAssistantText = '';
   let sawResult = false;
+  let resultReason = 'sentinel';
 
   const sessionDir = `${LOG_DIR}/${runtime.session.id}`;
 
@@ -538,7 +539,8 @@ export async function processMessage(runtime, prompt, opts = {}) {
 
       if (event.type === 'result') {
         sawResult = true;
-        driverLog(`result seen receivedText=${receivedText} session=${runtime.session?.id}`);
+        resultReason = event.reason || 'sentinel';
+        driverLog(`result seen receivedText=${receivedText} reason=${resultReason} session=${runtime.session?.id}`);
         if (event.is_error) resultError = true;
         if (event.modelUsage && Object.keys(event.modelUsage).length > 0) {
           runtime.stats.tokensBreakdownCurrentSpawn = breakdownFromModelUsage(event.modelUsage);
@@ -579,6 +581,9 @@ export async function processMessage(runtime, prompt, opts = {}) {
       const stopText = '⏹ Session stopped.';
       broadcast(runtime, { type: 'message', role: 'assistant', content: stopText, ts: new Date().toISOString() });
       await runtime.session?.recordMessage('assistant', stopText).catch(() => {});
+    // Stays turnFailedFrom (not classifyTurn): the `|| !receivedText` term here
+    // already subsumes classifyTurn's silence-no-text rule, so converting would
+    // be redundant. Only the settle-decision in the `finally` uses classifyTurn.
     } else if (!staleRetry && (turnFailedFrom({ resultError, stderr, sawResult, exitCode }) || !receivedText || rateLimit)) {
       const errText = friendlyError({ exitCode, stderr, rateLimit, resultError });
       broadcast(runtime, { type: 'message', role: 'assistant', content: errText, ts: new Date().toISOString() });
@@ -646,7 +651,11 @@ export async function processMessage(runtime, prompt, opts = {}) {
 
       const exitCode = sawResult ? 0 : 1;
       const stderr = runtime.ptySession?.stderr ?? '';
-      const turnFailed = turnFailedFrom({ resultError, stderr, sawResult, exitCode });
+      // classifyTurn = turnFailedFrom + the silence-no-text rule: a result that
+      // arrived via the 120 s fallback (no Stop sentinel) and produced no text
+      // is a failure (the orchestrator died/hung). A silence result WITH text
+      // stays 'completed' (long COMPLEX turns may legitimately miss the sentinel).
+      const turnFailed = classifyTurn({ resultError, stderr, sawResult, exitCode, resultReason, receivedText });
       const turnErrored = turnFailed || !receivedText || !!rateLimit;
       const asksQuestion = !wasStopped && !turnErrored && endsWithQuestion(lastAssistantText);
       const nextState = decideNextState({ wasStopped, rateLimit: !!rateLimit, turnFailed, asksQuestion });

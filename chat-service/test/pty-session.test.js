@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { detectPrompt } from '../lib/server/pty-session.js';
+import { classifyTurn } from '../lib/server/turn-state.js';
 
 // Claude Code interactive prompt appears on its own after a response.
 // After strip-ansi the prompt line contains ❯ or > at the end of the text.
@@ -34,4 +35,25 @@ test('detectPrompt: returns false for > inside a code block line', () => {
 test('detectPrompt: returns false for welcome-screen ❯ (mid-text with suggestion)', () => {
   // The welcome-screen chunk: "❯ Try 'create a util...'" followed by more lines
   assert.equal(detectPrompt('ClaudeCode\r\r\n❯ Try "create a util logging.py"\r\r\nbypass permissions\r\r\n'), false);
+});
+
+test('silence-timeout result with no text is a failed turn', () => {
+  assert.equal(classifyTurn({
+    resultError: false, stderr: '', sawResult: true, exitCode: 0,
+    resultReason: 'silence', receivedText: false,
+  }), true);
+});
+
+test('sentinel result with text is a clean completion', () => {
+  assert.equal(classifyTurn({
+    resultError: false, stderr: '', sawResult: true, exitCode: 0,
+    resultReason: 'sentinel', receivedText: true,
+  }), false);
+});
+
+test('silence result WITH text stays completed (long turns may miss the sentinel)', () => {
+  assert.equal(classifyTurn({
+    resultError: false, stderr: '', sawResult: true, exitCode: 0,
+    resultReason: 'silence', receivedText: true,
+  }), false);
 });

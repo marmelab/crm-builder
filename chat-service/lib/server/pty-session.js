@@ -8,6 +8,7 @@ import { getOrchestratorModel } from './system-prompt.js';
 import { buildSpawnEnv } from '../spawn-env.js';
 import { TranscriptWatcher } from './transcript-watcher.js';
 import { costFromBreakdown } from '../stats/io.js';
+import { isApiErrorStderr } from './turn-state.js';
 import { join } from 'node:path';
 
 // Exported for unit testing.
@@ -133,7 +134,7 @@ export class PtySession extends EventEmitter {
     // Safety timeout: if Claude never outputs anything after sending,
     // emit result after STARTUP_TIMEOUT_MS. #onData resets this to TURN_TIMEOUT_MS on first chunk.
     clearTimeout(this.#silenceTimer);
-    this.#silenceTimer = setTimeout(() => this.#emitResult(), STARTUP_TIMEOUT_MS);
+    this.#silenceTimer = setTimeout(() => this.#emitResult('silence'), STARTUP_TIMEOUT_MS);
     // Sanitize message to avoid multi-byte UTF-8 sequences whose continuation
     // bytes (0x80–0xBF) land in the C1 control-code range and get mishandled
     // by Claude's Ink TUI input handler, silently garbling the message.
@@ -251,7 +252,7 @@ export class PtySession extends EventEmitter {
     // 150 ms: the file-watcher debounce is 50 ms, so by 150 ms the debounced
     // #poll() will have run and emitted the assistant event. Without this margin
     // the 50 ms sentinel delay raced the 50 ms file-watcher debounce.
-    setTimeout(() => this.#emitResult(), 150);
+    setTimeout(() => this.#emitResult('sentinel'), 150);
   }
 
   #onData(chunk) {
@@ -282,10 +283,10 @@ export class PtySession extends EventEmitter {
     // Turn completion is driven by the Stop hook sentinel, not prompt detection —
     // detecting the ❯ prompt here would race with the JSONL watcher (50 ms debounce).
     clearTimeout(this.#silenceTimer);
-    this.#silenceTimer = setTimeout(() => this.#emitResult(), TURN_TIMEOUT_MS);
+    this.#silenceTimer = setTimeout(() => this.#emitResult('silence'), TURN_TIMEOUT_MS);
   }
 
-  async #emitResult() {
+  async #emitResult(reason = 'sentinel') {
     if (this.#resultEmitted) return; // idempotent
     this.#resultEmitted = true;
     clearTimeout(this.#silenceTimer);
@@ -313,6 +314,11 @@ export class PtySession extends EventEmitter {
       total_cost_usd += perModelCost;
     }
 
-    this.emit('event', { type: 'result', is_error: false, total_cost_usd, modelUsage });
+    // The Stop hook is the only positive completion signal. A silence-timeout
+    // result is a degraded path: flag it, and classify the screen buffer for
+    // auth/network signatures so turn.js can settle 'error' instead of
+    // pretending the turn completed.
+    const is_error = reason !== 'sentinel' && isApiErrorStderr(this.#outputBuffer);
+    this.emit('event', { type: 'result', is_error, reason, total_cost_usd, modelUsage });
   }
 }
