@@ -54,6 +54,10 @@ export class PtySession extends EventEmitter {
     const appendedPrompt = `<mode>${mode}</mode>\n<session_dir>${sessionDir}</session_dir>`;
 
     const args = ['--dangerously-skip-permissions'];
+    // No MCP servers for the orchestrator: account-level claude.ai connectors
+    // (13+ needs-auth servers) waste ~8K tokens per spawn and expose tools the
+    // orchestrator must never call directly (everything routes via Agent).
+    args.push('--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}');
     if (claudeSessionId) args.push('--resume', claudeSessionId);
     // Load the orchestrator agent file so the state machine, CLASSIFICATION,
     // and LANGUAGE RULES are active. Without --agent, the TUI starts with the
