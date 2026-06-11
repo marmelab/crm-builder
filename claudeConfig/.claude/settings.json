@@ -16,6 +16,7 @@
         "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
     },
     "skillListingMaxDescChars": 512,
+    "skipDangerousModePermissionPrompt": true,
     "permissions": {
         "allow": []
     },
