@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdir, writeFile, appendFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { TranscriptWatcher } from '../lib/server/transcript-watcher.js';
+import { TranscriptWatcher, classifyToolResult, parseTaskNotification } from '../lib/server/transcript-watcher.js';
 
 // Helper: wait for an event with timeout
 function waitForEvent(emitter, event, timeoutMs = 2000) {
@@ -119,6 +119,131 @@ test('TranscriptWatcher: ignores non-assistant JSONL entries', async () => {
   await new Promise(r => setTimeout(r, 500));
 
   assert.equal(events.length, 0, 'should not emit user entries');
+
+  watcher.close();
+  await rm(dir, { recursive: true });
+});
+
+// --- Bug #8: defer synthetic completion for background Agent dispatches ---
+
+test('a background-launch stub is not a completion and yields the agent id', () => {
+  const stub = 'Async agent launched successfully.\nagentId: a2eb460474ced63b4 (internal ID - do not mention to user...)';
+  const r = classifyToolResult(stub);
+  assert.equal(r.background, true);
+  assert.equal(r.agentId, 'a2eb460474ced63b4');
+});
+
+test('a regular tool_result is an immediate completion', () => {
+  const r = classifyToolResult('DONE: branch=abc/TASK-001 commit=12ab34c files=[src/x.ts]');
+  assert.equal(r.background, false);
+});
+
+test('a task-notification user entry resolves to the launched agent id', () => {
+  const text = '<task-notification>\n<task-id>a2eb460474ced63b4</task-id>\n<status>completed</status>\n</task-notification>';
+  assert.equal(parseTaskNotification(text), 'a2eb460474ced63b4');
+});
+
+test('parseTaskNotification matches the real queue-operation shape (with tool-use-id)', () => {
+  // Real sample from a live transcript: the notification also carries a
+  // <tool-use-id>, but we key on <task-id> (the internal agentId).
+  const text = '<task-notification>\n<task-id>a3a7bc83b00cf3663</task-id>\n<tool-use-id>toolu_01Vrv5p7xCdw2Ao5ZuW7zhJC</tool-use-id>\n<status>killed</status>\n</task-notification>';
+  assert.equal(parseTaskNotification(text), 'a3a7bc83b00cf3663');
+});
+
+test('TranscriptWatcher: a background Agent dispatch defers completion until the task-notification', async () => {
+  const dir = join(tmpdir(), `tw-test-bg-${Date.now()}`);
+  await mkdir(dir, { recursive: true });
+  const sessionId = 'bg-defer-session';
+  const jsonlPath = join(dir, `${sessionId}.jsonl`);
+  await writeFile(jsonlPath, '');
+
+  const watcher = new TranscriptWatcher(sessionId, dir);
+  await watcher.start();
+
+  const events = [];
+  watcher.on('event', e => events.push(e));
+
+  const toolId = 'toolu_bg_001';
+  const agentId = 'a3a7bc83b00cf3663';
+
+  // 1. Assistant dispatches a background Agent → task_started, id tracked as pending.
+  await appendFile(jsonlPath, JSON.stringify({
+    type: 'assistant',
+    message: { role: 'assistant', content: [
+      { type: 'tool_use', name: 'Agent', id: toolId, input: { description: 'Implement TASK-008', run_in_background: true } },
+    ] },
+    uuid: 'a1', sessionId,
+  }) + '\n');
+  await watcher.flush();
+
+  // 2. Immediate stub tool_result → must NOT emit a completion.
+  await appendFile(jsonlPath, JSON.stringify({
+    type: 'user',
+    message: { role: 'user', content: [
+      { type: 'tool_result', tool_use_id: toolId, content: `Async agent launched successfully.\nagentId: ${agentId} (internal ID - do not mention to user.)` },
+    ] },
+    uuid: 'u1', sessionId,
+  }) + '\n');
+  await watcher.flush();
+
+  assert.equal(
+    events.filter(e => e.subtype === 'task_notification' && e.status === 'completed').length,
+    0,
+    'background stub must not synthesise a completion',
+  );
+
+  // 3. The real <task-notification> queue-operation entry → emits completion keyed on the Agent tool_use_id.
+  await appendFile(jsonlPath, JSON.stringify({
+    type: 'queue-operation',
+    operation: 'enqueue',
+    sessionId,
+    content: `<task-notification>\n<task-id>${agentId}</task-id>\n<tool-use-id>${toolId}</tool-use-id>\n<status>completed</status>\n</task-notification>`,
+  }) + '\n');
+  await watcher.flush();
+
+  const completions = events.filter(e => e.subtype === 'task_notification' && e.status === 'completed');
+  assert.equal(completions.length, 1, 'task-notification should produce exactly one completion');
+  assert.equal(completions[0].task_id, toolId, 'completion must be keyed on the Agent tool_use_id');
+
+  watcher.close();
+  await rm(dir, { recursive: true });
+});
+
+test('TranscriptWatcher: a foreground Agent tool_result still completes immediately', async () => {
+  const dir = join(tmpdir(), `tw-test-fg-${Date.now()}`);
+  await mkdir(dir, { recursive: true });
+  const sessionId = 'fg-immediate-session';
+  const jsonlPath = join(dir, `${sessionId}.jsonl`);
+  await writeFile(jsonlPath, '');
+
+  const watcher = new TranscriptWatcher(sessionId, dir);
+  await watcher.start();
+
+  const events = [];
+  watcher.on('event', e => events.push(e));
+
+  const toolId = 'toolu_fg_001';
+  await appendFile(jsonlPath, JSON.stringify({
+    type: 'assistant',
+    message: { role: 'assistant', content: [
+      { type: 'tool_use', name: 'Agent', id: toolId, input: { description: 'planner' } },
+    ] },
+    uuid: 'a1', sessionId,
+  }) + '\n');
+  await watcher.flush();
+
+  await appendFile(jsonlPath, JSON.stringify({
+    type: 'user',
+    message: { role: 'user', content: [
+      { type: 'tool_result', tool_use_id: toolId, content: 'DONE: tickets written' },
+    ] },
+    uuid: 'u1', sessionId,
+  }) + '\n');
+  await watcher.flush();
+
+  const completions = events.filter(e => e.subtype === 'task_notification' && e.status === 'completed');
+  assert.equal(completions.length, 1, 'foreground result must complete immediately');
+  assert.equal(completions[0].task_id, toolId);
 
   watcher.close();
   await rm(dir, { recursive: true });

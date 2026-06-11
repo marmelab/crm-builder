@@ -4,6 +4,25 @@ import { watch, watchFile, unwatchFile } from 'node:fs';
 import { join, basename } from 'node:path';
 import { emptyBreakdown, addBreakdown, breakdownFromUsage } from '../stats/io.js';
 
+// A run_in_background Agent dispatch returns an immediate stub tool_result; the
+// REAL completion arrives later as a `<task-notification>` entry keyed by the
+// internal agentId. These pure helpers are exported for unit tests.
+export function classifyToolResult(text) {
+  const m = /Async agent launched successfully\.?[\s\S]*?agentId:\s*([A-Za-z0-9_-]+)/.exec(text || '');
+  return m ? { background: true, agentId: m[1] } : { background: false, agentId: null };
+}
+
+export function parseTaskNotification(text) {
+  const m = /<task-notification>[\s\S]*?<task-id>([A-Za-z0-9_-]+)<\/task-id>/.exec(text || '');
+  return m ? m[1] : null;
+}
+
+function toolResultText(content) {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) return content.map((c) => (typeof c === 'string' ? c : c?.text || '')).join('\n');
+  return '';
+}
+
 export class TranscriptWatcher extends EventEmitter {
   #sessionId;
   #projectDir;
@@ -23,6 +42,10 @@ export class TranscriptWatcher extends EventEmitter {
   // Tool-use IDs of pending Agent() calls — used to emit synthetic task_started /
   // task_notification events so activeAgents tracking works without system events.
   #pendingAgentIds = new Set();
+  // Internal agentId → Agent tool_use_id, for run_in_background dispatches whose
+  // immediate stub tool_result is NOT a completion. The completion is emitted
+  // later when the matching `<task-notification>` entry arrives.
+  #bgAgentToToolId = new Map();
 
   // projectDir: directory containing <sessionId>.jsonl files.
   // sessionId: null for new sessions (watch dir), string for resumed sessions.
@@ -208,15 +231,46 @@ export class TranscriptWatcher extends EventEmitter {
       } else if (entry.type === 'user') {
         // Emit synthetic task_notification/completed when a tool_result closes a
         // pending Agent() call. The user entry itself is not forwarded.
-        for (const b of entry.message?.content ?? []) {
+        // A run_in_background dispatch returns an immediate stub tool_result that
+        // is NOT a completion — defer it to the later `<task-notification>`.
+        const blocks = Array.isArray(entry.message?.content)
+          ? entry.message.content
+          : [{ type: 'text', text: String(entry.message?.content ?? '') }];
+        for (const b of blocks) {
           if (b.type === 'tool_result' && this.#pendingAgentIds.has(b.tool_use_id)) {
             this.#pendingAgentIds.delete(b.tool_use_id);
-            this.emit('event', { type: 'system', subtype: 'task_notification', status: 'completed', task_id: b.tool_use_id });
+            const { background, agentId } = classifyToolResult(toolResultText(b.content));
+            if (background && agentId) {
+              // Completion is deferred to the matching <task-notification> entry.
+              this.#bgAgentToToolId.set(agentId, b.tool_use_id);
+            } else {
+              this.emit('event', { type: 'system', subtype: 'task_notification', status: 'completed', task_id: b.tool_use_id });
+            }
+          } else if (b.type === 'text') {
+            // Defensive: a <task-notification> delivered as a user text block.
+            this.#resolveTaskNotification(b.text);
           }
         }
+      } else if (entry.type === 'queue-operation') {
+        // The real `<task-notification>` for a background Agent arrives here, with
+        // the notification XML on the top-level `content` string.
+        this.#resolveTaskNotification(entry.content);
       } else if (entry.type === 'rate_limit_event') {
         this.emit('event', entry);
       }
+    }
+  }
+
+  // Resolve a deferred background-Agent completion from a `<task-notification>`.
+  // The notification is keyed on the internal agentId (<task-id>); we map it back
+  // to the original Agent tool_use_id so the progress-bar / stats consumer credits
+  // the right phase — and only at real completion time, not at dispatch.
+  #resolveTaskNotification(text) {
+    const agentId = parseTaskNotification(text);
+    if (agentId && this.#bgAgentToToolId.has(agentId)) {
+      const toolId = this.#bgAgentToToolId.get(agentId);
+      this.#bgAgentToToolId.delete(agentId);
+      this.emit('event', { type: 'system', subtype: 'task_notification', status: 'completed', task_id: toolId });
     }
   }
 
