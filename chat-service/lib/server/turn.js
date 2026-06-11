@@ -49,6 +49,12 @@ function parseResetsAtFromText(text) {
   return Math.floor(reset.getTime() / 1000);
 }
 
+// Temporary instrumentation for the noAgentTeam PTY background-turn driver.
+// Writes to chat-err.log (supervisor stderr). Remove once the driver is proven.
+function driverLog(msg) {
+  try { console.error(`[bg-driver ${new Date().toISOString()}] ${msg}`); } catch {}
+}
+
 // ── Background-turn driver ───────────────────────────────────────────────────
 // Per-session heartbeat timers + state, keyed by session id.
 const bgDrivers = new Map();
@@ -67,6 +73,7 @@ function startBgDriver(runtime, runtimes) {
   clearBgDriver(sessionId);
   const sDir = `${LOG_DIR}/${sessionId}`;
   const state = { prevSig: null, noProgress: 0, resumed: false, timer: null };
+  driverLog(`heartbeat started session=${sessionId}`);
 
   state.timer = setInterval(async () => {
     const current = runtimes.get(sessionId);
@@ -74,13 +81,19 @@ function startBgDriver(runtime, runtimes) {
     // the PTY has died (a fresh PTY's exit handler / next turn re-arms it).
     if (!current) { clearBgDriver(sessionId); return; }
     if (current.busy) return;
-    if (!current.ptySession || current.ptySession.closed) { clearBgDriver(sessionId); return; }
+    if (!current.ptySession || current.ptySession.closed) {
+      driverLog(`heartbeat stop: PTY gone session=${sessionId}`);
+      clearBgDriver(sessionId);
+      return;
+    }
 
     const { total, pendingCount, pendingSig } = await readTicketStatuses(sDir);
     if (total === 0) { clearBgDriver(sessionId); return; }          // not a COMPLEX wave
     if (pendingCount === 0) {                                       // wave finished
+      driverLog(`heartbeat done: all terminal session=${sessionId}`);
       clearBgDriver(sessionId);
       await transitionState(current, 'completed');
+      broadcast(current, { type: 'status', working: false });
       if (await sessionHasMergedTickets(sDir)) scheduleDocumentatorRun(sessionId, runtimes);
       return;
     }
@@ -90,6 +103,7 @@ function startBgDriver(runtime, runtimes) {
 
     if (state.noProgress >= HEARTBEAT_GIVEUP_TICKS) {
       // Genuinely stuck — surface the stall once and stop nudging.
+      driverLog(`heartbeat give-up: stall ${state.noProgress} ticks pending=${pendingCount} session=${sessionId}`);
       clearBgDriver(sessionId);
       const done = Math.max(0, total - pendingCount);
       const stallText = `I finished ${done} of ${total} planned pieces, but ${pendingCount} ${pendingCount === 1 ? 'is' : 'are'} still unfinished. Say "continue" and I'll pick the rest back up.`;
@@ -102,6 +116,7 @@ function startBgDriver(runtime, runtimes) {
     if (state.noProgress >= HEARTBEAT_STALL_TICKS && !state.resumed) {
       // Nudges alone haven't advanced the wave — escalate once to a heavyweight
       // resume that re-states the STATE B instructions, then keep nudging.
+      driverLog(`heartbeat escalate: AUTO_CONTINUE after ${state.noProgress} ticks pending=${pendingCount} session=${sessionId}`);
       state.resumed = true;
       current.busy = true;
       processMessage(current, AUTO_CONTINUE_NUDGE, { auto: true })
@@ -111,6 +126,7 @@ function startBgDriver(runtime, runtimes) {
 
     // Normal tick: poke the idle TUI so it delivers pending background-agent
     // completions and runs its Step 2 background turn.
+    driverLog(`heartbeat nudge: noProgress=${state.noProgress} pending=${pendingCount} session=${sessionId}`);
     current.ptySession.nudge();
   }, HEARTBEAT_MS);
 
@@ -207,6 +223,7 @@ export async function processMessage(runtime, prompt, opts = {}) {
   if (!runtime) return;
   const isAutoContinue = opts.auto === true;
 
+  driverLog(`processMessage enter auto=${isAutoContinue} session=${runtime.session?.id} ptyAlive=${!!runtime.ptySession && !runtime.ptySession.closed}`);
   if (runtime.session?.id) {
     clearDocumentatorTimer(runtime.session.id);
     clearBgDriver(runtime.session.id);
@@ -264,6 +281,7 @@ export async function processMessage(runtime, prompt, opts = {}) {
       // While an active turn is running, ptyEventsUntilResult owns the events —
       // skip here to avoid double-processing.
       if (runtime.busy) return;
+      if (event.type === 'background_result') driverLog(`background_result received (idle) session=${runtime.session?.id}`);
       broadcast(runtime, { type: 'debug_raw', event });
       // Advance progress/stats from this background turn's events, identical to
       // the active-turn loop, so the bar keeps moving between user turns.
@@ -366,6 +384,7 @@ export async function processMessage(runtime, prompt, opts = {}) {
 
       if (event.type === 'result') {
         sawResult = true;
+        driverLog(`result seen receivedText=${receivedText} session=${runtime.session?.id}`);
         if (event.is_error) resultError = true;
         if (event.modelUsage && Object.keys(event.modelUsage).length > 0) {
           runtime.stats.tokensBreakdownCurrentSpawn = breakdownFromModelUsage(event.modelUsage);
@@ -442,11 +461,11 @@ export async function processMessage(runtime, prompt, opts = {}) {
     runtime.currentProc = null;
     sendStats(runtime);
 
-    broadcast(runtime, { type: 'status', working: false });
     const wasStopped = !!runtime.stopping;
     runtime.stopping = false;
 
     if (!wasStopped && !rateLimit && runtime.queue.length > 0) {
+      broadcast(runtime, { type: 'status', working: false });
       const next = runtime.queue.shift();
       broadcast(runtime, { type: 'queue_updated', queuedIds: runtime.queue.map((q) => q.id) });
       processMessage(runtime, next.content);
@@ -460,22 +479,29 @@ export async function processMessage(runtime, prompt, opts = {}) {
       const turnErrored = turnFailed || !receivedText || !!rateLimit;
       const asksQuestion = !wasStopped && !turnErrored && endsWithQuestion(lastAssistantText);
       const nextState = decideNextState({ wasStopped, rateLimit: !!rateLimit, turnFailed, asksQuestion });
-      await transitionState(runtime, nextState);
 
-      if (nextState === 'completed' && !turnErrored) {
-        const sessionId = runtime.session?.id;
-        const sDir = sessionId ? `${LOG_DIR}/${sessionId}` : null;
-        if (sDir) {
-          const { total, pendingCount } = await readTicketStatuses(sDir);
-          if (total > 0 && pendingCount > 0) {
-            // COMPLEX wave still in flight: hand off to the background-turn
-            // driver. It nudges the idle PTY so the orchestrator's Step 2
-            // background turns fire (→ background_result), driving the wave
-            // without flooding chat with auto-continue narration.
-            startBgDriver(runtime, runtimes);
-          } else if (await sessionHasMergedTickets(sDir)) {
-            scheduleDocumentatorRun(sessionId, runtimes);
-          }
+      // A COMPLEX wave still in flight must NOT settle to `completed` between
+      // background turns — that hides the progress bar in the UI. Stay
+      // in_progress (bar visible, working:true) and hand off to the background
+      // driver; it transitions to `completed` only once every ticket is terminal.
+      const sessionId = runtime.session?.id;
+      const sDir = sessionId ? `${LOG_DIR}/${sessionId}` : null;
+      let waveInFlight = false;
+      if (nextState === 'completed' && !turnErrored && sDir) {
+        const { total, pendingCount } = await readTicketStatuses(sDir);
+        driverLog(`turn settled: total=${total} pending=${pendingCount} session=${sessionId}`);
+        waveInFlight = total > 0 && pendingCount > 0;
+      }
+
+      if (waveInFlight) {
+        await transitionState(runtime, 'in_progress');
+        broadcast(runtime, { type: 'status', working: true });
+        startBgDriver(runtime, runtimes);
+      } else {
+        await transitionState(runtime, nextState);
+        broadcast(runtime, { type: 'status', working: false });
+        if (nextState === 'completed' && !turnErrored && sDir && await sessionHasMergedTickets(sDir)) {
+          scheduleDocumentatorRun(sessionId, runtimes);
         }
       }
 

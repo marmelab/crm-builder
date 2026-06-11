@@ -209,9 +209,11 @@ export class PtySession extends EventEmitter {
     if (!this.#sessionId || this.#stopDirWatcher) return;
     const sentinel = `pty-turn-done-${this.#sessionId}`;
     const sentinelPath = `/tmp/${sentinel}`;
+    console.error(`[pty ${new Date().toISOString()}] watchForStop armed for ${sentinel}`);
 
     this.#stopDirWatcher = watch('/tmp', { persistent: false }, (_, filename) => {
       if (filename !== sentinel) return;
+      console.error(`[pty ${new Date().toISOString()}] sentinel fired ${sentinel} resultEmitted=${this.#resultEmitted}`);
       if (!this.#resultEmitted) {
         this.#handleStopSentinel(sentinelPath);
       } else {
