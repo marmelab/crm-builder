@@ -422,24 +422,39 @@ function applyAndStripSessionTitle(runtime, text) {
 // its end-of-flow text; we strip it from the visible message (always) and emit a
 // `satisfaction_ask` widget once per request. In the PTY flow POST-DEV runs as a
 // background turn, so this is applied in BOTH the active loop and the bg listener.
-const SATISFACTION_RE = /\n?%%ASK_SATISFACTION(?:\|([^|%\n]*)\|([^|%\n]*)\|([^|%\n]*)\|([^%\n]*))?%%\n?/;
-function applyAndStripSatisfactionAsk(runtime, text) {
-  if (!text) return text;
+// Lazy match up to the closing %%: fields may contain single % and any text
+// except newlines; extra '|' beyond the 4th field folds into `no`. Known residual
+// limitation: a literal `%%` inside a field still terminates the match early.
+const SATISFACTION_RE = /\n?%%ASK_SATISFACTION(\|[^\n]*?)?%%\n?/;
+
+// Exported for unit tests.
+export function parseSatisfactionMarker(text) {
+  if (!text) return null;
   const m = text.match(SATISFACTION_RE);
-  if (!m) return text;
+  if (!m) return null;
   const cleanText = (text.slice(0, m.index) + text.slice(m.index + m[0].length)).trim();
+  const fields = m[1] ? m[1].slice(1).split('|') : [];
+  const [header, body, yes, ...rest] = fields;
+  return {
+    cleanText,
+    payload: {
+      header: header?.trim() || undefined,
+      body:   body?.trim() || undefined,
+      yes:    yes?.trim() || 'Yes, save the changes',
+      no:     rest.join('|').trim() || 'No, I want to change something',
+    },
+  };
+}
+
+function applyAndStripSatisfactionAsk(runtime, text) {
+  const parsed = parseSatisfactionMarker(text);
+  if (!parsed) return text;
   if (!runtime.satisfactionAskSent) {
     runtime.satisfactionAskSent = true;
-    const payload = {
-      header: m[1]?.trim() || undefined,
-      body:   m[2]?.trim() || undefined,
-      yes:    m[3]?.trim() || 'Yes, save the changes',
-      no:     m[4]?.trim() || 'No, I want to change something',
-    };
-    broadcast(runtime, { type: 'satisfaction_ask', ...payload });
-    runtime.session?.setSatisfactionAsk(payload).catch(() => {});
+    broadcast(runtime, { type: 'satisfaction_ask', ...parsed.payload });
+    runtime.session?.setSatisfactionAsk(parsed.payload).catch(() => {});
   }
-  return cleanText;
+  return parsed.cleanText;
 }
 
 export async function processMessage(runtime, prompt, opts = {}) {
