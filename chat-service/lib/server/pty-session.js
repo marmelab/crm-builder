@@ -3,7 +3,7 @@ import stripAnsi from 'strip-ansi';
 import { EventEmitter } from 'node:events';
 import { access, unlink } from 'node:fs/promises';
 import { watch } from 'node:fs';
-import { CWD, CLAUDE_HOME, PROJECT_DIR } from './config.js';
+import { CWD, CLAUDE_HOME, claudeProjectDir } from './config.js';
 import { getOrchestratorModel } from './system-prompt.js';
 import { buildSpawnEnv } from '../spawn-env.js';
 import { TranscriptWatcher } from './transcript-watcher.js';
@@ -93,7 +93,7 @@ export class PtySession extends EventEmitter {
       this.emit('exit', exitCode ?? 1);
     });
 
-    this.#watcher = new TranscriptWatcher(claudeSessionId, PROJECT_DIR, { subagentUsageLines });
+    this.#watcher = new TranscriptWatcher(claudeSessionId, claudeProjectDir(), { subagentUsageLines });
     this.#watcher.on('event', e => {
       // Discover session_id for new sessions so we can watch for the stop sentinel.
       if (e.session_id && !this.#sessionId) {
