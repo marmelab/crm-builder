@@ -296,7 +296,9 @@ async function settleBackgroundRateLimit(runtime, info) {
   runtime.waveActive = false;
   runtime.bgDriverState = null;
   clearBgDriver(runtime.session?.id);
+  runtime.suppressNextPtyRestart = true;            // stop the exit handler respawning the settled session
   try { runtime.ptySession?.kill(); } catch {}      // the CLI hangs on a blocked limit
+  runtime.ptySession = null;
   await stopSubagentTailer(runtime).catch(() => {});
   const errText = friendlyError({ rateLimit: info });
   broadcast(runtime, { type: 'message', role: 'assistant', content: errText, ts: new Date().toISOString() });
@@ -618,6 +620,25 @@ export async function processMessage(runtime, prompt, opts = {}) {
     attachBgListener(runtime.ptySession);
     if (runtime.claudeSessionId) {
       startSubagentTailer(runtime).catch((e) => console.error('[subagent-tail]', e));
+      // If the PTY was respawned mid-wave (crash/OOM restart-once) while no active
+      // turn is running, the resumed orchestrator TUI is idle and nothing nudges
+      // it — re-arm the heartbeat. Key on durable disk ticket state (total>0 &&
+      // pendingCount>0), NOT the in-memory waveActive flag (a "PTY gone" heartbeat
+      // tick may already have cleared it before this restart fires). Skip when an
+      // active turn is about to run (busy) — its own `finally` arms the driver —
+      // and when the driver is already armed. A brand-new session has no resumed
+      // claudeSessionId yet, so this block never runs on its first spawn; even if
+      // it did, total===0 (no tickets) would fail the guard.
+      if (!runtime.busy && !bgDrivers.has(runtime.session?.id)) {
+        readTicketStatuses(`${LOG_DIR}/${runtime.session.id}`)
+          .then(({ total, pendingCount }) => {
+            if (total > 0 && pendingCount > 0 && !runtime.busy && !bgDrivers.has(runtime.session?.id)) {
+              runtime.waveActive = true;
+              startBgDriver(runtime, runtimes);
+            }
+          })
+          .catch(() => {});
+      }
     }
 
     runtime.ptySession.once('exit', () => {
