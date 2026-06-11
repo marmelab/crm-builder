@@ -37,20 +37,37 @@ fi
 CLAUDE_DIR="/home/developer/.claude"
 # Only the OAuth login is shared/persisted (across rebuilds and parallel
 # instances), via a dedicated volume mounted at AUTH_DIR. The harness config
-# (agents/skills/hooks/rules/settings.json) stays image-local in CLAUDE_DIR and
-# is never shadowed by a stale or cross-instance volume copy. We symlink just
-# the login files from AUTH_DIR into CLAUDE_DIR; the CLI reads/writes them
-# through the symlinks, so credentials land in the shared volume.
+# (agents/skills/hooks/rules/settings.json) stays image-local in CLAUDE_DIR.
+#
+# We do NOT symlink the login files into CLAUDE_DIR. The Claude CLI rewrites
+# credentials with an atomic temp-write + rename, which REPLACES a symlink with
+# a regular file — so a refreshed token would land in image-local CLAUDE_DIR and
+# be lost on the next container recreate (recurring 401 "please /login"). Instead:
+#   1. seed CLAUDE_DIR from the persistent volume on boot (restore last good login),
+#   2. a background loop mirrors any credential change back to the volume.
 AUTH_DIR="/home/developer/.claude-auth"
+AUTH_FILES=".credentials.json credentials.json .claude.json"
 
-# Ensure .claude is writable by developer regardless of how the volume mounted —
-# `make claude` writes credentials (through the symlinks below) as the developer
-# user on first OAuth.
 mkdir -p "${CLAUDE_DIR}" "${AUTH_DIR}"
-for f in .credentials.json credentials.json .claude.json; do
-  ln -sfn "${AUTH_DIR}/${f}" "${CLAUDE_DIR}/${f}"
+
+# Seed: the volume is the source of truth across recreates — restore it over any
+# stale container-local copy so the CLI starts from the last good token.
+for f in ${AUTH_FILES}; do
+  [ -f "${AUTH_DIR}/${f}" ] && cp -a "${AUTH_DIR}/${f}" "${CLAUDE_DIR}/${f}" 2>/dev/null || true
 done
 chown -R developer:developer "${CLAUDE_DIR}" "${AUTH_DIR}" 2>/dev/null || true
+
+# Persist: mirror login files CLAUDE_DIR → AUTH_DIR whenever they change (token
+# refresh or fresh `make claude` login). Survives `exec` below as an orphan under
+# pid 1. 10 s cadence is well within token lifetime and recreate cadence.
+( while true; do
+    for f in ${AUTH_FILES}; do
+      if [ -f "${CLAUDE_DIR}/${f}" ] && ! cmp -s "${CLAUDE_DIR}/${f}" "${AUTH_DIR}/${f}" 2>/dev/null; then
+        cp -a "${CLAUDE_DIR}/${f}" "${AUTH_DIR}/${f}" 2>/dev/null || true
+      fi
+    done
+    sleep 10
+  done ) &
 
 if [ -n "${ANTHROPIC_API_KEY}" ]; then
   echo -e "${GREEN}✓  Auth: API key${NC}"
