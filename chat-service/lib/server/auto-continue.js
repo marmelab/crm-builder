@@ -2,39 +2,20 @@ import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 // --- Why this exists -------------------------------------------------------
-// The no-team orchestrator drives a COMPLEX wave as an event-driven loop: it
-// dispatches developers/reviewers/merger as background `Agent` calls and reacts
-// to each completion. That works while it has work to interleave, but a single
-// `claude -p` spawn ends on the SDK `result` event the moment the orchestrator
-// goes idle — and nothing in chat-service re-invokes it on a background-agent
-// completion (processMessage only fires on a user message or queue drain). So a
-// wave that idles waiting on its last in-flight agent (e.g. the big ticket of a
-// wave) stalls: the spawn wraps up, the agent finishes with no live query to
-// react, and the remaining tickets stay pending forever.
+// This module provides two things that turn.js needs for the heartbeat-driven
+// auto-continue loop (see `startBgDriver` in turn.js):
 //
-// This module is the missing driver: after a turn settles `completed` with
-// non-terminal tickets still on the board, chat-service auto-resumes the
-// orchestrator (`claude --resume` with a synthetic nudge) so it picks the wave
-// back up. Bounded by a hard cap and a no-progress guard so it can never loop
-// or burn tokens indefinitely.
-
-// Delay before auto-resuming. Long enough to let an agent that finished right
-// at `result` get its commit on disk, and to debounce against a real user
-// message (which cancels the timer). Under 5 min is irrelevant — a resume
-// re-reads context regardless of prompt-cache TTL.
-export const AUTO_CONTINUE_DELAY_MS = 8_000;
-
-// Hard ceiling on consecutive auto-continues within one wave (reset by any real
-// user message). A healthy wave drives tickets to terminal in far fewer; this
-// is a runaway-cost backstop, not a normal limit.
-export const MAX_AUTO_CONTINUE = 40;
-
-// Stop auto-continuing if this many consecutive resumes leave the set of
-// pending tickets byte-for-byte unchanged — i.e. resuming is no longer making
-// progress (genuinely stuck), so further spawns would just burn tokens.
-// Set high enough to outlast a slow developer agent (each cycle ≈ 30–60 s
-// orchestrator RTT + 8 s delay, so 10 ≈ 6–10 min of patience before stalling).
-export const MAX_NO_PROGRESS = 10;
+//   readTicketStatuses(sessionDir)
+//     Reads TASK-<n>.json files from the session directory and returns
+//     { total, pendingCount, pendingSig } so the heartbeat can decide
+//     whether the orchestrator still has work to do.
+//
+//   AUTO_CONTINUE_NUDGE
+//     The synthetic user message injected when the heartbeat resumes the
+//     orchestrator via processMessage({ auto: true }).
+//
+// The actual "should we resume?" decision logic and the scheduling loop live
+// in turn.js (startBgDriver / the inactivity watchdog), not here.
 
 const TERMINAL_STATUSES = new Set(['merged', 'failed']);
 
@@ -76,38 +57,4 @@ export async function readTicketStatuses(sessionDir) {
   }
   pending.sort();
   return { total, pendingCount: pending.length, pendingSig: pending.join(',') };
-}
-
-// Pure decision: should chat-service auto-resume the orchestrator now?
-// Inputs come from the just-settled turn + the per-wave auto-continue state.
-// Returns { go, waveDone, stalled, noProgressCount } where:
-//   go            — schedule an auto-resume
-//   waveDone      — a real COMPLEX wave finished (all tickets terminal): the
-//                   caller should run end-of-wave handling (documentator)
-//   stalled       — 'cap' | 'no-progress': stop and surface a message
-//   noProgressCount — updated consecutive no-progress counter to persist
-export function decideAutoContinue({
-  nextState,
-  turnErrored,
-  totalTickets,
-  pendingCount,
-  pendingSig,
-  prevPendingSig,
-  autoContinueCount,
-  noProgressCount,
-  maxAutoContinue = MAX_AUTO_CONTINUE,
-  maxNoProgress = MAX_NO_PROGRESS,
-}) {
-  if (nextState !== 'completed' || turnErrored) return { go: false, waveDone: false };
-  if (totalTickets === 0) return { go: false, waveDone: false };      // not a COMPLEX wave
-  if (pendingCount === 0) return { go: false, waveDone: true };       // wave finished
-  if (autoContinueCount >= maxAutoContinue) {
-    return { go: false, waveDone: false, stalled: 'cap', noProgressCount };
-  }
-  const madeNoProgress = prevPendingSig != null && pendingSig === prevPendingSig;
-  const nextNoProgress = madeNoProgress ? noProgressCount + 1 : 0;
-  if (nextNoProgress >= maxNoProgress) {
-    return { go: false, waveDone: false, stalled: 'no-progress', noProgressCount: nextNoProgress };
-  }
-  return { go: true, waveDone: false, noProgressCount: nextNoProgress };
 }
