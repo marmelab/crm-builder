@@ -10,9 +10,6 @@ supervisord (pid 1)
   └─ chat-service   :8080  (WebSocket + spawn claude -p)
 ```
 
-For a direct REPL into claude CLI, use `make claude` from the host —
-it `docker exec`s as the `developer` user. First run triggers OAuth automatically.
-
 Two compose profiles: `demo` (FakeRest) and `full` (Supabase, needs Docker socket).
 
 `entrypoint.sh`: syncs `claudeConfig/.claude/` → `/home/developer/.claude`, applies App.tsx variant, overwrites `/app/.claude/settings.json` with `{"hooks":{}}` (prevents upstream format-file.sh fight with our hooks).
@@ -21,17 +18,18 @@ Single `crm-app` volume for `/app` — keeps `node_modules` and `worktrees/` on 
 
 ## Chat-service (`chat-service/`)
 
-Split: `lib/server/` (spawn, routes, runtime, sessions, turns, ws) + `lib/stats/` (phases, hooks, subagents, io…). Entry: `server.js`.
+Node.js server (:8080) — WebSocket + REST. Entry: `server.js`. Split: `lib/server/` + `lib/stats/`.
 
-Key invariants:
-- One runtime per session; all connected WS clients get broadcast.
-- Session log: append-only `log.jsonl` (source of truth) + `meta.json` (cache).
-- Spawn: `claude --output-format stream-json --verbose --dangerously-skip-permissions --model <model> [--resume <id>] -p <prompt>`. Model + system prompt parsed from `chat-orchestrator.md` frontmatter at boot.
-- `tokensUsed` = input + cache_creation + output (cache-read excluded — cheap rehydration).
-- `total_cost_usd` is cumulative within a spawn: buffer in `costUsdCurrentSpawn`, commit to `costUsd` on turn end only.
-- `activeAgents` counts only `task_type === 'local_agent'` via `Set<task_id>`.
+Architecture reference: [docs/chat-service-architecture.md](docs/chat-service-architecture.md)
 
-Remote deploy (`lib/server/deploy-routes.js`): the sidebar "Deploy" modal pushes the live CRM, independent of the chat WS (own SSE channel `/api/deploy/events`). Credentials persist to `/var/lib/atomic-crm/supabase-deploy/config.json` (mode 600); secrets never returned by `/api/deploy/status` and are redacted from streamed logs. A deploy requires BOTH targets fully configured — Supabase (backend) and Cloudflare (frontend) — gated server-side by `isDeployable` (`handleDeployRun` returns 412 otherwise) and client-side by the Deploy button. Partial saves are allowed as drafts: any field may be left blank, blank-keeps-stored on every secret (incl. the Cloudflare token, so an unrelated edit never silently drops it); only `projectRef` identifies the project — the Supabase URL is derived (`https://<ref>.supabase.co`), never entered. Phases run in-process under a `script` PTY: **(0) vite build, (1) supabase link, (2) db push, (3) functions deploy, (4) secrets set, (5) wrangler deploy**. The build (step 0) runs in an isolated detached git worktree at `/app/worktrees/_deploy` (checked out from `HEAD`, node_modules hard-linked in) so the live Vite dev server's `/app/src` is never touched; it overlays the Supabase `App.tsx` variant (`/app-variants/App.supabase.tsx`) there — a missing variant is FATAL (abort, never ship the demo/FakeRest build) — and bakes the Supabase URL/publishable key into the bundle (`VITE_SUPABASE_URL` / `VITE_SB_PUBLISHABLE_KEY`). The worktree is removed in a `finally` (success or failure). Cloudflare deploys an assets-only Worker named `atomic-crm-<projectRef>` (account ID stored lowercased) with SPA fallback, serving the worktree's `dist/`. `wrangler` is installed globally in the image.
+Key modules:
+- `server/claude-spawn.js` — builds + spawns `claude -p`, injects `<mode>` + `<session_dir>` tags
+- `server/turn.js` — streams stdout, writes `log.jsonl`, recovery decision, snapshots transcripts — see [docs/turn.md](docs/turn.md)
+- `server/session-store.js` — chat UUID, `meta.json`, `TASK-*.json` detection
+- `server/subagent-tail.js` — polls subagents/ every 2500ms → WS broadcast
+- `lib/stats/` (8 modules) — read-only aggregation, `GET /api/stats` — see [docs/stats.md](docs/stats.md)
+- `server/documentator-spawn.js` — 30s debounce after turn=completed + merged tickets (Mode 2)
+- `server/deploy-routes.js` — SSE `/api/deploy/events`, 6-phase pipeline (vite build → supabase link → db push → functions → secrets → wrangler), independent of chat WS — see [docs/deploy.md](docs/deploy.md)
 
 Tests: `cd chat-service && npm test` — uses glob `'test/**/*.test.js'` (directory form broken on Node 25).
 
@@ -91,7 +89,6 @@ Hot-reload bind-mounts (dev only, remove before release): `claudeConfig/.claude`
 
 ## Gotchas
 
-- `total_cost_usd` is cumulative within a spawn — never sum it event-by-event (massive inflation).
 - `git reset --hard HEAD` on `/app` silently reverts App.tsx — merger re-applies variant via `/entrypoint-helpers/apply-app-variant.sh`.
 - Cold cache is expensive (~$0.17 for a "Hi!") — keep `enabledPlugins` minimal in `settings.json`.
 - Migrations are generated at deploy time from `git diff session-base/<SESSION_SHORT_ID>..session/<SESSION_SHORT_ID>`; the developer never writes them. Diffing against main would pull in other sessions' schema work — always diff against `session-base/<id>`.

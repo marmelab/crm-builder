@@ -82,6 +82,10 @@
       <span class="deploy-btn-label">Configure deployment</span>
       <span class="deploy-btn-chip" id="deploy-btn-chip" title="Deployment configuration incomplete" hidden></span>
     </button>
+    <a id="deploy-live-btn" href="#" target="_blank" rel="noopener" hidden title="Open your live CRM" aria-label="Open your live CRM">
+      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="2" x2="22" y1="12" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+      <span class="deploy-btn-label">Open live CRM</span>
+    </a>
     <button id="history-more-btn" type="button" title="More actions" aria-label="More actions" aria-haspopup="true" aria-expanded="false">
       <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>
       <span class="history-more-label">More</span>
@@ -188,16 +192,10 @@
 
               <section class="deploy-section">
                 <h3 class="deploy-section-title">Authentication</h3>
-                <p class="deploy-warning">
-                  <span class="deploy-warning-icon" aria-hidden="true">⚠</span>
-                  <span>After your first deploy, set the authentication redirect URL in
-                  <strong>Your Project</strong> → <strong>Authentication</strong> → <strong>URL Configuration</strong>
-                  to the URL of your Cloudflare Worker
-                  (<code>https://atomic-crm-&lt;ref&gt;.&lt;account&gt;.workers.dev</code>) — otherwise sign-in
-                  links won't redirect back to your deployed app. Find the exact URL on the
-                  <a href="https://dash.cloudflare.com" target="_blank" rel="noopener">Cloudflare dashboard</a>
-                  under <strong>Workers &amp; Pages</strong>.</span>
-                </p>
+                <p class="deploy-field-hint">The deploy automatically binds your live Cloudflare Worker URL as the
+                Supabase authentication callback (site URL + redirect allow-list), so sign-in links redirect back to
+                your deployed app — no manual Studio step. If that step can't complete, the deploy log will tell you
+                to set it by hand.</p>
               </section>
             </div>
           </div>
@@ -234,15 +232,30 @@
       <div class="deploy-view deploy-view-progress" hidden>
         <p class="deploy-progress-status">Deploying…</p>
         <pre class="deploy-progress-log" aria-live="polite"></pre>
-        <p class="deploy-warning deploy-progress-warning" hidden>
+        <div class="deploy-warning deploy-progress-warning" hidden>
           <span class="deploy-warning-icon" aria-hidden="true">⚠</span>
-          <span>One last step — set the authentication redirect URL in
-          <strong>Your Project</strong> → <strong>Authentication</strong> → <strong>URL Configuration</strong>
-          to the URL of your Cloudflare Worker, otherwise sign-in links won't redirect back to your
-          deployed app. Find the exact URL on the
-          <a href="https://dash.cloudflare.com" target="_blank" rel="noopener">Cloudflare dashboard</a>
-          under <strong>Workers &amp; Pages</strong>.</span>
-        </p>
+          <div class="deploy-warning-body">
+            <p class="deploy-callback-msg"></p>
+            <div class="deploy-callback-row" hidden>
+              <code class="deploy-callback-url"></code>
+              <button type="button" class="modal-btn modal-btn-secondary deploy-callback-copy">Copy</button>
+            </div>
+            <p class="deploy-callback-link-line">
+              Paste it into <strong>Site URL</strong> and <strong>Redirect URLs</strong> at
+              <a class="deploy-auth-link" target="_blank" rel="noopener">Authentication → URL Configuration</a>.
+            </p>
+          </div>
+        </div>
+        <div class="deploy-success deploy-progress-success" hidden>
+          <span class="deploy-success-icon" aria-hidden="true">🎉</span>
+          <div class="deploy-success-body">
+            <p>Your CRM is live at:</p>
+            <div class="deploy-success-row">
+              <a class="deploy-live-url" target="_blank" rel="noopener"></a>
+              <button type="button" class="modal-btn modal-btn-secondary deploy-live-copy">Copy</button>
+            </div>
+          </div>
+        </div>
         <div class="deploy-form-actions">
           <button type="button" class="modal-btn modal-btn-primary deploy-progress-close" disabled>Close</button>
         </div>

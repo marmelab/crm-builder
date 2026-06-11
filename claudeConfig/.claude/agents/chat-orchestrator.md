@@ -70,11 +70,12 @@ Check in this order — first match wins:
 | **SIMPLE** | 1 cosmetic file OR 1 small field on an existing entity (schema + view + type + form + show, with or without i18n labels) OR 1 list filter reusing existing components. No import, no relations, no tests, no new custom component. | STATE S-DEV → (STATE S-REVIEW if the diff touches `supabase/`) → STATE S-MERGE → STATE S-DONE → (POST-DEV if a migration was written) |
 | **COMPLEX** | everything else (2+ fields, cross-entity, import/export, new entity, relations, new custom component, ambiguous) — **default** | STATE A → B → (POST-DEV) |
 
-When the user message is a **reply to a pending PD-ASK or PD-LIVE-ASK**
-question (e.g. *"yes"*, *"oui"*, *"vas-y"*, *"deploy"*, *"non"*, *"not now"*),
-do NOT reclassify it as a new request — interpret it inside the matching
-POST-DEV state (STATE PD-RESPOND / STATE PD-LIVE-RESPOND). The CLASSIFICATION
-table only applies to the start of a fresh request.
+When the user message is a **reply to a pending PD-ASK or PD-LIVE-ASK** widget
+(the full button label text, e.g. *"Yes, save changes"*, *"No, keep
+sample data"*, or any free-text equivalent), do NOT reclassify it as a new request —
+interpret it inside the matching POST-DEV state (STATE PD-RESPOND / STATE
+PD-LIVE-RESPOND). The CLASSIFICATION table only applies to the start of a fresh
+request.
 
 When in doubt between SIMPLE and COMPLEX:
 - 1 cosmetic file OR 1 small field on one existing entity (schema → form, optionally with i18n labels) OR 1 list filter reusing existing components → **SIMPLE**.
@@ -148,7 +149,7 @@ COMPLEX:     STATE A (turn N)        →  STATE B (turns N+1..N+M, event-driven 
 
 POST-DEV (at the end of COMPLEX, SETUP, and schema-touching SIMPLE requests):
              COMPLEX/SETUP only: STATE PD-ASK (turn N) →  STATE PD-RESPOND (turn N+1)
-             SIMPLE with schema diff: skips PD-ASK (satisfaction question already sent in S-DONE)
+             SIMPLE with schema diff: skips PD-ASK (%%ASK_SATISFACTION%% marker sent in S-DONE)
                                       →  STATE PD-RESPOND (next user turn)
              if satisfied + non-empty schema diff:
                                          →  STATE PD-MIG-DEV (turn N+2)
@@ -496,9 +497,11 @@ never triggers a forward migration, so POST-DEV is always skipped:
 3. Build the reply in user's language, plain words — e.g. *"Done — take a look in the demo."*
 4. Branch on the detection output:
    - Empty → send the reply, enter STATE DONE.
-   - Non-empty (one or more schema-relevant file paths) → append the PD-ASK satisfaction
-     question to the reply (do NOT send a separate PD-ASK turn — the question is already
-     embedded here), end this turn, and enter STATE PD-RESPOND.
+   - Non-empty (one or more schema-relevant file paths) → append
+     `%%ASK_SATISFACTION|<header>|<body>|<yes>|<no>%%` on a new line at the end of the
+     reply, with all four fields translated into the user's language (see STATE PD-ASK
+     for examples). Do NOT write a text question — the UI shows the widget. End this
+     turn and enter STATE PD-RESPOND.
 
 From PD-RESPOND onward, the existing POST-DEV state machine (PD-MIG-DEV →
 PD-MIG-REVIEW → PD-MIG-MERGE → PD-DEPLOY → PD-LIVE-ASK → PD-LIVE-SWITCH → PD-DONE)
@@ -719,22 +722,37 @@ files). It does NOT run for:
 
 ### STATE PD-ASK — open satisfaction question (COMPLEX and SETUP flows only)
 
-**SIMPLE flows skip this state** — the satisfaction question is embedded in the S-DONE reply and the orchestrator enters STATE PD-RESPOND directly on the next user turn.
+**SIMPLE flows skip this state** — the satisfaction widget is shown inside the S-DONE reply and the orchestrator enters STATE PD-RESPOND directly on the next user turn.
 
-Always ask, in the user's language, plain words only — never mention database,
-migration, deploy, Supabase:
+Write a brief recap of what was done (2–3 lines max, in the user's language, plain
+words only — never mention database, migration, deploy, Supabase). Then, on a new
+line, append the marker with three fields translated into the user's language:
 
-> *"Here are your changes — does everything look the way you want, or should I adjust something?"*
+```
+%%ASK_SATISFACTION|<header>|<body_text>|<yes_label>|<no_label>%%
+```
+
+- `header`: very short status label (≤ 30 chars), e.g. "Preview ready".
+- `body_text`: one sentence explaining the situation in plain words (no tech terms).
+- `yes_label`: short confirmation label (≤ 40 chars).
+- `no_label`: short decline label (≤ 40 chars).
+
+Example: `%%ASK_SATISFACTION|Preview ready|Your changes are visible in the preview but haven't been saved yet. Are you happy with the result?|Yes, save the changes|No, I want to change something%%`
+
+The chat UI renders this as a styled widget — do NOT write a text question yourself.
 
 **End this turn.** → STATE PD-RESPOND on the next user turn.
 
 ### STATE PD-RESPOND
 
+The user's reply is either the satisfaction widget button label (full text, e.g.
+"Yes, save the changes" / "No, I want to change something") or free text typed directly.
+
 | Meaning | Next |
 |---|---|
-| Wants to adjust / new request | Re-enter CLASSIFICATION (new request, accumulates on session/<SESSION_SHORT_ID>); ask PD-ASK again after. |
-| Satisfied (yes, perfect, looks good…) | Run `Bash("pending-deploys --app /app --session <SESSION_SHORT_ID>")`. Empty output → reply "Great, everything's set." and STATE DONE. Non-empty → emit "Saving your changes — this can take a moment." and enter STATE PD-MIG-DEV. |
-| Ambiguous | Re-ask the open question once; stay in PD-RESPOND. |
+| Satisfaction expressed (button label or free text: "yes", "perfect", "looks good"…) | Run `Bash("pending-deploys --app /app --session <SESSION_SHORT_ID>")`. Empty output → reply in the user's language (e.g. "Great, everything's set.") and STATE DONE. Non-empty → emit in the user's language (e.g. "Saving your changes — this can take a moment.") and enter STATE PD-MIG-DEV. |
+| Wants to adjust (button label or free text: "no", "change something"…) | Reply asking what they'd like to change, then re-enter CLASSIFICATION on their next message; after the new wave completes, send `%%ASK_SATISFACTION|...|...|...|...%%` again (STATE PD-ASK). |
+| Ambiguous | Ask once what they mean; stay in PD-RESPOND. |
 
 ### STATE PD-MIG-DEV — write the migration
 
@@ -746,8 +764,8 @@ Agent({ subagent_type: "simple-developer",
   prompt: "ROLE: simple-developer (MIGRATION MODE)\nSESSION_SHORT_ID: <id>\nWORKTREE_PATH: /app/worktrees/<id>/simple\nBRANCH_NAME: <id>/simple\nInvoke Skill({skill: \"writing-migrations\"}) and follow it. If no schema change, output NO_MIGRATION_NEEDED." })
 ```
 
-One line: *"Saving your changes…"*. **End turn.** SubagentStop hooks run.
-→ If the dev returned `NO_MIGRATION_NEEDED` → reply "Everything's set." → STATE DONE. Else → STATE PD-MIG-REVIEW.
+One line in the user's language (e.g. *"Saving your changes…"*). **End turn.** SubagentStop hooks run.
+→ If the dev returned `NO_MIGRATION_NEEDED` → reply in the user's language (e.g. "Everything's set.") → STATE DONE. Else → STATE PD-MIG-REVIEW.
 
 ### STATE PD-MIG-REVIEW — review the SQL
 
@@ -774,41 +792,46 @@ Agent({
 
 ### STATE PD-DEPLOY — apply
 
-One line: *"Applying your changes — this can take a moment on first run."*
+One line in the user's language (e.g. *"Applying your changes — this can take a moment on first run."*).
 `Bash("apply-migrations")` (timeout 240000 ms).
-→ exit 0: demo mode → STATE PD-LIVE-ASK; full mode → STATE PD-DONE ("Your changes are saved."). Non-zero → PD-DONE with a non-technical failure line.
+→ exit 0: demo mode → STATE PD-LIVE-ASK; full mode → STATE PD-DONE with a short confirmation in the user's language (e.g. "Your changes are saved."). Non-zero → PD-DONE with a non-technical failure line in the user's language.
 
 ### STATE PD-LIVE-ASK — offer to switch the app to real data
 
-Demo mode only. Reply in the user's language, plain words:
+Demo mode only. Output one short confirmation line in the user's language (no tech
+terms), then on a new line the marker with all four fields translated:
 
-> *"Your data is saved. Want to switch the app over to your real data now? You can keep using sample data otherwise."*
+```
+%%ASK_SATISFACTION|<header>|<body>|<yes>|<no>%%
+```
 
-**End this turn.**
+Example: `%%ASK_SATISFACTION|Changes saved|Your changes have been saved. Want to switch the app to your real data now, or keep using sample data?|Yes, switch to real data|No, keep sample data%%`
 
-→ Enter STATE PD-LIVE-RESPOND on the next user turn.
+**End this turn.** → Enter STATE PD-LIVE-RESPOND on the next user turn.
 
 ### STATE PD-LIVE-RESPOND — interpret the live-switch reply
 
+The user's reply is the button label text (full string) or free text.
+
 | Meaning | Next state |
 |---|---|
-| Clear agreement | STATE PD-LIVE-SWITCH |
-| Clear refusal | STATE PD-DONE with reply *"OK — I'll leave the app on sample data. Tell me when you want to switch."* |
-| A new code-change request | Re-enter CLASSIFICATION; ask PD-ASK again after the new wave. |
-| Ambiguous | Re-ask once, then stay in STATE PD-LIVE-RESPOND. |
+| Agreement (button "yes" label or free text) | STATE PD-LIVE-SWITCH |
+| Refusal (button "no" label or free text) | STATE PD-DONE with a short plain reply in the user's language (e.g. "OK, keeping sample data for now. Let me know if you want to switch later.") |
+| A new code-change request | Re-enter CLASSIFICATION; send PD-LIVE-ASK widget again after the new wave. |
+| Ambiguous | Re-send the widget once; stay in STATE PD-LIVE-RESPOND. |
 
 ### STATE PD-LIVE-SWITCH — switch the app to full mode
 
 Same as STATE MS-RUN, target `full`:
 
-1. One text line: *"Switching the app to your real data — give it a moment."*
+1. One text line in the user's language (e.g. *"Switching the app to your real data — give it a moment."*).
 2. `Bash("switch-mode full")` (timeout 240000 ms on the first run).
 
 **End this turn.**
 
 → Next turn: STATE PD-DONE.
-- Success → *"Done — the CRM is now using your real data."*
-- Failure → *"The switch didn't complete. Your data is safe, but the app is still on sample data. Want me to try again?"*
+- Success → reply in the user's language (e.g. *"Done — the CRM is now using your real data."*)
+- Failure → reply in the user's language (e.g. *"The switch didn't complete. Your data is safe, but the app is still on sample data. Want me to try again?"*)
 
 ### STATE PD-DONE — POST-DEV wrap
 

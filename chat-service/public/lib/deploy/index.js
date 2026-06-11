@@ -31,6 +31,7 @@ let state = {
   // so a draft can be configured-but-incomplete.
   supabaseComplete: false,
   running: false,
+  lastDeployUrl: null,
   expectedSecrets: [],
   configuredSecrets: [],
   // Top-level secret fields already stored (names only) → drives the per-field
@@ -78,7 +79,21 @@ function refreshButtonLabel() {
   // so it doesn't look clickable while it's inert.
   if (elements.modalClose) elements.modalClose.hidden = state.running;
   refreshDashboardLink();
+  refreshLiveButton();
   refreshConfigChips();
+}
+
+// Show the persistent "Open live CRM" link whenever we have a last-deploy URL.
+function refreshLiveButton() {
+  const link = elements?.liveBtn;
+  if (!link) return;
+  const url = state.lastDeployUrl;
+  if (url) {
+    link.href = url;
+    link.hidden = false;
+  } else {
+    link.hidden = true;
+  }
 }
 
 // Point the "Open Supabase dashboard" link at the configured project, shown
@@ -222,9 +237,9 @@ function applyStatus(status) {
   const passthrough = [
     'configured', 'supabaseComplete', 'running', 'expectedSecrets',
     'configuredSecrets', 'configuredSecretFields',
-    'projectRef', 'lastDeployAt',
+    'projectRef', 'lastDeployAt', 'lastDeployUrl',
     'cloudflareConfigured', 'cloudflareAccountId', 'cloudflareTokenStored',
-    'deployId', 'ok', 'exitCode', 'durationMs',
+    'deployId', 'ok', 'exitCode', 'durationMs', 'manualAuthUrl', 'callbackUrl',
   ];
   for (const k of passthrough) {
     if (k in status) next[k] = status[k];
@@ -310,13 +325,46 @@ function paintTerminalStatus(ok, durationMs, exitCode) {
     elements.progressStatus.textContent = `✗ Deploy failed (exit ${exitCode}) — see log for details`;
     elements.progressStatus.className = 'deploy-progress-status deploy-fail';
   }
-  // Auth redirect URL reminder: only after a SUCCESSFUL deploy that published a
-  // Cloudflare Worker (the URL the redirect must point at). A Supabase-only or
-  // failed deploy has no worker URL to configure, so keep it hidden.
-  if (elements.progressWarning) {
-    elements.progressWarning.hidden = !(ok && state.cloudflareConfigured);
-  }
+  // Auth redirect URL reminder: the deploy now auto-binds the callback URL into
+  // Supabase, so this fallback shows ONLY when the backend signalled it couldn't
+  // (manualAuthUrl) — an undeterminable worker URL or a failed PATCH. A clean
+  // auto-bind, a Supabase-only deploy, or a failed deploy all keep it hidden.
+  renderCallbackWarning(ok && state.manualAuthUrl);
+  renderLiveUrl(ok && !!state.callbackUrl);
   elements.progressClose.disabled = false;
+}
+
+// Populate (or hide) the success callout with the live site URL.
+function renderLiveUrl(show) {
+  if (!elements.progressSuccess) return;
+  elements.progressSuccess.hidden = !show;
+  if (!show) return;
+  elements.liveUrl.textContent = state.callbackUrl;
+  elements.liveUrl.href = state.callbackUrl;
+}
+
+// Populate (or hide) the manual-fallback callout. When the backend handed us the
+// exact callback URL, show it with a Copy button so the user can paste it
+// straight into Supabase; otherwise show a shorter "find it yourself" message.
+// The link always deep-links to the project's URL-configuration page.
+function renderCallbackWarning(show) {
+  if (!elements.progressWarning) return;
+  elements.progressWarning.hidden = !show;
+  if (!show) return;
+
+  const url = state.callbackUrl;
+  if (elements.callbackRow) elements.callbackRow.hidden = !url;
+  if (url && elements.callbackUrl) elements.callbackUrl.textContent = url;
+  if (elements.callbackMsg) {
+    elements.callbackMsg.textContent = url
+      ? "The callback URL couldn't be bound automatically. Copy it and add it by hand:"
+      : "Couldn't determine the production URL automatically. Grab your Worker URL from the Cloudflare dashboard, then add it by hand:";
+  }
+  if (elements.authLink) {
+    elements.authLink.href = state.projectRef
+      ? `https://supabase.com/dashboard/project/${state.projectRef}/auth/url-configuration`
+      : 'https://supabase.com/dashboard';
+  }
 }
 
 async function triggerDeploy() {
@@ -325,6 +373,7 @@ async function triggerDeploy() {
   elements.progressStatus.textContent = 'Deploying…';
   elements.progressStatus.className = 'deploy-progress-status';
   if (elements.progressWarning) elements.progressWarning.hidden = true;
+  if (elements.progressSuccess) elements.progressSuccess.hidden = true;
   elements.progressClose.disabled = true;
   if (elements.title) elements.title.textContent = 'Deploying';
   showView('progress');
@@ -359,6 +408,7 @@ function onDeployStarted(msg) {
     elements.progressStatus.textContent = 'Deploying…';
     elements.progressStatus.className = 'deploy-progress-status';
     if (elements.progressWarning) elements.progressWarning.hidden = true;
+    if (elements.progressSuccess) elements.progressSuccess.hidden = true;
     elements.progressClose.disabled = true;
     if (elements.title) elements.title.textContent = 'Deploying';
     showView('progress');
@@ -376,6 +426,9 @@ function onDeployLog(msg) {
 
 function onDeployDone(msg) {
   state.running = false;
+  state.manualAuthUrl = !!msg.manualAuthUrl;
+  state.callbackUrl = msg.callbackUrl || null;
+  if (msg.ok && msg.callbackUrl) state.lastDeployUrl = msg.callbackUrl;
   refreshButtonLabel();
   paintTerminalStatus(msg.ok, msg.durationMs, msg.exitCode);
   // Re-fetch the public status to pick up lastDeployAt.
@@ -388,6 +441,7 @@ export function initDeploy() {
     btnLabel: document.querySelector('#deploy-btn .deploy-btn-label'),
     btnChip: $('#deploy-btn-chip'),
     editBtn: $('#deploy-edit-btn'),
+    liveBtn: $('#deploy-live-btn'),
     dashboardLink: $('#deploy-dashboard-btn'),
     modal: $('#deploy-modal'),
   };
@@ -398,10 +452,68 @@ export function initDeploy() {
   elements.log = elements.modal.querySelector('.deploy-progress-log');
   elements.progressStatus = elements.modal.querySelector('.deploy-progress-status');
   elements.progressWarning = elements.modal.querySelector('.deploy-progress-warning');
+  elements.callbackMsg = elements.modal.querySelector('.deploy-callback-msg');
+  elements.callbackRow = elements.modal.querySelector('.deploy-callback-row');
+  elements.callbackUrl = elements.modal.querySelector('.deploy-callback-url');
+  elements.callbackCopy = elements.modal.querySelector('.deploy-callback-copy');
+  elements.authLink = elements.modal.querySelector('.deploy-auth-link');
+  elements.progressSuccess = elements.modal.querySelector('.deploy-progress-success');
+  elements.liveUrl = elements.modal.querySelector('.deploy-live-url');
+  elements.liveCopy = elements.modal.querySelector('.deploy-live-copy');
   elements.progressClose = elements.modal.querySelector('.deploy-progress-close');
   elements.modalClose = elements.modal.querySelector('.deploy-modal-close');
   elements.tabs = [...elements.modal.querySelectorAll('.deploy-tab')];
   elements.panels = [...elements.modal.querySelectorAll('.deploy-tab-panel')];
+
+  // Copy the callback URL to the clipboard, with transient "Copied!" feedback.
+  if (elements.callbackCopy) {
+    elements.callbackCopy.addEventListener('click', async () => {
+      const url = state.callbackUrl;
+      if (!url) return;
+      try {
+        await navigator.clipboard.writeText(url);
+        elements.callbackCopy.textContent = 'Copied!';
+        elements.callbackCopy.classList.add('copied');
+        setTimeout(() => {
+          elements.callbackCopy.textContent = 'Copy';
+          elements.callbackCopy.classList.remove('copied');
+        }, 1500);
+      } catch {
+        // Clipboard blocked (e.g. insecure context): select the text so the
+        // user can copy it manually instead of silently failing.
+        const range = document.createRange();
+        range.selectNodeContents(elements.callbackUrl);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
+    });
+  }
+
+  // Copy the live site URL to the clipboard, with transient "Copied!" feedback.
+  // Mirrors the callback-URL copy handler above (same clipboard + selection fallback).
+  if (elements.liveCopy) {
+    elements.liveCopy.addEventListener('click', async () => {
+      const url = state.callbackUrl;
+      if (!url) return;
+      try {
+        await navigator.clipboard.writeText(url);
+        elements.liveCopy.textContent = 'Copied!';
+        elements.liveCopy.classList.add('copied');
+        setTimeout(() => {
+          elements.liveCopy.textContent = 'Copy';
+          elements.liveCopy.classList.remove('copied');
+        }, 1500);
+      } catch {
+        const range = document.createRange();
+        range.selectNodeContents(elements.liveUrl);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
+    });
+  }
+
   elements.chips = {
     supabase: elements.modal.querySelector('[data-deploy-chip="supabase"]'),
     cloudflare: elements.modal.querySelector('[data-deploy-chip="cloudflare"]'),

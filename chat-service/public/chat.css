@@ -124,6 +124,7 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
 #chat-history-panel.collapsed #history-recent-btn { display: flex; }
 
 #deploy-btn,
+#deploy-live-btn,
 #history-more-btn,
 #deploy-edit-btn,
 #deploy-dashboard-btn,
@@ -139,6 +140,7 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
   transition: background .15s, color .15s;
 }
 #deploy-btn { margin-top: auto; position: relative; }
+#deploy-live-btn { color: #34d399; }
 /* Red chip flagging that deployment isn't fully configured. Absolutely
    positioned so it survives the collapsed sidebar (label hidden, icon only). */
 .deploy-btn-chip {
@@ -149,6 +151,7 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
 }
 .deploy-btn-chip[hidden] { display: none; }
 /* `hidden` must win over the flex display above. */
+#deploy-live-btn[hidden],
 #deploy-edit-btn[hidden],
 #deploy-dashboard-btn[hidden] { display: none; }
 #deploy-btn:hover,
@@ -156,7 +159,9 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
 #deploy-edit-btn:hover,
 #deploy-dashboard-btn:hover,
 #history-download-btn:hover { background: #2c2c2e; color: #fff; }
+#deploy-live-btn:hover { background: #2c2c2e; color: #6ee7b7; }
 #deploy-btn svg,
+#deploy-live-btn svg,
 #history-more-btn svg,
 #deploy-edit-btn svg,
 #deploy-dashboard-btn svg,
@@ -164,14 +169,17 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
 #deploy-btn.deploy-btn-running { color: #fbbf24; }
 #deploy-btn.deploy-btn-running .deploy-btn-icon { animation: deploy-spin 1.2s linear infinite; }
 #chat-history-panel.collapsed #deploy-btn .deploy-btn-label,
+#chat-history-panel.collapsed #deploy-live-btn .deploy-btn-label,
 #chat-history-panel.collapsed #history-more-btn .history-more-label {
   display: none;
 }
 #chat-history-panel.collapsed #deploy-btn,
+#chat-history-panel.collapsed #deploy-live-btn,
 #chat-history-panel.collapsed #history-more-btn {
   justify-content: center; padding: 10px 0;
 }
 #chat-history-panel.collapsed #deploy-btn svg,
+#chat-history-panel.collapsed #deploy-live-btn svg,
 #chat-history-panel.collapsed #history-more-btn svg { width: 20px; height: 20px; }
 
 @keyframes deploy-spin {
@@ -729,6 +737,46 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
   background: #3a3a3c; color: #8e8e93;
   cursor: not-allowed;
 }
+/* Satisfaction-ask bubble — appears after dev completes when schema files were
+   touched. Prompts the user to confirm before the migration round starts. */
+.msg-satisfaction-ask {
+  align-self: flex-start;
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 14px 16px;
+  background: rgba(59,130,246,.10);
+  border: 1px solid rgba(59,130,246,.35);
+  border-radius: 14px; border-bottom-left-radius: 4px;
+  width: min(90%, 380px);
+  flex-shrink: 0;
+}
+.satisfaction-ask-header {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 13px; font-weight: 600; color: #60a5fa;
+}
+.satisfaction-ask-icon { font-size: 14px; line-height: 1; }
+.satisfaction-ask-body {
+  font-size: 13px; color: #d1d1d6; line-height: 1.5; margin: 0;
+}
+.satisfaction-ask-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+.satisfaction-ask-yes {
+  background: #3b82f6; color: #fff;
+  border: none; border-radius: 8px;
+  padding: 7px 16px;
+  font-size: 13px; font-weight: 600;
+  cursor: pointer;
+  transition: background .15s;
+}
+.satisfaction-ask-yes:hover { background: #60a5fa; }
+.satisfaction-ask-no {
+  background: transparent; color: #aeaeb2;
+  border: 1px solid #3a3a3c; border-radius: 8px;
+  padding: 7px 16px;
+  font-size: 13px; font-weight: 500;
+  cursor: pointer;
+  transition: border-color .15s, color .15s;
+}
+.satisfaction-ask-no:hover { border-color: #636366; color: #f2f2f7; }
+
 #chat-form {
   display: flex; align-items: flex-end; gap: 10px;
   padding: 14px; border-top: 1px solid #2c2c2e;
@@ -1309,7 +1357,7 @@ details.child-row[open] > summary .child-detail {
    palette as the rate-limit bubble. */
 .deploy-warning {
   display: flex; gap: 8px;
-  margin: 0;
+  margin: 0 0 10px;
   padding: 10px 12px;
   background: rgba(251, 191, 36, .10);
   border: 1px solid rgba(251, 191, 36, .35);
@@ -1327,6 +1375,50 @@ details.child-row[open] > summary .child-detail {
   background: rgba(255, 255, 255, .06);
   padding: 1px 4px; border-radius: 4px; color: #f2f2f7;
 }
+/* Manual-fallback callout body: stacks the message, the copyable URL row, and
+   the "paste it here" link line. */
+.deploy-warning-body { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.deploy-warning-body p { margin: 0; }
+.deploy-callback-row {
+  display: flex; gap: 8px; align-items: center;
+  background: rgba(255, 255, 255, .06);
+  border-radius: 6px; padding: 4px 4px 4px 8px;
+}
+.deploy-callback-row[hidden] { display: none; }
+.deploy-callback-url {
+  flex: 1 1 auto; min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px; word-break: break-all; color: #f2f2f7;
+  background: transparent; padding: 0;
+}
+.deploy-callback-copy { flex: 0 0 auto; padding: 3px 10px; font-size: 11px; }
+.deploy-callback-copy.copied { color: #34d399; }
+
+/* Success callout: the live site URL shown when a deploy completes cleanly.
+   Same shape as .deploy-warning, recoloured green (the .deploy-ok accent). */
+.deploy-success {
+  display: flex; gap: 8px;
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  background: rgba(74, 222, 128, .10);
+  border: 1px solid rgba(74, 222, 128, .35);
+  border-radius: 8px;
+  font-size: 13px; line-height: 1.5; color: #d1d1d6;
+}
+.deploy-success[hidden] { display: none; }
+.deploy-success-icon { flex-shrink: 0; }
+.deploy-success-body { display: flex; flex-direction: column; min-width: 0; }
+.deploy-success-body p { margin: 0; }
+.deploy-success-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.deploy-live-url {
+  flex: 1 1 auto; min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px; word-break: break-all;
+  color: #60a5fa; text-decoration: none;
+}
+.deploy-live-url:hover { text-decoration: underline; }
+.deploy-live-copy { flex: 0 0 auto; padding: 3px 10px; font-size: 11px; }
+.deploy-live-copy.copied { color: #34d399; }
 
 .deploy-form-errors {
   background: rgba(244, 63, 94, .12);

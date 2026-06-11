@@ -275,6 +275,7 @@ export async function openSession(requestedId) {
       if (role === 'user') {
         meta.userMessageCount = (meta.userMessageCount || 0) + 1;
         if (!meta.title) meta.title = content.trim().replace(/\s+/g, ' ').slice(0, 60);
+        if (meta.satisfactionAsk) meta.satisfactionAsk = false;
       }
       await saveMeta();
     },
@@ -304,6 +305,10 @@ export async function openSession(requestedId) {
       const next = typeof ts === 'number' ? ts : null;
       if (meta.rateLimitResetsAt === next) return;
       meta.rateLimitResetsAt = next;
+      await saveMeta();
+    },
+    setSatisfactionAsk: async (payload) => {
+      meta.satisfactionAsk = payload;
       await saveMeta();
     },
     // In-memory equivalent of patchSession — keeps the runtime's meta object

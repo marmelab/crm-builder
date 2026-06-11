@@ -273,6 +273,31 @@ function applyAndStripSessionTitle(runtime, text) {
   return stripped;
 }
 
+// POST-DEV satisfaction widget. The orchestrator embeds a
+// %%ASK_SATISFACTION|<header>|<body>|<yes>|<no>%% marker (all fields optional) in
+// its end-of-flow text; we strip it from the visible message (always) and emit a
+// `satisfaction_ask` widget once per request. In the PTY flow POST-DEV runs as a
+// background turn, so this is applied in BOTH the active loop and the bg listener.
+const SATISFACTION_RE = /\n?%%ASK_SATISFACTION(?:\|([^|%\n]*)\|([^|%\n]*)\|([^|%\n]*)\|([^%\n]*))?%%\n?/;
+function applyAndStripSatisfactionAsk(runtime, text) {
+  if (!text) return text;
+  const m = text.match(SATISFACTION_RE);
+  if (!m) return text;
+  const cleanText = (text.slice(0, m.index) + text.slice(m.index + m[0].length)).trim();
+  if (!runtime.satisfactionAskSent) {
+    runtime.satisfactionAskSent = true;
+    const payload = {
+      header: m[1]?.trim() || undefined,
+      body:   m[2]?.trim() || undefined,
+      yes:    m[3]?.trim() || 'Yes, save the changes',
+      no:     m[4]?.trim() || 'No, I want to change something',
+    };
+    broadcast(runtime, { type: 'satisfaction_ask', ...payload });
+    runtime.session?.setSatisfactionAsk(payload).catch(() => {});
+  }
+  return cleanText;
+}
+
 export async function processMessage(runtime, prompt, opts = {}) {
   if (!runtime) return;
   const isAutoContinue = opts.auto === true;
@@ -286,6 +311,8 @@ export async function processMessage(runtime, prompt, opts = {}) {
       // Fresh user turn — drop stale dispatch/task correlation from a prior request.
       runtime.toolMap.clear();
       runtime.taskRole.clear();
+      // Allow one satisfaction widget per request (POST-DEV asks once).
+      runtime.satisfactionAskSent = false;
     }
   }
 
@@ -340,7 +367,8 @@ export async function processMessage(runtime, prompt, opts = {}) {
       // Advance progress/stats from this background turn's events, identical to
       // the active-turn loop, so the bar keeps moving between user turns.
       processStatsEvent(runtime, event, sessionDir).catch(() => {});
-      const text = applyAndStripSessionTitle(runtime, extractText(event));
+      let text = applyAndStripSessionTitle(runtime, extractText(event));
+      text = applyAndStripSatisfactionAsk(runtime, text);
       if (text) {
         const isDuplicate = text.trim() === bgLastText.trim();
         bgLastText = text;
@@ -418,7 +446,8 @@ export async function processMessage(runtime, prompt, opts = {}) {
 
       broadcast(runtime, { type: 'debug_raw', event });
 
-      const text = applyAndStripSessionTitle(runtime, extractText(event));
+      let text = applyAndStripSessionTitle(runtime, extractText(event));
+      text = applyAndStripSatisfactionAsk(runtime, text);
       if (text) {
         receivedText = true;
         const isDuplicate = text.trim() === lastAssistantText.trim();

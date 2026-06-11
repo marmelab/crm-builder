@@ -15,6 +15,10 @@ export const SUPABASE_BIN = process.env.SUPABASE_BIN || 'supabase';
 export const BUILD_BIN = process.env.BUILD_BIN || 'npm';
 export const WRANGLER_BIN = process.env.WRANGLER_BIN || 'wrangler';
 export const DEPLOY_APP_DIR = process.env.DEPLOY_APP_DIR || process.env.APP_DIR || '/app';
+// Supabase Management API base. After the Cloudflare frontend deploy we PATCH
+// this project's auth config so the live URL becomes the auth callback/site URL
+// (no manual Studio edit). Overridable in tests to point at a local fake server.
+export const SUPABASE_API_URL = process.env.SUPABASE_API_URL || 'https://api.supabase.com';
 // The Supabase App.tsx variant baked into the image. A deploy MUST build the
 // Supabase variant: the container may be running in demo (FakeRest) mode, whose
 // src/App.tsx wires an in-browser fake data provider — building that would ship
@@ -75,6 +79,8 @@ export const deployState = {
   ok: null,
   exitCode: null,
   durationMs: null,
+  manualAuthUrl: false,
+  callbackUrl: null,
   tail: [],
 };
 
@@ -183,6 +189,7 @@ function publicStatus(config) {
     supabaseComplete: isSupabaseComplete(config),
     projectRef: config?.projectRef || null,
     lastDeployAt: config?.lastDeployAt || null,
+    lastDeployUrl: config?.lastDeployUrl || null,
     // Cloudflare frontend target. The account ID is safe to echo (it's not a
     // secret and the form prefills it); the token is never returned, but we do
     // report whether one is stored so the form can show a "leave blank to keep"
@@ -203,6 +210,8 @@ function publicStatus(config) {
     ok: deployState.ok,
     exitCode: deployState.exitCode,
     durationMs: deployState.durationMs,
+    manualAuthUrl: deployState.manualAuthUrl,
+    callbackUrl: deployState.callbackUrl,
     tail: deployState.tail,
   };
 }
@@ -421,9 +430,18 @@ function shQuote(token) {
 // rejects (with the exit code attached) otherwise, so the orchestrator stops at
 // the first failing phase. Sensitive credentials go through `env` (never argv →
 // never visible in `ps`).
-function runCommandPhase({ argv, env, label, config, deployId, cwd = DEPLOY_APP_DIR }) {
+//
+// With `capture: true` the (redacted) output lines are also accumulated and the
+// promise resolves with { lines } — used to scrape the deployed URL out of
+// wrangler's output. A PTY merges stdout+stderr onto script's stdout, so
+// capturing the sink catches everything the CLI prints.
+function runCommandPhase({ argv, env, label, config, deployId, cwd = DEPLOY_APP_DIR, capture = false }) {
   return new Promise((resolve, reject) => {
     const cmd = argv.map(shQuote).join(' ');
+    const captured = capture ? [] : null;
+    const sink = capture
+      ? (line, id) => { captured.push(line); logPhaseLine(line, id); }
+      : logPhaseLine;
     let child;
     try {
       child = spawn('script', ['-qfe', '-c', cmd, '/dev/null'], {
@@ -435,11 +453,11 @@ function runCommandPhase({ argv, env, label, config, deployId, cwd = DEPLOY_APP_
       reject(err);
       return;
     }
-    pipeStream(child.stdout, config, deployId, logPhaseLine);
-    pipeStream(child.stderr, config, deployId, logPhaseLine);
+    pipeStream(child.stdout, config, deployId, sink);
+    pipeStream(child.stderr, config, deployId, sink);
     child.on('error', reject);
     child.on('close', (code) => {
-      if (code === 0) resolve();
+      if (code === 0) resolve(capture ? { lines: captured } : undefined);
       else reject(Object.assign(new Error(`${label} exited with code ${code}`), { code }));
     });
   });
@@ -590,11 +608,13 @@ async function writeWranglerConfig(config, buildDir) {
 
 // Publish the freshly-built bundle to Cloudflare Workers static assets. The API
 // token + account ID go through the environment (never argv); wrangler runs
-// non-interactively because the token is present.
+// non-interactively because the token is present. Returns the deployed
+// workers.dev URL (scraped from wrangler's output) or null if it couldn't be
+// found — the caller binds that URL into Supabase auth, and warns on null.
 async function runCloudflarePhase(config, buildDir, deployId) {
   const { file, cleanup } = await writeWranglerConfig(config, buildDir);
   try {
-    await runCommandPhase({
+    const { lines } = await runCommandPhase({
       argv: [WRANGLER_BIN, 'deploy', '--config', file],
       env: {
         CLOUDFLARE_API_TOKEN: config.cloudflareApiToken,
@@ -604,9 +624,72 @@ async function runCloudflarePhase(config, buildDir, deployId) {
       config,
       deployId,
       cwd: buildDir,
+      capture: true,
     });
+    return parseWorkerUrl(lines);
   } finally {
     await cleanup();
+  }
+}
+
+// `wrangler deploy` prints the live Worker URL on its own line, e.g.
+//   https://atomic-crm-<ref>.<account-subdomain>.workers.dev
+// The PTY may wrap it in ANSI colour codes and surrounding text; this matches
+// the URL substring anywhere in any captured line. Returns the origin (any
+// path/trailing punctuation stripped) or null if no workers.dev URL appears
+// (e.g. the account has the workers.dev subdomain disabled).
+const WORKERS_DEV_URL_RE = /https:\/\/[a-z0-9][a-z0-9.-]*\.workers\.dev/i;
+export function parseWorkerUrl(lines) {
+  for (const line of lines || []) {
+    const m = typeof line === 'string' && line.match(WORKERS_DEV_URL_RE);
+    if (m) return m[0];
+  }
+  return null;
+}
+
+// Bind the live frontend URL into the remote project's auth config via the
+// Supabase Management API, so email-confirmation / password-reset / OAuth
+// callbacks resolve to production without a manual Studio edit. We GET the
+// current auth config first and MERGE the URL (plus a `/**` wildcard) into the
+// existing uri_allow_list rather than clobbering it — keeping any localhost or
+// preview entries the user added by hand. site_url is set outright to the prod
+// URL. The personal access token rides the Authorization header (never argv).
+// Throws on a non-2xx PATCH; the caller treats binding as best-effort (warn,
+// don't fail an already-shipped deploy).
+async function updateSupabaseAuthConfig(config, url, deployId) {
+  const headers = {
+    Authorization: `Bearer ${config.accessToken}`,
+    'Content-Type': 'application/json',
+  };
+  const endpoint = `${SUPABASE_API_URL}/v1/projects/${config.projectRef}/config/auth`;
+
+  // Merge into the existing allow-list when we can read it; on any GET failure
+  // fall back to just our two entries (the PATCH below is what actually matters).
+  let existing = '';
+  try {
+    const getRes = await fetch(endpoint, { headers });
+    if (getRes.ok) {
+      const cur = await getRes.json();
+      if (typeof cur?.uri_allow_list === 'string') existing = cur.uri_allow_list;
+    } else {
+      logPhaseLine(`auth config GET returned ${getRes.status}`, deployId);
+    }
+  } catch (err) {
+    logPhaseLine(`auth config GET failed: ${err.message}`, deployId);
+  }
+
+  const wildcard = `${url}/**`;
+  const entries = existing.split(',').map((s) => s.trim()).filter(Boolean);
+  for (const e of [url, wildcard]) if (!entries.includes(e)) entries.push(e);
+
+  const res = await fetch(endpoint, {
+    method: 'PATCH',
+    headers,
+    body: JSON.stringify({ site_url: url, uri_allow_list: entries.join(',') }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Supabase auth update failed (${res.status}): ${redactSecrets(text, config).slice(0, 200)}`);
   }
 }
 
@@ -632,6 +715,10 @@ export async function runDeploy(config, deployId) {
   const ref = config.projectRef;
   const cfEnabled = isCloudflareComplete(config);
   let buildDir = null;
+  // Reset the per-deploy manual-auth nag; the Cloudflare branch below flips it on
+  // only if the auto-bind doesn't land.
+  deployState.manualAuthUrl = false;
+  deployState.callbackUrl = null;
 
   try {
     // Build the static CRM bundle FIRST when a Cloudflare target is configured: a
@@ -687,7 +774,27 @@ export async function runDeploy(config, deployId) {
     // Supabase backend is live, so the deployed app points at a ready database.
     if (cfEnabled) {
       emitStep(`▶ Deploying frontend to Cloudflare Workers (atomic-crm-${ref})`, deployId);
-      await runCloudflarePhase(config, buildDir, deployId);
+      const prodUrl = await runCloudflarePhase(config, buildDir, deployId);
+
+      // Auto-bind the live URL as the Supabase auth callback / site URL. This
+      // is the LAST step: both halves already shipped, so it's best-effort —
+      // a binding failure (or an undeterminable URL) warns and leaves the
+      // deploy successful rather than failing after the fact. The user falls
+      // back to the manual Studio edit they did before, nothing is broken.
+      deployState.callbackUrl = prodUrl;
+      if (prodUrl) {
+        emitStep(`▶ Binding ${prodUrl} as the Supabase callback URL`, deployId);
+        try {
+          await updateSupabaseAuthConfig(config, prodUrl, deployId);
+          emitStep('✓ Supabase callback URL bound', deployId);
+        } catch (err) {
+          emitStep(`⚠ Could not bind the callback URL (${err.message}) — set it manually in Supabase Studio`, deployId);
+          deployState.manualAuthUrl = true;
+        }
+      } else {
+        emitStep('⚠ Could not determine the production URL from wrangler — set the Supabase callback URL manually', deployId);
+        deployState.manualAuthUrl = true;
+      }
     }
 
     emitStep('✓ Deploy complete', deployId);
@@ -733,6 +840,8 @@ export async function handleDeployRun(req, res) {
   deployState.ok = null;
   deployState.exitCode = null;
   deployState.durationMs = null;
+  deployState.manualAuthUrl = false;
+  deployState.callbackUrl = null;
   // New deploy → fresh tail. Clients that reconnect mid-run will see only
   // this deploy's output, not noise from a previous one.
   deployState.tail = [];
@@ -776,6 +885,7 @@ async function finalize(config, deployId, t0, exitCode, errMessage) {
       const fresh = await loadConfig();
       if (fresh) {
         fresh.lastDeployAt = finishedAt;
+        if (deployState.callbackUrl) fresh.lastDeployUrl = deployState.callbackUrl;
         await writeConfigAtomic(fresh);
       }
     } catch (err) {
@@ -795,6 +905,8 @@ async function finalize(config, deployId, t0, exitCode, errMessage) {
     exitCode,
     durationMs,
     finishedAt,
+    manualAuthUrl: deployState.manualAuthUrl,
+    callbackUrl: deployState.callbackUrl,
     ...(errMessage ? { errMessage } : {}),
   });
 }
@@ -810,6 +922,8 @@ export function deploySnapshot() {
     ok: deployState.ok,
     exitCode: deployState.exitCode,
     durationMs: deployState.durationMs,
+    manualAuthUrl: deployState.manualAuthUrl,
+    callbackUrl: deployState.callbackUrl,
     tail: deployState.tail,
   };
 }
@@ -823,6 +937,8 @@ export function _resetForTests() {
   deployState.ok = null;
   deployState.exitCode = null;
   deployState.durationMs = null;
+  deployState.manualAuthUrl = false;
+  deployState.callbackUrl = null;
   deployState.tail = [];
   sseClients.clear();
 }
