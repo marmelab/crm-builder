@@ -112,7 +112,14 @@ function startBgDriver(runtime, runtimes) {
         await stopSubagentTailer(current).catch(() => {});
         await transitionState(current, 'completed');
         broadcast(current, { type: 'status', working: false });
-        if (await sessionHasMergedTickets(sDir)) scheduleDocumentatorRun(sessionId, runtimes);
+        // Documentator (Mode 2) ownership: when a satisfaction widget is in play
+        // (COMPLEX / schema-touching SIMPLE), the orchestrator dispatches the
+        // documentator itself at PD-RESPOND once the user confirms — so we skip
+        // the chat-service fallback here to avoid a double run. The fallback only
+        // covers flows with no widget (cosmetic SIMPLE) that still merged work.
+        if (!current.session?.meta?.satisfactionAsk && await sessionHasMergedTickets(sDir)) {
+          scheduleDocumentatorRun(sessionId, runtimes);
+        }
         return;
       }
       driverLog(`heartbeat drain: quiet=${state.drainQuiet} session=${sessionId}`);
@@ -597,7 +604,11 @@ export async function processMessage(runtime, prompt, opts = {}) {
         await stopSubagentTailer(runtime).catch(() => {});
         await transitionState(runtime, nextState);
         broadcast(runtime, { type: 'status', working: false });
-        if (nextState === 'completed' && !turnErrored && sDir && await sessionHasMergedTickets(sDir)) {
+        // See the bg-driver branch: skip the fallback when a satisfaction widget
+        // is in play — the orchestrator dispatches the documentator at PD-RESPOND.
+        if (nextState === 'completed' && !turnErrored && sDir
+            && !runtime.session?.meta?.satisfactionAsk
+            && await sessionHasMergedTickets(sDir)) {
           scheduleDocumentatorRun(sessionId, runtimes);
         }
       }
