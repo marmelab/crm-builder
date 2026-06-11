@@ -85,6 +85,15 @@ function startBgDriver(runtime, runtimes) {
     // the PTY has died (a fresh PTY's exit handler / next turn re-arms it).
     if (!current) { clearBgDriver(sessionId); return; }
     if (current.busy) return;
+    if (current.pendingRateLimit) {
+      // A subagent transcript reported a blocked limit (subagent-tail.js →
+      // noteRateLimit). currentProc is null while idle, so the kill no-oped —
+      // settle here instead of nudging a blocked TUI for 6 minutes.
+      const info = current.pendingRateLimit;
+      current.pendingRateLimit = null;
+      settleBackgroundRateLimit(current, info).catch(() => {});
+      return;
+    }
     if (!current.ptySession || current.ptySession.closed) {
       driverLog(`heartbeat stop: PTY gone session=${sessionId}`);
       clearBgDriver(sessionId);
@@ -161,6 +170,28 @@ function startBgDriver(runtime, runtimes) {
   }, HEARTBEAT_MS);
 
   bgDrivers.set(sessionId, { timer: state.timer });
+}
+
+// Settle the session on `rate_limited` from an idle (background-turn) context.
+// Mirrors the active-loop path: record + broadcast the friendly message, the
+// rate_limited frame with resetsAt, persist resetsAt, stop driving the wave.
+async function settleBackgroundRateLimit(runtime, info) {
+  if (runtime.bgRateLimitSettling) return;          // idempotent (main + subagent may both fire)
+  runtime.bgRateLimitSettling = true;
+  clearBgDriver(runtime.session?.id);
+  try { runtime.ptySession?.kill(); } catch {}      // the CLI hangs on a blocked limit
+  await stopSubagentTailer(runtime).catch(() => {});
+  const errText = friendlyError({ rateLimit: info });
+  broadcast(runtime, { type: 'message', role: 'assistant', content: errText, ts: new Date().toISOString() });
+  await runtime.session?.recordMessage('assistant', errText).catch(() => {});
+  const resetsAt = typeof info.resetsAt === 'number' ? info.resetsAt : null;
+  broadcast(runtime, { type: 'rate_limited', resetsAt });
+  await runtime.session?.setRateLimitResetsAt(resetsAt).catch(() => {});
+  await transitionState(runtime, 'rate_limited');
+  broadcast(runtime, { type: 'status', working: false });
+  // NB: leave bgRateLimitSettling set — a rate_limited settle is terminal for
+  // this turn. processMessage resets it at the next turn entry so a future wave
+  // can settle a fresh limit (mirrors how tearingDown is cleared).
 }
 
 // Shared per-event stats accounting, run identically by the active-turn loop and
@@ -303,6 +334,7 @@ export async function processMessage(runtime, prompt, opts = {}) {
 
   driverLog(`processMessage enter auto=${isAutoContinue} session=${runtime.session?.id} ptyAlive=${!!runtime.ptySession && !runtime.ptySession.closed}`);
   runtime.tearingDown = false;
+  runtime.bgRateLimitSettling = false;
   cancelIdleTeardown(runtime);
   if (runtime.session?.id) {
     clearBgDriver(runtime.session.id);
@@ -375,6 +407,18 @@ export async function processMessage(runtime, prompt, opts = {}) {
       // While an active turn is running, ptyEventsUntilResult owns the events —
       // skip here to avoid double-processing.
       if (runtime.busy) return;
+      if (event.type === 'rate_limit_event' && event.rate_limit_info?.status === 'blocked') {
+        noteRateLimit(runtime, event.rate_limit_info);
+        settleBackgroundRateLimit(runtime, event.rate_limit_info).catch(() => {});
+        return;
+      }
+      if (event.type === 'assistant' && event.error === 'rate_limit') {
+        const txt = event.message?.content?.find?.((b) => b?.type === 'text')?.text || '';
+        const info = { resetsAt: parseResetsAtFromText(txt), message: txt || null };
+        noteRateLimit(runtime, info);
+        settleBackgroundRateLimit(runtime, info).catch(() => {});
+        return;
+      }
       if (event.type === 'background_result') driverLog(`background_result received (idle) session=${runtime.session?.id}`);
       broadcast(runtime, { type: 'debug_raw', event });
       // Advance progress/stats from this background turn's events, identical to

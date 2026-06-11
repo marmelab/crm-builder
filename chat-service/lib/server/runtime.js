@@ -41,6 +41,7 @@ export function createRuntime(session) {
     // loop reconciles it into the local `rateLimit` so a subagent-triggered
     // limit settles the session on `rate_limited` instead of hanging forever.
     pendingRateLimit: null,
+    bgRateLimitSettling: false,  // terminal guard: set once a background-turn rate limit settles; cleared at next turn entry
     // Per-wave auto-continue state (see auto-continue.js). count = consecutive
     // auto-resumes; noProgress = consecutive resumes with an unchanged pending
     // set; prevSig = last pending-ticket signature. Reset by any real user msg.
