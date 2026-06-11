@@ -284,7 +284,9 @@ export async function openSession(requestedId) {
       await saveMeta();
     },
     setClaudeSessionId: async (csid) => {
-      if (!csid || meta.claudeSessionId === csid) return;
+      // csid === null explicitly clears a stale id (e.g. ~/.claude/projects was
+      // wiped and --resume can no longer find the conversation).
+      if (csid === undefined || meta.claudeSessionId === csid) return;
       meta.claudeSessionId = csid;
       await saveMeta();
     },

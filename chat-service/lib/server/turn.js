@@ -316,6 +316,19 @@ export async function processMessage(runtime, prompt, opts = {}) {
     }
   }
 
+  if (opts.freshSession) {
+    // Recovery: spawn a brand-new conversation. The live PTY (if any) holds the
+    // dead "wave is running" transcript — kill it and drop the CSID so the next
+    // PtySession spawns WITHOUT --resume. STATE RECOVERY rebuilds from disk.
+    runtime.claudeSessionId = null;
+    runtime.session?.setClaudeSessionId(null).catch(() => {});
+    if (runtime.ptySession && !runtime.ptySession.closed) {
+      runtime.suppressNextPtyRestart = true;
+      runtime.ptySession.kill();
+      runtime.ptySession = null;
+    }
+  }
+
   // Always reset per-turn live state (active agents, animation anchor).
   // Cumulative progress state (which agents ran, wave topology) is preserved
   // across auto-continue turns so the progress bar doesn't reset mid-COMPLEX.
@@ -402,7 +415,11 @@ export async function processMessage(runtime, prompt, opts = {}) {
     attachBgListener(runtime.ptySession);
 
     runtime.ptySession.once('exit', () => {
-      if (runtime.tearingDown) { runtime.ptySession = null; return; }
+      if (runtime.tearingDown || runtime.suppressNextPtyRestart) {
+        runtime.suppressNextPtyRestart = false;
+        runtime.ptySession = null;
+        return;
+      }
       runtime.ptySession = null;
       const restartCount = runtime.ptyRestartCount || 0;
       if (!runtime.busy && restartCount < 1) {
@@ -427,6 +444,9 @@ export async function processMessage(runtime, prompt, opts = {}) {
   }
 
   runtime.ptyRestartCount = 0;
+
+  const spawnedWithResume = !!runtime.claudeSessionId;
+  let staleRetry = false;
 
   if (!runtime.ptySession || runtime.ptySession.closed) {
     spawnOrResumePty();
@@ -503,11 +523,19 @@ export async function processMessage(runtime, prompt, opts = {}) {
     const exitCode = sawResult ? 0 : 1;
     const stderr = runtime.ptySession?.stderr ?? '';
 
+    // `claude --resume <missing-id>` exits almost immediately with no transcript
+    // events: no result, no text, PTY dead. Drop the stale id and replay the
+    // turn once on a fresh conversation instead of surfacing a dead-end error.
+    staleRetry = !sawResult && !receivedText && spawnedWithResume
+      && !runtime.stopping && !rateLimit
+      && (!runtime.ptySession || runtime.ptySession.closed)
+      && !opts.staleRetried;
+
     if (runtime.stopping) {
       const stopText = '⏹ Session stopped.';
       broadcast(runtime, { type: 'message', role: 'assistant', content: stopText, ts: new Date().toISOString() });
       await runtime.session?.recordMessage('assistant', stopText).catch(() => {});
-    } else if (turnFailedFrom({ resultError, stderr, sawResult, exitCode }) || !receivedText || rateLimit) {
+    } else if (!staleRetry && (turnFailedFrom({ resultError, stderr, sawResult, exitCode }) || !receivedText || rateLimit)) {
       const errText = friendlyError({ exitCode, stderr, rateLimit, resultError });
       broadcast(runtime, { type: 'message', role: 'assistant', content: errText, ts: new Date().toISOString() });
       await runtime.session?.recordMessage('assistant', errText).catch(() => {});
@@ -558,7 +586,12 @@ export async function processMessage(runtime, prompt, opts = {}) {
     const wasStopped = !!runtime.stopping;
     runtime.stopping = false;
 
-    if (!wasStopped && !rateLimit && runtime.queue.length > 0) {
+    if (staleRetry) {
+      runtime.claudeSessionId = null;
+      runtime.session?.setClaudeSessionId(null).catch(() => {});
+      runtime.busy = true;
+      processMessage(runtime, prompt, { ...opts, staleRetried: true });
+    } else if (!wasStopped && !rateLimit && runtime.queue.length > 0) {
       broadcast(runtime, { type: 'status', working: false });
       const next = runtime.queue.shift();
       broadcast(runtime, { type: 'queue_updated', queuedIds: runtime.queue.map((q) => q.id) });
