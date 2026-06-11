@@ -204,6 +204,9 @@ function startBgDriver(runtime, runtimes) {
           foldSpawnUsageIntoStats(current);
           sendStats(current);
         }
+        // Always capture the final transcript on drain-completed, even if the last
+        // background_result snapshot was throttled.
+        snapshotClaudeSession(current.claudeSessionId, current.session?.id).catch(() => {});
         await transitionState(current, 'completed');
         broadcast(current, { type: 'status', working: false });
         // The documentator (Mode 2) is now dispatched by the orchestrator itself
@@ -590,7 +593,14 @@ export async function processMessage(runtime, prompt, opts = {}) {
         // merger) runs in background turns, and snapshotClaudeSession otherwise
         // only fires at active-turn end — so without this, /api/stats would miss
         // every agent that ran since the last user turn.
-        snapshotClaudeSession(runtime.claudeSessionId, runtime.session?.id).catch(() => {});
+        // Throttled: at most one snapshot per 30 s to avoid hammering the FS on
+        // high-frequency waves; the unconditional drain-completed snapshot below
+        // always captures the final state.
+        const _bgNow = Date.now();
+        if (!runtime.lastBgSnapshotAt || _bgNow - runtime.lastBgSnapshotAt > 30_000) {
+          runtime.lastBgSnapshotAt = _bgNow;
+          snapshotClaudeSession(runtime.claudeSessionId, runtime.session?.id).catch(() => {});
+        }
       }
     };
     ptyRef.on('event', bgHandler);
