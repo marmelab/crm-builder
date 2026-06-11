@@ -23,8 +23,10 @@ export async function enrichSubagentChildren(phases, subagentsDir, toolCounts, a
   // is the orchestrator's own JSONL only — subagent messages no longer appear
   // there with parent_tool_use_id, so every agent phase (in_process_teammate,
   // isBackground, and sync local_agent alike) must be enriched from its own
-  // JSONL file.
-  const targets = phases.filter((p) => p.kind === 'agent' && p.agentName);
+  // JSONL file. NB: we do NOT require p.agentName — SIMPLE-flow dispatches omit
+  // the `name` field, and the actual transcript↔phase matching below keys on
+  // agentType (the name was only ever a filter that wrongly dropped them).
+  const targets = phases.filter((p) => p.kind === 'agent');
   if (targets.length === 0) return;
 
   let dirEntries;

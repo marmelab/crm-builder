@@ -332,6 +332,11 @@ export async function processMessage(runtime, prompt, opts = {}) {
         runtime.bgResultCount = (runtime.bgResultCount || 0) + 1;
         updateProgressBar(runtime);
         sendStats(runtime);
+        // Snapshot subagent transcripts now: most COMPLEX work (dev, reviewers,
+        // merger) runs in background turns, and snapshotClaudeSession otherwise
+        // only fires at active-turn end — so without this, /api/stats would miss
+        // every agent that ran since the last user turn.
+        snapshotClaudeSession(runtime.claudeSessionId, runtime.session?.id).catch(() => {});
       }
     };
     ptyRef.on('event', bgHandler);
