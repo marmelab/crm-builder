@@ -29,6 +29,7 @@ export function createRuntime(session) {
     session,
     claudeSessionId: session.meta.claudeSessionId || null,
     busy: false,
+    waveActive: false,      // a COMPLEX wave is running as background turns (busy=false but the session isn't free)
     queue: [],
     queueIdSeq: 0,
     stopping: false,

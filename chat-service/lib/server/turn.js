@@ -68,6 +68,31 @@ function clearBgDriver(sessionId) {
   if (d) { clearInterval(d.timer); bgDrivers.delete(sessionId); }
 }
 
+// Tear down a COMPLEX wave that is running as background turns. Called from the
+// STOP handler: during a background wave `busy` is false and `currentProc` is
+// null (the active turn handed off), so killCurrentProc no-ops — the heartbeat
+// and the idle PTY are what actually keep the wave alive. Always clear waveActive
+// + stop the heartbeat. When STOP fires with no active turn (the pure background
+// case), also stop the tailer, kill the idle PTY, and settle the session here:
+// no turn finally will run to do it. suppressNextPtyRestart stops the PTY exit
+// handler from re-spawning the very wave we're killing (mirrors recovery's kill).
+// No-op when no wave is active. Returns true when a background wave was settled.
+export async function stopBackgroundWave(runtime) {
+  if (!runtime?.waveActive) return false;
+  runtime.waveActive = false;
+  clearBgDriver(runtime.session?.id);
+  if (runtime.busy) return false;   // an active turn is taking over — its finally settles
+  await stopSubagentTailer(runtime).catch(() => {});
+  if (runtime.ptySession && !runtime.ptySession.closed) {
+    runtime.suppressNextPtyRestart = true;
+    try { runtime.ptySession.kill(); } catch {}
+    runtime.ptySession = null;
+  }
+  await transitionState(runtime, 'completed');
+  broadcast(runtime, { type: 'status', working: false });
+  return true;
+}
+
 // Start (or restart) the heartbeat that nudges the idle PTY so background turns
 // fire. Reads ticket statuses each tick: all terminal → finish; otherwise nudge
 // and track no-progress for stall escalation.
@@ -96,12 +121,13 @@ function startBgDriver(runtime, runtimes) {
     }
     if (!current.ptySession || current.ptySession.closed) {
       driverLog(`heartbeat stop: PTY gone session=${sessionId}`);
+      current.waveActive = false;
       clearBgDriver(sessionId);
       return;
     }
 
     const { total, pendingCount, pendingSig } = await readTicketStatuses(sDir);
-    if (total === 0) { clearBgDriver(sessionId); return; }          // not a COMPLEX wave
+    if (total === 0) { current.waveActive = false; clearBgDriver(sessionId); return; }          // not a COMPLEX wave
 
     const bgCount = current.bgResultCount || 0;
 
@@ -114,6 +140,7 @@ function startBgDriver(runtime, runtimes) {
       else state.drainQuiet = (state.drainQuiet || 0) + 1;
       if (state.drainQuiet >= HEARTBEAT_DRAIN_QUIET_TICKS) {
         driverLog(`heartbeat done: drained quiet session=${sessionId}`);
+        current.waveActive = false;
         clearBgDriver(sessionId);
         await stopSubagentTailer(current).catch(() => {});
         await transitionState(current, 'completed');
@@ -121,6 +148,14 @@ function startBgDriver(runtime, runtimes) {
         // The documentator (Mode 2) is now dispatched by the orchestrator itself
         // (Agent, at PD-RESPOND once the user confirms) — chat-service no longer
         // spawns it. Nothing to do here.
+        // A user message that arrived while the wave ran in background was queued
+        // (waveActive guard in server.js); drain it now that the session is free.
+        if (current.queue.length > 0) {
+          const next = current.queue.shift();
+          broadcast(current, { type: 'queue_updated', queuedIds: current.queue.map((q) => q.id) });
+          current.busy = true;
+          processMessage(current, next.content);
+        }
         return;
       }
       driverLog(`heartbeat drain: quiet=${state.drainQuiet} session=${sessionId}`);
@@ -142,6 +177,7 @@ function startBgDriver(runtime, runtimes) {
     if (state.noProgress >= HEARTBEAT_GIVEUP_TICKS) {
       // Genuinely stuck — surface the stall once and stop nudging.
       driverLog(`heartbeat give-up: stall ${state.noProgress} ticks pending=${pendingCount} session=${sessionId}`);
+      current.waveActive = false;
       clearBgDriver(sessionId);
       await stopSubagentTailer(current).catch(() => {});
       const done = Math.max(0, total - pendingCount);
@@ -149,6 +185,14 @@ function startBgDriver(runtime, runtimes) {
       broadcast(current, { type: 'message', role: 'assistant', content: stallText, ts: new Date().toISOString() });
       await current.session?.recordMessage('assistant', stallText).catch(() => {});
       await transitionState(current, 'error');
+      // A queued message (a typed "continue") is exactly what the stall asks for —
+      // drain it now that the session is free instead of leaving it stuck.
+      if (current.queue.length > 0) {
+        const next = current.queue.shift();
+        broadcast(current, { type: 'queue_updated', queuedIds: current.queue.map((q) => q.id) });
+        current.busy = true;
+        processMessage(current, next.content);
+      }
       return;
     }
 
@@ -178,6 +222,7 @@ function startBgDriver(runtime, runtimes) {
 async function settleBackgroundRateLimit(runtime, info) {
   if (runtime.bgRateLimitSettling) return;          // idempotent (main + subagent may both fire)
   runtime.bgRateLimitSettling = true;
+  runtime.waveActive = false;
   clearBgDriver(runtime.session?.id);
   try { runtime.ptySession?.kill(); } catch {}      // the CLI hangs on a blocked limit
   await stopSubagentTailer(runtime).catch(() => {});
@@ -339,6 +384,8 @@ export async function processMessage(runtime, prompt, opts = {}) {
   if (runtime.session?.id) {
     clearBgDriver(runtime.session.id);
     if (!isAutoContinue) {
+      // A real user turn takes over the session — any background wave is now moot.
+      runtime.waveActive = false;
       runtime.autoContinue = { count: 0, noProgress: 0, prevSig: null };
       // Fresh user turn — drop stale dispatch/task correlation from a prior request.
       runtime.toolMap.clear();
@@ -678,6 +725,7 @@ export async function processMessage(runtime, prompt, opts = {}) {
         // subagent activity (mergers especially) stays in the live feed.
         await transitionState(runtime, 'in_progress');
         broadcast(runtime, { type: 'status', working: true });
+        runtime.waveActive = true;
         startBgDriver(runtime, runtimes);
       } else {
         // Truly settling — flush and stop the tailer.

@@ -13,7 +13,7 @@ import { runtimes, wsToRuntime, runtimeForWs, createRuntime, safeSend, killCurre
 import { sendToWs, broadcast } from './lib/server/ws-bus.js';
 import { updateProgressBar } from './lib/server/progress-bar.ts';
 import { extractText, extractToolUses, planResume } from './lib/server/claude-spawn.js';
-import { processMessage } from './lib/server/turn.js';
+import { processMessage, stopBackgroundWave } from './lib/server/turn.js';
 import { endsWithQuestion } from './lib/server/session-store.js';
 
 // Re-exported for unit tests (test/server.test.js imports from '../server.js').
@@ -172,10 +172,18 @@ wss.on('connection', async (ws, req) => {
 
     // Stop button: kill the running claude process and clear the queue.
     if (parsed.type === 'stop') {
-      if (!r.busy) return;
+      // A background wave keeps the session occupied with busy=false — STOP must
+      // still act on it, otherwise the heartbeat runs on and waveActive stays set
+      // forever (every future message would queue and never drain).
+      if (!r.busy && !r.waveActive) return;
       r.stopping = true;
       const hadQueued = r.queue.length > 0;
       r.queue = [];
+      // Tear down a background wave (clears waveActive, stops the heartbeat +
+      // tailer, kills the idle PTY, settles state). No-op when no wave is active.
+      // Fire-and-forget: the handler isn't async, and the synchronous teardown
+      // below (queue clear, log, broadcast) is independent of it.
+      stopBackgroundWave(r).catch(() => {});
       killCurrentProc(r);
       r.session?.logWrite('in', { type: 'stop_requested' });
       if (hadQueued) {
@@ -218,7 +226,7 @@ wss.on('connection', async (ws, req) => {
     // the pair to drop cancelled bubbles on rehydrate. Messages that run
     // immediately can never be cancelled, so they stay untagged.
     let queueId = null;
-    if (r.busy) {
+    if (r.busy || r.waveActive) {
       queueId = ++r.queueIdSeq;
       r.queue.push({ id: queueId, content: parsed.content });
     }
