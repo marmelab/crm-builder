@@ -41,7 +41,7 @@ export class PtySession extends EventEmitter {
 
   get stderr() { return this.#outputBuffer; }
 
-  constructor(claudeSessionId, sessionDir) {
+  constructor(claudeSessionId, sessionDir, { subagentUsageLines } = {}) {
     super();
     this.#sessionId = claudeSessionId || null;
     const model = getOrchestratorModel();
@@ -89,7 +89,7 @@ export class PtySession extends EventEmitter {
       this.emit('exit', exitCode ?? 1);
     });
 
-    this.#watcher = new TranscriptWatcher(claudeSessionId, PROJECT_DIR);
+    this.#watcher = new TranscriptWatcher(claudeSessionId, PROJECT_DIR, { subagentUsageLines });
     this.#watcher.on('event', e => {
       // Discover session_id for new sessions so we can watch for the stop sentinel.
       if (e.session_id && !this.#sessionId) {
@@ -286,6 +286,25 @@ export class PtySession extends EventEmitter {
     this.#silenceTimer = setTimeout(() => this.#emitResult('silence'), TURN_TIMEOUT_MS);
   }
 
+  // Collect (and reset) the turn's accumulated usage. Public so turn.js can
+  // fold in the cost of a wave that ends on the background drain path, where
+  // no active-turn result event will ever fire.
+  async collectUsage() {
+    const modelUsage = await this.#watcher?.consumeTurnUsage().catch(() => null) ?? {};
+    let total_cost_usd = 0;
+    for (const [model, mu] of Object.entries(modelUsage)) {
+      const perModelCost = costFromBreakdown(model, {
+        input:       mu.inputTokens              || 0,
+        cacheCreate: mu.cacheCreationInputTokens || 0,
+        output:      mu.outputTokens             || 0,
+        cacheRead:   mu.cacheReadInputTokens     || 0,
+      });
+      mu.costUSD = perModelCost;
+      total_cost_usd += perModelCost;
+    }
+    return { modelUsage, total_cost_usd };
+  }
+
   async #emitResult(reason = 'sentinel') {
     if (this.#resultEmitted) return; // idempotent
     this.#resultEmitted = true;
@@ -299,20 +318,7 @@ export class PtySession extends EventEmitter {
 
     // Collect token usage from JSONL (main session + subagents). This gives
     // accurate per-model token counts and cost even without stream-json events.
-    const modelUsage = await this.#watcher?.consumeTurnUsage().catch(() => null) ?? {};
-    let total_cost_usd = 0;
-    for (const [model, mu] of Object.entries(modelUsage)) {
-      const perModelCost = costFromBreakdown(model, {
-        input:       mu.inputTokens              || 0,
-        cacheCreate: mu.cacheCreationInputTokens || 0,
-        output:      mu.outputTokens             || 0,
-        cacheRead:   mu.cacheReadInputTokens     || 0,
-      });
-      // Populate costUSD so sendStats / computeSummary use the right cost without
-      // falling back to (null || 0) which zeros out per-model cost in the tooltip.
-      mu.costUSD = perModelCost;
-      total_cost_usd += perModelCost;
-    }
+    const { modelUsage, total_cost_usd } = await this.collectUsage();
 
     // The Stop hook is the only positive completion signal. A silence-timeout
     // result is a degraded path: flag it, and classify the screen buffer for

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, writeFile, appendFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile, appendFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { TranscriptWatcher, classifyToolResult, parseTaskNotification } from '../lib/server/transcript-watcher.js';
@@ -247,4 +247,32 @@ test('TranscriptWatcher: a foreground Agent tool_result still completes immediat
 
   watcher.close();
   await rm(dir, { recursive: true });
+});
+
+const assistantLine = (output) => JSON.stringify({
+  type: 'assistant',
+  message: { model: 'claude-opus-4-8', usage: { input_tokens: 10, output_tokens: output } },
+}) + '\n';
+
+test('consumeTurnUsage counts only new subagent lines, across watcher instances', async () => {
+  const projectDir = await mkdtemp(join(tmpdir(), 'tw-usage-'));
+  const csid = 'conv-test';
+  const subDir = join(projectDir, csid, 'subagents');
+  await mkdir(subDir, { recursive: true });
+  await writeFile(join(subDir, 'agent-1.jsonl'), assistantLine(100));
+
+  const shared = new Map();                       // = runtime.subagentUsageLines
+  const w1 = new TranscriptWatcher(csid, projectDir, { subagentUsageLines: shared });
+  const u1 = await w1.consumeTurnUsage();
+  assert.equal(u1['claude-opus-4-8'].outputTokens, 100);
+
+  await appendFile(join(subDir, 'agent-1.jsonl'), assistantLine(900));
+  const u2 = await w1.consumeTurnUsage();
+  assert.equal(u2['claude-opus-4-8'].outputTokens, 900);   // delta only
+
+  const w2 = new TranscriptWatcher(csid, projectDir, { subagentUsageLines: shared });
+  const u3 = await w2.consumeTurnUsage();
+  assert.equal(u3['claude-opus-4-8'], undefined);          // nothing new
+  w1.close(); w2.close();
+  await rm(projectDir, { recursive: true });
 });

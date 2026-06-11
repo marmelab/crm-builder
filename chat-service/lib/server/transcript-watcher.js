@@ -36,9 +36,12 @@ export class TranscriptWatcher extends EventEmitter {
   // assistant lines arrive. Consumed and reset by consumeTurnUsage() at turn end.
   // Map<model, {input, cacheCreate, output, cacheRead}>
   #turnUsage = new Map();
-  // Subagent JSONL files already counted in a previous consumeTurnUsage() call.
-  // Prevents double-counting when the same subagent dir is scanned on a later turn.
-  #knownSubagents = new Set();
+  // Per-subagent-file line offsets already counted in a previous
+  // consumeTurnUsage() call. Map<filename, linesConsumed>. Injected by the
+  // runtime so it survives PTY restarts (a fresh watcher must not re-count
+  // historical files in full). Tracking offsets — not a "seen" set — lets a
+  // file's later-appended lines be counted on subsequent turns.
+  #subagentUsageLines;
   // Tool-use IDs of pending Agent() calls — used to emit synthetic task_started /
   // task_notification events so activeAgents tracking works without system events.
   #pendingAgentIds = new Set();
@@ -49,10 +52,11 @@ export class TranscriptWatcher extends EventEmitter {
 
   // projectDir: directory containing <sessionId>.jsonl files.
   // sessionId: null for new sessions (watch dir), string for resumed sessions.
-  constructor(sessionId, projectDir) {
+  constructor(sessionId, projectDir, { subagentUsageLines = new Map() } = {}) {
     super();
     this.#sessionId = sessionId || null;
     this.#projectDir = projectDir;
+    this.#subagentUsageLines = subagentUsageLines;
     if (sessionId) {
       this.#jsonlPath = join(projectDir, `${sessionId}.jsonl`);
     }
@@ -283,30 +287,36 @@ export class TranscriptWatcher extends EventEmitter {
     this.#turnUsage.clear();
 
     // Subagent JSONLs live at <projectDir>/<sessionId>/subagents/*.jsonl.
-    // Only read files we haven't seen before to avoid double-counting across turns.
+    // Count only lines we haven't consumed yet (per-file offset), so a file's
+    // later-appended assistant lines are credited on subsequent turns instead
+    // of being lost after a near-empty first read.
     if (this.#sessionId) {
       try {
         const subDir = join(this.#projectDir, this.#sessionId, 'subagents');
         const files = await readdir(subDir);
         await Promise.all(
           files
-            .filter(f => f.endsWith('.jsonl') && !this.#knownSubagents.has(f))
-            .map(async f => {
-              this.#knownSubagents.add(f);
+            .filter((f) => f.endsWith('.jsonl'))
+            .map(async (f) => {
+              const consumed = this.#subagentUsageLines.get(f) || 0;
               const content = await readFile(join(subDir, f), 'utf8').catch(() => null);
               if (!content) return;
-              for (const line of content.split('\n')) {
-                if (!line.trim()) continue;
-                let e; try { e = JSON.parse(line); } catch { continue; }
+              const lines = content.split('\n');
+              let counted = consumed;
+              for (let i = consumed; i < lines.length; i++) {
+                const line = lines[i];
+                // Mirror #poll(): never advance past a trailing empty line — a
+                // later append turns it into content we must still count.
+                if (!line.trim()) { if (i < lines.length - 1) counted = i + 1; continue; }
+                let e; try { e = JSON.parse(line); } catch { break; } // partial tail — retry next call
+                counted = i + 1;
                 if (e.type !== 'assistant') continue;
                 const model = e.message?.model;
                 const u = e.message?.usage;
                 if (!model || !u) continue;
-                usage.set(model, addBreakdown(
-                  usage.get(model) || emptyBreakdown(),
-                  breakdownFromUsage(u),
-                ));
+                usage.set(model, addBreakdown(usage.get(model) || emptyBreakdown(), breakdownFromUsage(u)));
               }
+              this.#subagentUsageLines.set(f, counted);
             })
         );
       } catch { /* no subagents dir — normal for first turn */ }

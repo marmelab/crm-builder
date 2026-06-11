@@ -98,6 +98,35 @@ export async function stopBackgroundWave(runtime) {
 // Start (or restart) the heartbeat that nudges the idle PTY so background turns
 // fire. Reads ticket statuses each tick: all terminal → finish; otherwise nudge
 // and track no-progress for stall escalation.
+// Fold the just-finished spawn's `*CurrentSpawn` usage into the cumulative
+// session stats, then reset the per-spawn accumulators. Run identically by the
+// active-turn `finally` and by the background drain-completed branch, so both
+// paths produce the same downstream stats shape.
+function foldSpawnUsageIntoStats(runtime) {
+  runtime.stats.costUsd += runtime.stats.costUsdCurrentSpawn;
+  runtime.stats.costUsdCurrentSpawn = 0;
+  runtime.stats.tokensBreakdown = addBreakdown(
+    runtime.stats.tokensBreakdown,
+    runtime.stats.tokensBreakdownCurrentSpawn,
+  );
+  const bk = runtime.stats.tokensBreakdown;
+  runtime.stats.tokensUsed = bk.input + bk.cacheCreate + bk.output;
+  runtime.stats.tokensBreakdownCurrentSpawn = emptyBreakdown();
+  const byModelIdx = new Map(runtime.stats.tokensByModel.map((r) => [r.model, r]));
+  for (const [model, mb] of runtime.stats.tokensByModelCurrentSpawn) {
+    const prev = byModelIdx.get(model);
+    const mergedBreakdown = prev
+      ? addBreakdown(prev.breakdown, mb.breakdown)
+      : { ...mb.breakdown };
+    const addCost = mb.costUsd != null ? mb.costUsd : costFromBreakdown(model, mb.breakdown);
+    const mergedCost = (prev?.costUsd || 0) + addCost;
+    if (prev) { prev.breakdown = mergedBreakdown; prev.costUsd = mergedCost; }
+    else byModelIdx.set(model, { model, breakdown: mergedBreakdown, costUsd: mergedCost });
+  }
+  runtime.stats.tokensByModel = [...byModelIdx.values()].sort((a, b) => b.costUsd - a.costUsd);
+  runtime.stats.tokensByModelCurrentSpawn = new Map();
+}
+
 function startBgDriver(runtime, runtimes) {
   const sessionId = runtime.session?.id;
   if (!sessionId) return;
@@ -156,6 +185,25 @@ function startBgDriver(runtime, runtimes) {
         current.bgDriverState = null;
         clearBgDriver(sessionId);
         await stopSubagentTailer(current).catch(() => {});
+        // The wave ended on the background drain path: no active-turn `result`
+        // event fired, so the subagent tokens accumulated since the last
+        // consumeTurnUsage() would otherwise be dropped. Collect + fold them in
+        // here, using the same per-spawn → cumulative shape as the active-turn
+        // finally, before settling completed.
+        const usage = await current.ptySession?.collectUsage().catch(() => null);
+        if (usage && Object.keys(usage.modelUsage).length > 0) {
+          current.stats.tokensBreakdownCurrentSpawn = breakdownFromModelUsage(usage.modelUsage);
+          current.stats.tokensByModelCurrentSpawn = new Map(Object.entries(usage.modelUsage).map(([model, mu]) => [model, {
+            breakdown: {
+              input: mu.inputTokens || 0, cacheCreate: mu.cacheCreationInputTokens || 0,
+              output: mu.outputTokens || 0, cacheRead: mu.cacheReadInputTokens || 0,
+            },
+            costUsd: mu.costUSD ?? null,
+          }]));
+          current.stats.costUsdCurrentSpawn = usage.total_cost_usd || 0;
+          foldSpawnUsageIntoStats(current);
+          sendStats(current);
+        }
         await transitionState(current, 'completed');
         broadcast(current, { type: 'status', working: false });
         // The documentator (Mode 2) is now dispatched by the orchestrator itself
@@ -524,7 +572,10 @@ export async function processMessage(runtime, prompt, opts = {}) {
   }
 
   function spawnOrResumePty() {
-    runtime.ptySession = new PtySession(runtime.claudeSessionId, sessionDir);
+    runtime.subagentUsageLines ??= new Map();   // survives PTY restarts → no double-count
+    runtime.ptySession = new PtySession(runtime.claudeSessionId, sessionDir, {
+      subagentUsageLines: runtime.subagentUsageLines,
+    });
     attachBgListener(runtime.ptySession);
     if (runtime.claudeSessionId) {
       startSubagentTailer(runtime).catch((e) => console.error('[subagent-tail]', e));
@@ -684,28 +735,7 @@ export async function processMessage(runtime, prompt, opts = {}) {
     // reviewers) still reaches the live feed. It is stopped only when the wave
     // truly settles (below / in the bg driver) or on teardown.
 
-    runtime.stats.costUsd += runtime.stats.costUsdCurrentSpawn;
-    runtime.stats.costUsdCurrentSpawn = 0;
-    runtime.stats.tokensBreakdown = addBreakdown(
-      runtime.stats.tokensBreakdown,
-      runtime.stats.tokensBreakdownCurrentSpawn,
-    );
-    const bk = runtime.stats.tokensBreakdown;
-    runtime.stats.tokensUsed = bk.input + bk.cacheCreate + bk.output;
-    runtime.stats.tokensBreakdownCurrentSpawn = emptyBreakdown();
-    const byModelIdx = new Map(runtime.stats.tokensByModel.map((r) => [r.model, r]));
-    for (const [model, mb] of runtime.stats.tokensByModelCurrentSpawn) {
-      const prev = byModelIdx.get(model);
-      const mergedBreakdown = prev
-        ? addBreakdown(prev.breakdown, mb.breakdown)
-        : { ...mb.breakdown };
-      const addCost = mb.costUsd != null ? mb.costUsd : costFromBreakdown(model, mb.breakdown);
-      const mergedCost = (prev?.costUsd || 0) + addCost;
-      if (prev) { prev.breakdown = mergedBreakdown; prev.costUsd = mergedCost; }
-      else byModelIdx.set(model, { model, breakdown: mergedBreakdown, costUsd: mergedCost });
-    }
-    runtime.stats.tokensByModel = [...byModelIdx.values()].sort((a, b) => b.costUsd - a.costUsd);
-    runtime.stats.tokensByModelCurrentSpawn = new Map();
+    foldSpawnUsageIntoStats(runtime);
     runtime.currentProc = null;
     sendStats(runtime);
 
