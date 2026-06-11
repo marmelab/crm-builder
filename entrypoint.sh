@@ -35,22 +35,31 @@ fi
 
 # ── Auth check — API key or OAuth token ───────────────────────
 CLAUDE_DIR="/home/developer/.claude"
-# Only the OAuth login is shared/persisted (across rebuilds and parallel
-# instances), via a dedicated volume mounted at AUTH_DIR. The harness config
-# (agents/skills/hooks/rules/settings.json) stays image-local in CLAUDE_DIR and
-# is never shadowed by a stale or cross-instance volume copy. We symlink just
-# the login files from AUTH_DIR into CLAUDE_DIR; the CLI reads/writes them
-# through the symlinks, so credentials land in the shared volume.
+# Only the OAuth login is shared/persisted via the AUTH_DIR volume; the harness
+# config (agents/skills/hooks/settings.json) stays image-local in CLAUDE_DIR.
+# We COPY rather than symlink: the CLI rewrites the login files atomically
+# (temp + rename), which replaces a symlink with a regular file — so a symlink
+# lands the login on the ephemeral layer and the volume stays empty.
 AUTH_DIR="/home/developer/.claude-auth"
+# credentials.json (no dot) omitted — the CLI only writes .credentials.json.
+LOGIN_FILES=".credentials.json .claude.json"
 
-# Ensure .claude is writable by developer regardless of how the volume mounted —
-# `make claude` writes credentials (through the symlinks below) as the developer
-# user on first OAuth.
 mkdir -p "${CLAUDE_DIR}" "${AUTH_DIR}"
-for f in .credentials.json credentials.json .claude.json; do
-  ln -sfn "${AUTH_DIR}/${f}" "${CLAUDE_DIR}/${f}"
+# Restore the persisted login from the volume.
+for f in ${LOGIN_FILES}; do
+  [ -f "${AUTH_DIR}/${f}" ] && cp -a "${AUTH_DIR}/${f}" "${CLAUDE_DIR}/${f}"
 done
 chown -R developer:developer "${CLAUDE_DIR}" "${AUTH_DIR}" 2>/dev/null || true
+
+# Mirror the login back to the volume so stop/start keeps the session. cp -u
+# only copies when newer; started now to also catch a first OAuth below.
+_persist_login() {
+  for f in ${LOGIN_FILES}; do
+    [ -f "${CLAUDE_DIR}/${f}" ] && cp -au "${CLAUDE_DIR}/${f}" "${AUTH_DIR}/${f}" 2>/dev/null || true
+  done
+}
+( while sleep 10; do _persist_login; done ) &
+LOGIN_SYNC_PID=$!
 
 if [ -n "${ANTHROPIC_API_KEY}" ]; then
   echo -e "${GREEN}✓  Auth: API key${NC}"
@@ -410,6 +419,8 @@ fi
 # exec would replace this bash process, losing the trap. Run supervisord in the
 # background instead and wait — SIGTERM from `compose down` is caught here.
 _stop() {
+  _persist_login  # final flush on clean shutdown
+  kill "$LOGIN_SYNC_PID" 2>/dev/null || true
   if [ "$MODE" = "full" ]; then
     echo -e "${YELLOW}Stopping Supabase before shutdown...${NC}"
     su developer -c 'cd /app && supabase stop --no-backup' 2>/dev/null || true
