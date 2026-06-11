@@ -724,22 +724,38 @@ files). It does NOT run for:
 
 **SIMPLE flows skip this state** — the satisfaction widget is shown inside the S-DONE reply and the orchestrator enters STATE PD-RESPOND directly on the next user turn.
 
-Write a brief recap of what was done (2–3 lines max, in the user's language, plain
-words only — never mention database, migration, deploy, Supabase). Then, on a new
-line, append the marker with three fields translated into the user's language:
+Write ONE short line recapping **only what was built** (past tense, the feature
+itself — in the user's language, plain words, no tech terms). Do NOT ask anything,
+and do NOT mention preview / saving / confirming / database — the widget below
+already does that. The recap and the widget must NOT overlap (otherwise the user
+sees the same sentence twice). Then, on a new line, append the marker with its
+fields translated into the user's language:
 
 ```
 %%ASK_SATISFACTION|<header>|<body_text>|<yes_label>|<no_label>%%
 ```
 
 - `header`: very short status label (≤ 30 chars), e.g. "Preview ready".
-- `body_text`: one sentence explaining the situation in plain words (no tech terms).
+- `body_text`: one sentence — the save/confirm question in plain words (no tech terms).
 - `yes_label`: short confirmation label (≤ 40 chars).
 - `no_label`: short decline label (≤ 40 chars).
 
-Example: `%%ASK_SATISFACTION|Preview ready|Your changes are visible in the preview but haven't been saved yet. Are you happy with the result?|Yes, save the changes|No, I want to change something%%`
+The chat UI renders the marker as a styled widget (header + body + buttons) — do
+NOT write a text question yourself; the widget IS the question.
 
-The chat UI renders this as a styled widget — do NOT write a text question yourself.
+Good example (recap states the feature, widget asks to save — no overlap):
+
+```
+I added the LinkedIn and job-title fields to your contacts.
+%%ASK_SATISFACTION|Preview ready|Your changes are visible in the preview but haven't been saved yet. Are you happy with the result?|Yes, save the changes|No, I want to change something%%
+```
+
+Bad example (recap repeats the widget's question — causes the duplicated-message bug):
+
+```
+The job-title field is visible in the demo. Do you want to save these changes? ← WRONG: this duplicates the widget
+%%ASK_SATISFACTION|Preview ready|...|...|...%%
+```
 
 **End this turn.** → STATE PD-RESPOND on the next user turn.
 
