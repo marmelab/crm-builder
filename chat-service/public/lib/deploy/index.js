@@ -31,6 +31,7 @@ let state = {
   // so a draft can be configured-but-incomplete.
   supabaseComplete: false,
   running: false,
+  lastDeployUrl: null,
   expectedSecrets: [],
   configuredSecrets: [],
   // Top-level secret fields already stored (names only) → drives the per-field
@@ -78,7 +79,21 @@ function refreshButtonLabel() {
   // so it doesn't look clickable while it's inert.
   if (elements.modalClose) elements.modalClose.hidden = state.running;
   refreshDashboardLink();
+  refreshLiveButton();
   refreshConfigChips();
+}
+
+// Show the persistent "Open live CRM" link whenever we have a last-deploy URL.
+function refreshLiveButton() {
+  const link = elements?.liveBtn;
+  if (!link) return;
+  const url = state.lastDeployUrl;
+  if (url) {
+    link.href = url;
+    link.hidden = false;
+  } else {
+    link.hidden = true;
+  }
 }
 
 // Point the "Open Supabase dashboard" link at the configured project, shown
@@ -222,7 +237,7 @@ function applyStatus(status) {
   const passthrough = [
     'configured', 'supabaseComplete', 'running', 'expectedSecrets',
     'configuredSecrets', 'configuredSecretFields',
-    'projectRef', 'lastDeployAt',
+    'projectRef', 'lastDeployAt', 'lastDeployUrl',
     'cloudflareConfigured', 'cloudflareAccountId', 'cloudflareTokenStored',
     'deployId', 'ok', 'exitCode', 'durationMs', 'manualAuthUrl', 'callbackUrl',
   ];
@@ -413,6 +428,7 @@ function onDeployDone(msg) {
   state.running = false;
   state.manualAuthUrl = !!msg.manualAuthUrl;
   state.callbackUrl = msg.callbackUrl || null;
+  if (msg.ok && msg.callbackUrl) state.lastDeployUrl = msg.callbackUrl;
   refreshButtonLabel();
   paintTerminalStatus(msg.ok, msg.durationMs, msg.exitCode);
   // Re-fetch the public status to pick up lastDeployAt.
@@ -425,6 +441,7 @@ export function initDeploy() {
     btnLabel: document.querySelector('#deploy-btn .deploy-btn-label'),
     btnChip: $('#deploy-btn-chip'),
     editBtn: $('#deploy-edit-btn'),
+    liveBtn: $('#deploy-live-btn'),
     dashboardLink: $('#deploy-dashboard-btn'),
     modal: $('#deploy-modal'),
   };

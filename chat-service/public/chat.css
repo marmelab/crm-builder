@@ -124,6 +124,7 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
 #chat-history-panel.collapsed #history-recent-btn { display: flex; }
 
 #deploy-btn,
+#deploy-live-btn,
 #history-more-btn,
 #deploy-edit-btn,
 #deploy-dashboard-btn,
@@ -139,6 +140,7 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
   transition: background .15s, color .15s;
 }
 #deploy-btn { margin-top: auto; position: relative; }
+#deploy-live-btn { color: #34d399; }
 /* Red chip flagging that deployment isn't fully configured. Absolutely
    positioned so it survives the collapsed sidebar (label hidden, icon only). */
 .deploy-btn-chip {
@@ -149,6 +151,7 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
 }
 .deploy-btn-chip[hidden] { display: none; }
 /* `hidden` must win over the flex display above. */
+#deploy-live-btn[hidden],
 #deploy-edit-btn[hidden],
 #deploy-dashboard-btn[hidden] { display: none; }
 #deploy-btn:hover,
@@ -156,7 +159,9 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
 #deploy-edit-btn:hover,
 #deploy-dashboard-btn:hover,
 #history-download-btn:hover { background: #2c2c2e; color: #fff; }
+#deploy-live-btn:hover { background: #2c2c2e; color: #6ee7b7; }
 #deploy-btn svg,
+#deploy-live-btn svg,
 #history-more-btn svg,
 #deploy-edit-btn svg,
 #deploy-dashboard-btn svg,
@@ -164,14 +169,17 @@ body:has(#chat-widget.chat-closed) { --widget-width: 0px; }
 #deploy-btn.deploy-btn-running { color: #fbbf24; }
 #deploy-btn.deploy-btn-running .deploy-btn-icon { animation: deploy-spin 1.2s linear infinite; }
 #chat-history-panel.collapsed #deploy-btn .deploy-btn-label,
+#chat-history-panel.collapsed #deploy-live-btn .deploy-btn-label,
 #chat-history-panel.collapsed #history-more-btn .history-more-label {
   display: none;
 }
 #chat-history-panel.collapsed #deploy-btn,
+#chat-history-panel.collapsed #deploy-live-btn,
 #chat-history-panel.collapsed #history-more-btn {
   justify-content: center; padding: 10px 0;
 }
 #chat-history-panel.collapsed #deploy-btn svg,
+#chat-history-panel.collapsed #deploy-live-btn svg,
 #chat-history-panel.collapsed #history-more-btn svg { width: 20px; height: 20px; }
 
 @keyframes deploy-spin {
