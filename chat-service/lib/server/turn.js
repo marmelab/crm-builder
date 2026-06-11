@@ -34,6 +34,13 @@ const HEARTBEAT_MS = 6_000;
 // escalation. ~6 s/tick: 30 ticks ≈ 3 min (one slow developer), 60 ≈ 6 min.
 const HEARTBEAT_STALL_TICKS = 30;   // → one heavyweight AUTO_CONTINUE resume
 const HEARTBEAT_GIVEUP_TICKS = 60;  // → surface stall message, settle on error
+// When every ticket is merged the wave isn't done yet: promotion (session→main)
+// and any follow-up (e.g. a translation fix) still run as background turns. Stay
+// in_progress (bar visible) and only settle `completed` after this many ticks
+// with NO new background turn — so the orchestrator's final recap lands in chat
+// before the bar disappears. Must exceed the promotion merger's run time (~30-60s)
+// so we never complete during the idle gap while it runs. 12 ticks ≈ 72 s.
+const HEARTBEAT_DRAIN_QUIET_TICKS = 12;
 
 function parseResetsAtFromText(text) {
   const m = /resets?\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b.*?\butc\b/i.exec(text || '');
@@ -72,7 +79,7 @@ function startBgDriver(runtime, runtimes) {
   if (!sessionId) return;
   clearBgDriver(sessionId);
   const sDir = `${LOG_DIR}/${sessionId}`;
-  const state = { prevSig: null, noProgress: 0, resumed: false, timer: null, seenBgCount: runtime.bgResultCount || 0 };
+  const state = { prevSig: null, noProgress: 0, resumed: false, timer: null, seenBgCount: runtime.bgResultCount || 0, drainQuiet: 0 };
   driverLog(`heartbeat started session=${sessionId}`);
 
   state.timer = setInterval(async () => {
@@ -89,12 +96,26 @@ function startBgDriver(runtime, runtimes) {
 
     const { total, pendingCount, pendingSig } = await readTicketStatuses(sDir);
     if (total === 0) { clearBgDriver(sessionId); return; }          // not a COMPLEX wave
-    if (pendingCount === 0) {                                       // wave finished
-      driverLog(`heartbeat done: all terminal session=${sessionId}`);
-      clearBgDriver(sessionId);
-      await transitionState(current, 'completed');
-      broadcast(current, { type: 'status', working: false });
-      if (await sessionHasMergedTickets(sDir)) scheduleDocumentatorRun(sessionId, runtimes);
+
+    const bgCount = current.bgResultCount || 0;
+
+    if (pendingCount === 0) {
+      // All tickets merged, but promotion (session→main) and any follow-up still
+      // run as background turns. Stay in_progress (bar visible) and keep nudging
+      // until the orchestrator goes quiet — only then settle, so the final recap
+      // message reaches chat first.
+      if (bgCount !== state.seenBgCount) { state.drainQuiet = 0; state.seenBgCount = bgCount; }
+      else state.drainQuiet = (state.drainQuiet || 0) + 1;
+      if (state.drainQuiet >= HEARTBEAT_DRAIN_QUIET_TICKS) {
+        driverLog(`heartbeat done: drained quiet session=${sessionId}`);
+        clearBgDriver(sessionId);
+        await transitionState(current, 'completed');
+        broadcast(current, { type: 'status', working: false });
+        if (await sessionHasMergedTickets(sDir)) scheduleDocumentatorRun(sessionId, runtimes);
+        return;
+      }
+      driverLog(`heartbeat drain: quiet=${state.drainQuiet} session=${sessionId}`);
+      current.ptySession.nudge();
       return;
     }
 
@@ -103,7 +124,6 @@ function startBgDriver(runtime, runtimes) {
     // orchestrator reacted to). Ticket status alone stays `pending` through the
     // whole dev→review→merge chain, so without the background_result signal a
     // healthy single-ticket wave would look stalled and trigger a needless resume.
-    const bgCount = current.bgResultCount || 0;
     const madeProgress = pendingSig !== state.prevSig || bgCount !== state.seenBgCount;
     if (madeProgress) { state.noProgress = 0; state.resumed = false; }
     else state.noProgress += 1;
