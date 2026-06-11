@@ -1,9 +1,7 @@
 import { spawn } from 'node:child_process';
-import { CWD, CLAUDE_HOME, MODE_DEMO } from './config.js';
-import { getSystemPrompt, getOrchestratorModel } from './system-prompt.js';
+import { CWD, CLAUDE_HOME } from './config.js';
 import { broadcast } from './ws-bus.js';
 import { readMessages } from './session-store.js';
-import { buildSpawnEnv } from '../spawn-env.js';
 import { isAuthErrorStderr, isNetworkErrorStderr } from './turn-state.js';
 
 // Exported for unit testing
@@ -82,39 +80,9 @@ export function planResume(state, message, hasDispatchedWork) {
   return { prompt: message, freshSession: false };
 }
 
-export function spawnClaude(userMessage, claudeSessionId, sessionDir) {
-  const mode = process.env.MODE || MODE_DEMO;
-  const env = `<mode>${mode}</mode>\n<session_dir>${sessionDir}</session_dir>`;
-  const systemPrompt = getSystemPrompt();
-  const orchestratorModel = getOrchestratorModel();
-  const finalUserMessage = rewriteUserMessage(userMessage);
-  const prompt = systemPrompt
-    ? `<instructions>\n${systemPrompt}\n</instructions>\n\n${env}\n\n${finalUserMessage}`
-    : `${env}\n\n${finalUserMessage}`;
-  const args = [
-    '--output-format', 'stream-json',
-    '--verbose',
-    '--dangerously-skip-permissions',
-    // The orchestrator never calls MCP tools directly — it routes via Agent/Teams.
-    // Loading 13+ claude.ai "needs-auth" servers wastes ~8K tokens per spawn.
-    '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
-  ];
-  if (orchestratorModel) args.push('--model', orchestratorModel);
-  if (claudeSessionId) args.push('--resume', claudeSessionId);
-  args.push('-p', prompt);
-  const baseEnv = {
-    ...process.env,
-    HOME: CLAUDE_HOME,
-    CLAUDE_PROJECT_DIR: CWD,
-    CHAT_SESSION_DIR: sessionDir,
-    MODE: mode,
-  };
-  return spawn('claude', args, {
-    env: buildSpawnEnv(baseEnv, claudeSessionId),
-    cwd: CWD,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-}
+// NB: the orchestrator is no longer spawned headless (`claude -p`). It runs as a
+// persistent interactive TUI via PtySession (see pty-session.js). The former
+// spawnClaude() was removed with that migration.
 
 // Runs a one-shot Haiku call to regenerate the session title. Invoked when
 // the user sends their 1st message so the label reflects what the chat is
