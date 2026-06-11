@@ -101,6 +101,44 @@ test('TranscriptWatcher: skips existing lines on resume, only emits new ones', a
   await rm(dir, { recursive: true });
 });
 
+test('TranscriptWatcher: append twice — each new entry emits exactly once, no re-emission', async () => {
+  const dir = join(tmpdir(), `tw-test-twice-${Date.now()}`);
+  await mkdir(dir, { recursive: true });
+  const sessionId = 'mno345-append-twice';
+  const jsonlPath = join(dir, `${sessionId}.jsonl`);
+  await writeFile(jsonlPath, '');
+
+  const watcher = new TranscriptWatcher(sessionId, dir);
+  await watcher.start();
+
+  const texts = [];
+  watcher.on('event', e => { if (e.type === 'assistant') texts.push(e.message.content[0].text); });
+
+  const line = (text, uuid) => JSON.stringify({
+    type: 'assistant',
+    message: { role: 'assistant', content: [{ type: 'text', text }] },
+    uuid, sessionId,
+  }) + '\n';
+
+  // First append → polled once.
+  await appendFile(jsonlPath, line('first', 'u1'));
+  await watcher.flush();
+  assert.deepEqual(texts, ['first'], 'first append emits once');
+
+  // Second append → only the new entry emits; the first is NOT re-read because
+  // the byte offset advanced past it.
+  await appendFile(jsonlPath, line('second', 'u2'));
+  await watcher.flush();
+  assert.deepEqual(texts, ['first', 'second'], 'second append emits only the new entry');
+
+  // A poll with no new bytes must emit nothing.
+  await watcher.flush();
+  assert.deepEqual(texts, ['first', 'second'], 'idle poll re-emits nothing');
+
+  watcher.close();
+  await rm(dir, { recursive: true });
+});
+
 test('TranscriptWatcher: ignores non-assistant JSONL entries', async () => {
   const dir = join(tmpdir(), `tw-test-${Date.now()}`);
   await mkdir(dir, { recursive: true });

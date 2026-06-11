@@ -1,8 +1,9 @@
 import { EventEmitter } from 'node:events';
-import { readFile, readdir, mkdir } from 'node:fs/promises';
+import { readFile, readdir, mkdir, stat } from 'node:fs/promises';
 import { watch, watchFile, unwatchFile } from 'node:fs';
 import { join, basename } from 'node:path';
 import { emptyBreakdown, addBreakdown, breakdownFromUsage } from '../stats/io.js';
+import { readAppendedLines } from './jsonl-tail.js';
 
 // A run_in_background Agent dispatch returns an immediate stub tool_result; the
 // REAL completion arrives later as a `<task-notification>` entry keyed by the
@@ -27,7 +28,12 @@ export class TranscriptWatcher extends EventEmitter {
   #sessionId;
   #projectDir;
   #jsonlPath = null;
-  #linesRead = 0;
+  // Byte offset into #jsonlPath of the next unread byte, and the mtime at that
+  // offset. The main transcript is tailed incrementally via readAppendedLines
+  // (shared with subagent-tail.js): each #poll() reads only the bytes appended
+  // since the last tick, never re-parsing history.
+  #offset = 0;
+  #mtimeMs = 0;
   #dirWatcher = null;
   #debounce = null;
   closed = false;
@@ -64,11 +70,13 @@ export class TranscriptWatcher extends EventEmitter {
 
   async start() {
     if (this.#sessionId) {
-      // Resumed session: seek to current end-of-file so we only see new lines.
+      // Resumed session: seek to current end-of-file (by byte offset) so we
+      // only see lines appended after this point — no full read of history.
       try {
-        const content = await readFile(this.#jsonlPath, 'utf8');
-        this.#linesRead = (content.match(/\n/g) || []).length;
-      } catch { /* file doesn't exist yet — will be created shortly */ }
+        const st = await stat(this.#jsonlPath);
+        this.#offset = st.size;
+        this.#mtimeMs = st.mtimeMs;
+      } catch { /* file doesn't exist yet — offset 0 / mtime 0, will be created shortly */ }
       this.#watchFile();
     } else {
       // Ensure the project dir exists before watching — fs.watch() throws
@@ -183,21 +191,21 @@ export class TranscriptWatcher extends EventEmitter {
 
   async #poll() {
     if (!this.#jsonlPath) return;
-    let content;
-    try {
-      content = await readFile(this.#jsonlPath, 'utf8');
-    } catch { return; }
+    // Incremental byte-offset tail via the shared helper: reads only the bytes
+    // appended since the last tick and returns complete (\n-terminated) lines,
+    // carrying any partial tail to the next call via newOffset — so we never
+    // JSON.parse a half-written event.
+    // Caveat: readAppendedLines skips a single slice > 1 MiB (MAX_SLICE_BYTES).
+    // Acceptable here — individual orchestrator transcript events are small; a
+    // pathological multi-MB single line would be skipped rather than buffered.
+    const r = await readAppendedLines(this.#jsonlPath, this.#offset, this.#mtimeMs);
+    if (!r) return;
+    this.#offset = r.newOffset;
+    this.#mtimeMs = r.mtimeMs;
 
-    const lines = content.split('\n');
-    for (let i = this.#linesRead; i < lines.length; i++) {
-      const raw = lines[i].trim();
-      if (!raw) {
-        if (i < lines.length - 1) this.#linesRead = i + 1;
-        continue;
-      }
+    for (const raw of r.lines) {
       let entry;
-      try { entry = JSON.parse(raw); } catch { break; } // partial line — retry next poll
-      this.#linesRead = i + 1;
+      try { entry = JSON.parse(raw); } catch { continue; } // helper only yields complete lines
 
       if (entry.type === 'assistant') {
         this.emit('event', entry);
