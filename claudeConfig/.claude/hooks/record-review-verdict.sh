@@ -38,17 +38,24 @@ function emit(role, task, verdict, used, dbg) {
 try {
   const i = JSON.parse(process.argv[1] || "{}");
   const at = i.agent_type || i.agentType || "";
-  const role = (at.match(/quality-reviewer|test-validator/) || [""])[0];
+  // role/task come from agent_type when populated, but in the no-team flow
+  // agent_type is frequently EMPTY in the SubagentStop payload, so we also
+  // recover them from the transcript (the dispatch prompt carries a ROLE line
+  // and TICKET_FILE=...TASK-XXX). Do not bail on empty role.
+  let role = (at.match(/quality-reviewer|test-validator/) || [""])[0];
   let task = (at.match(/TASK-\d+/) || [""])[0];
   const agentId = i.agent_id || i.agentId || "";
-  const dbg = "keys=" + Object.keys(i).join(",") + " at=" + at + " aid=" + agentId + " tp=" + (i.transcript_path ? "y" : "n");
-  if (!role) { emit("", "", "", "", dbg); process.exit(0); }
+  // The final contract line (APPROVED / REJECTED: ...) is delivered directly in
+  // the payload via last_assistant_message, the most reliable verdict source.
+  const lastMsg = typeof i.last_assistant_message === "string" ? i.last_assistant_message : "";
+  const dbg = "keys=" + Object.keys(i).join(",") + " at=" + at + " aid=" + agentId + " tp=" + (i.transcript_path ? "y" : "n") + " lm=" + (lastMsg ? "y" : "n");
 
   const home = process.env.HOME || "/home/developer";
   const projects = path.join(home, ".claude", "projects");
 
   // Candidate transcript paths, most-authoritative first.
   const cands = [];
+  if (i.agent_transcript_path) cands.push(i.agent_transcript_path);
   if (i.transcript_path) cands.push(i.transcript_path);
 
   const listSubagentDirs = () => {
@@ -74,7 +81,8 @@ try {
   }
 
   // 3. by claudeSessionId (from CHAT_SESSION_DIR/meta.json) + agentType/TASK match
-  try {
+  // Only useful when role is already known (it keys the match); skipped otherwise.
+  if (role) try {
     const csd = process.env.CHAT_SESSION_DIR;
     let csid = "";
     if (csd) { try { csid = JSON.parse(fs.readFileSync(path.join(csd, "meta.json"), "utf8")).claudeSessionId || ""; } catch {} }
@@ -103,8 +111,11 @@ try {
     for (const m of matches) cands.push(m.full);
   } catch {}
 
-  // Parse the first candidate that yields a decisive verdict.
-  let verdict = "", used = "";
+  // Scan candidate transcripts to recover role + task (from the dispatch prompt)
+  // and the last text. The dispatch ROLE line is the authoritative role when
+  // agent_type was empty; a developer transcript has no
+  // "ROLE: quality-reviewer|test-validator" line, so non-reviewers stay role="".
+  let transcriptTail = "", used = "";
   for (const tp of cands) {
     if (!tp || !fs.existsSync(tp)) continue;
     let lastText = "";
@@ -121,14 +132,23 @@ try {
       } else if (typeof content === "string" && content.trim()) {
         lastText = content;
       }
+      if (!role) { const m = ln.match(/ROLE:\s*(quality-reviewer|test-validator)/i); if (m) role = m[1].toLowerCase(); }
       // Prefer TICKET_FILE path (spawn prompt) over any other TASK mention.
       if (!task) { const m = ln.match(/TICKET_FILE[=\s]+\S*(TASK-\d+)/i); if (m) task = m[1]; }
       if (!task) { const m = ln.match(/TASK-\d+/); if (m) task = m[0]; }
     }
-    const tail = (lastText.trim().split("\n").map((s) => s.trim()).filter(Boolean).pop() || "");
-    if (/^APPROVED\b/.test(tail)) { verdict = "APPROVED"; used = tp; break; }
-    if (/^REJECTED\b/.test(tail)) { verdict = "REJECTED"; used = tp; break; }
+    if (lastText && !transcriptTail) { transcriptTail = lastText; used = tp; }
   }
+
+  // Verdict: last_assistant_message is the most reliable source; fall back to
+  // the transcript last text. Only the final contract line counts.
+  const src = lastMsg || transcriptTail;
+  const tail = (src.trim().split("\n").map((s) => s.trim()).filter(Boolean).pop() || "");
+  let verdict = "";
+  if (/^APPROVED\b/.test(tail)) verdict = "APPROVED";
+  else if (/^REJECTED\b/.test(tail)) verdict = "REJECTED";
+  if (lastMsg) used = "last_assistant_message";
+
   emit(role, task, verdict, used, dbg);
 } catch (e) { emit("", "", "", "", "err=" + (e && e.message)); }
 ' "$STDIN" 2>/dev/null || printf '\x1f\x1f\x1f\x1f')
