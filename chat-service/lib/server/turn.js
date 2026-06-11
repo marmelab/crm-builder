@@ -727,7 +727,7 @@ export async function processMessage(runtime, prompt, opts = {}) {
     // Stays turnFailedFrom (not classifyTurn): the `|| !receivedText` term here
     // already subsumes classifyTurn's silence-no-text rule, so converting would
     // be redundant. Only the settle-decision in the `finally` uses classifyTurn.
-    } else if (!staleRetry && (turnFailedFrom({ resultError, stderr, sawResult, exitCode }) || !receivedText || rateLimit)) {
+    } else if (!staleRetry && (turnFailedFrom({ resultError, sawResult }) || !receivedText || rateLimit)) {
       const errText = friendlyError({ exitCode, stderr, rateLimit, resultError });
       broadcast(runtime, { type: 'message', role: 'assistant', content: errText, ts: new Date().toISOString() });
       await runtime.session?.recordMessage('assistant', errText).catch(() => {});
@@ -771,13 +771,11 @@ export async function processMessage(runtime, prompt, opts = {}) {
       if (wasStopped || rateLimit) runtime.queue = [];
       runtime.busy = false;
 
-      const exitCode = sawResult ? 0 : 1;
-      const stderr = runtime.ptySession?.stderr ?? '';
       // classifyTurn = turnFailedFrom + the silence-no-text rule: a result that
       // arrived via the 120 s fallback (no Stop sentinel) and produced no text
       // is a failure (the orchestrator died/hung). A silence result WITH text
       // stays 'completed' (long COMPLEX turns may legitimately miss the sentinel).
-      const turnFailed = classifyTurn({ resultError, stderr, sawResult, exitCode, resultReason, receivedText });
+      const turnFailed = classifyTurn({ resultError, sawResult, resultReason, receivedText });
       const turnErrored = turnFailed || !receivedText || !!rateLimit;
       const asksQuestion = !wasStopped && !turnErrored && endsWithQuestion(lastAssistantText);
       const nextState = decideNextState({ wasStopped, rateLimit: !!rateLimit, turnFailed, asksQuestion });

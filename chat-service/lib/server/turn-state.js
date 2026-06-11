@@ -42,40 +42,37 @@ export function isApiErrorStderr(stderr = '') {
 // it can be unit tested. The rule is deliberately NARROW: a hook or tool that
 // merely exited non-zero while Claude ran to completion is NEVER a failure.
 //
-// `sawResult` is the key discriminator. The CLI emits a terminal `result` event
-// once Claude's loop finishes. If we saw it, Claude completed — a blocking hook
-// (exit 2, whose stderr the model already saw), a crashed tool, or a non-zero
-// exit from killing a zombie subagent after the result are all just noise, and
-// the turn only fails if Claude itself reported an error (`resultError`).
+// In the PTY model there is no process exit code to inspect — the orchestrator
+// runs inside a long-lived PTY screen buffer, not a one-shot child whose exit
+// status we observe. `sawResult` is the sole discriminator: the CLI prints a
+// terminal `result` event once Claude's loop finishes. If we saw it, Claude
+// completed — a blocking hook (exit 2, whose stderr the model already saw) or a
+// crashed tool are just noise, and the turn only fails if Claude itself reported
+// an error (`resultError`).
 //
 // A turn fails when:
 //   - resultError — the CLI's own terminal `result.is_error`, set when the API
 //     errored after retries (tool failures surface as `tool_result.is_error` and
 //     leave the final result `success`, so they don't trip this).
-//   - OR the CLI died WITHOUT emitting a `result` (!sawResult) and either an
-//     auth/connectivity signature is on stderr (an API error killed it before
-//     the result, so resultError alone would miss it) or it exited non-zero /
-//     threw (exitCode null) — it died mid-flight (crash, OOM, kill). This must
-//     stay a resumable 'error' so the crash-recovery resume path can rebuild
-//     state; settling it on 'completed' would strand an interrupted run.
+//   - OR no `result` ever arrived (!sawResult) — Claude died mid-flight (crash,
+//     hang, kill) before completing its loop. This must stay a resumable 'error'
+//     so the crash-recovery resume path can rebuild state; settling it on
+//     'completed' would strand an interrupted run.
 //
-// Once a `result` WAS seen, the turn never fails on stderr or exit code: a
-// benign 'network'/'authentication'/'401' substring anywhere in the spawn's
-// accumulated stderr (CLI retry logging, forwarded tool/hook output), or a
-// non-zero exit from a post-result zombie kill, is just noise and must not flip
-// a clean completion to 'error'. The stderr check is therefore gated on
-// !sawResult — exactly the case its signatures describe.
-export function turnFailedFrom({ resultError, stderr, sawResult, exitCode } = {}) {
-  if (resultError) return true;
-  if (sawResult) return false;
-  return isApiErrorStderr(stderr || '') || exitCode !== 0;
+// `stderr` no longer participates in the decision — once we keyed off `sawResult`
+// alone, a no-result death is ALWAYS a failure whatever the buffer says, and a
+// seen-result turn is never a failure. `stderr` is kept only so callers (and
+// `friendlyError`) can phrase the auth/network case; it has no say in the
+// boolean verdict.
+export function turnFailedFrom({ resultError, sawResult } = {}) {
+  return Boolean(resultError) || !sawResult;
 }
 
 // Full turn-failure decision for the PTY flow. A result that arrived via the
 // silence fallback (no Stop-hook sentinel) and produced no text is a failure:
 // the orchestrator died or hung without completing. `turnFailedFrom` keeps the
 // legacy signature for existing callers/tests and is used as the base rule.
-export function classifyTurn({ resultError, stderr, sawResult, exitCode, resultReason, receivedText }) {
-  return turnFailedFrom({ resultError, stderr, sawResult, exitCode })
+export function classifyTurn({ resultError, sawResult, resultReason, receivedText }) {
+  return turnFailedFrom({ resultError, sawResult })
     || (resultReason === 'silence' && !receivedText);
 }
