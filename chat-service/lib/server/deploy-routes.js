@@ -189,6 +189,7 @@ function publicStatus(config) {
     supabaseComplete: isSupabaseComplete(config),
     projectRef: config?.projectRef || null,
     lastDeployAt: config?.lastDeployAt || null,
+    lastDeployUrl: config?.lastDeployUrl || null,
     // Cloudflare frontend target. The account ID is safe to echo (it's not a
     // secret and the form prefills it); the token is never returned, but we do
     // report whether one is stored so the form can show a "leave blank to keep"
@@ -884,6 +885,7 @@ async function finalize(config, deployId, t0, exitCode, errMessage) {
       const fresh = await loadConfig();
       if (fresh) {
         fresh.lastDeployAt = finishedAt;
+        if (deployState.callbackUrl) fresh.lastDeployUrl = deployState.callbackUrl;
         await writeConfigAtomic(fresh);
       }
     } catch (err) {
