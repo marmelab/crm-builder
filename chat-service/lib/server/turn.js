@@ -109,6 +109,7 @@ function startBgDriver(runtime, runtimes) {
       if (state.drainQuiet >= HEARTBEAT_DRAIN_QUIET_TICKS) {
         driverLog(`heartbeat done: drained quiet session=${sessionId}`);
         clearBgDriver(sessionId);
+        await stopSubagentTailer(current).catch(() => {});
         await transitionState(current, 'completed');
         broadcast(current, { type: 'status', working: false });
         if (await sessionHasMergedTickets(sDir)) scheduleDocumentatorRun(sessionId, runtimes);
@@ -134,6 +135,7 @@ function startBgDriver(runtime, runtimes) {
       // Genuinely stuck — surface the stall once and stop nudging.
       driverLog(`heartbeat give-up: stall ${state.noProgress} ticks pending=${pendingCount} session=${sessionId}`);
       clearBgDriver(sessionId);
+      await stopSubagentTailer(current).catch(() => {});
       const done = Math.max(0, total - pendingCount);
       const stallText = `I finished ${done} of ${total} planned pieces, but ${pendingCount} ${pendingCount === 1 ? 'is' : 'are'} still unfinished. Say "continue" and I'll pick the rest back up.`;
       broadcast(current, { type: 'message', role: 'assistant', content: stallText, ts: new Date().toISOString() });
@@ -464,7 +466,11 @@ export async function processMessage(runtime, prompt, opts = {}) {
       await runtime.session?.recordMessage('assistant', errText).catch(() => {});
     }
   } finally {
-    await stopSubagentTailer(runtime).catch(() => {});
+    // NB: the subagent tailer is NOT stopped here. The COMPLEX flow runs as
+    // background turns between active processMessage calls, and the tailer must
+    // keep polling across them so background-turn subagent activity (mergers,
+    // reviewers) still reaches the live feed. It is stopped only when the wave
+    // truly settles (below / in the bg driver) or on teardown.
 
     runtime.stats.costUsd += runtime.stats.costUsdCurrentSpawn;
     runtime.stats.costUsdCurrentSpawn = 0;
@@ -524,10 +530,14 @@ export async function processMessage(runtime, prompt, opts = {}) {
       }
 
       if (waveInFlight) {
+        // Wave continues as background turns — keep the tailer running so their
+        // subagent activity (mergers especially) stays in the live feed.
         await transitionState(runtime, 'in_progress');
         broadcast(runtime, { type: 'status', working: true });
         startBgDriver(runtime, runtimes);
       } else {
+        // Truly settling — flush and stop the tailer.
+        await stopSubagentTailer(runtime).catch(() => {});
         await transitionState(runtime, nextState);
         broadcast(runtime, { type: 'status', working: false });
         if (nextState === 'completed' && !turnErrored && sDir && await sessionHasMergedTickets(sDir)) {
@@ -538,6 +548,7 @@ export async function processMessage(runtime, prompt, opts = {}) {
       // Keep runtime alive while PTY is live — background turns may still fire.
       // The PTY exit handler covers teardown once all background work is done.
       if (runtime.clients.size === 0 && (!runtime.ptySession || runtime.ptySession.closed) && !runtime.ptyRestartPending) {
+        await stopSubagentTailer(runtime).catch(() => {});
         runtime.session?.close();
         runtimes.delete(runtime.session.id);
       }
