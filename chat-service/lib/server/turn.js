@@ -457,6 +457,29 @@ function applyAndStripSatisfactionAsk(runtime, text) {
   return parsed.cleanText;
 }
 
+// Shared text pipeline for the active-turn loop and the background listener:
+// title strip → satisfaction strip → dedup-vs-last → broadcast + recordMessage.
+// Any future %%…%% marker stripped here lands in both paths by construction.
+// `ctx.lastText` carries each path's own dedup state (mutated in place — keep a
+// separate ctx per path so dedup state is never shared). Returns true whenever a
+// non-empty assistant text was produced (even if it was a duplicate and thus not
+// re-broadcast), matching the active loop's `receivedText` semantics.
+// debug_raw and processStatsEvent stay at the call sites: their order relative to
+// this text step differs between the two paths (active runs stats after text,
+// background before) and must be preserved.
+function handleOrchestratorText(runtime, event, ctx) {
+  let text = applyAndStripSessionTitle(runtime, extractText(event));
+  text = applyAndStripSatisfactionAsk(runtime, text);
+  if (!text) return false;
+  const isDuplicate = text.trim() === ctx.lastText.trim();
+  ctx.lastText = text;
+  if (!isDuplicate) {
+    broadcast(runtime, { type: 'message', role: 'assistant', content: text, ts: new Date().toISOString() });
+    runtime.session?.recordMessage('assistant', text).catch(() => {});
+  }
+  return true;
+}
+
 export async function processMessage(runtime, prompt, opts = {}) {
   if (!runtime) return;
   const isAutoContinue = opts.auto === true;
@@ -519,7 +542,7 @@ export async function processMessage(runtime, prompt, opts = {}) {
   let receivedText = false;
   let rateLimit = null;
   let resultError = false;
-  let lastAssistantText = '';
+  const activeCtx = { lastText: '' };
   let sawResult = false;
   let resultReason = 'sentinel';
 
@@ -533,7 +556,7 @@ export async function processMessage(runtime, prompt, opts = {}) {
   function attachBgListener(ptyRef) {
     if (ptyRef._bgAttached) return;
     ptyRef._bgAttached = true;
-    let bgLastText = '';
+    const bgCtx = { lastText: '' };
 
     const bgHandler = (event) => {
       // While an active turn is running, ptyEventsUntilResult owns the events —
@@ -556,16 +579,7 @@ export async function processMessage(runtime, prompt, opts = {}) {
       // Advance progress/stats from this background turn's events, identical to
       // the active-turn loop, so the bar keeps moving between user turns.
       processStatsEvent(runtime, event, sessionDir).catch(() => {});
-      let text = applyAndStripSessionTitle(runtime, extractText(event));
-      text = applyAndStripSatisfactionAsk(runtime, text);
-      if (text) {
-        const isDuplicate = text.trim() === bgLastText.trim();
-        bgLastText = text;
-        if (!isDuplicate) {
-          broadcast(runtime, { type: 'message', role: 'assistant', content: text, ts: new Date().toISOString() });
-          runtime.session?.recordMessage('assistant', text).catch(() => {});
-        }
-      }
+      handleOrchestratorText(runtime, event, bgCtx);
       if (event.type === 'background_result') {
         // Count background turns so the heartbeat treats them as progress and
         // doesn't escalate to a heavyweight resume while the wave is advancing.
@@ -655,17 +669,7 @@ export async function processMessage(runtime, prompt, opts = {}) {
 
       broadcast(runtime, { type: 'debug_raw', event });
 
-      let text = applyAndStripSessionTitle(runtime, extractText(event));
-      text = applyAndStripSatisfactionAsk(runtime, text);
-      if (text) {
-        receivedText = true;
-        const isDuplicate = text.trim() === lastAssistantText.trim();
-        lastAssistantText = text;
-        if (!isDuplicate) {
-          broadcast(runtime, { type: 'message', role: 'assistant', content: text, ts: new Date().toISOString() });
-          runtime.session?.recordMessage('assistant', text).catch(() => {});
-        }
-      }
+      receivedText = handleOrchestratorText(runtime, event, activeCtx) || receivedText;
 
       await processStatsEvent(runtime, event, sessionDir);
 
@@ -777,7 +781,7 @@ export async function processMessage(runtime, prompt, opts = {}) {
       // stays 'completed' (long COMPLEX turns may legitimately miss the sentinel).
       const turnFailed = classifyTurn({ resultError, sawResult, resultReason, receivedText });
       const turnErrored = turnFailed || !receivedText || !!rateLimit;
-      const asksQuestion = !wasStopped && !turnErrored && endsWithQuestion(lastAssistantText);
+      const asksQuestion = !wasStopped && !turnErrored && endsWithQuestion(activeCtx.lastText);
       const nextState = decideNextState({ wasStopped, rateLimit: !!rateLimit, turnFailed, asksQuestion });
 
       // A COMPLEX wave still in flight must NOT settle to `completed` between
