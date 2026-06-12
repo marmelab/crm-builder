@@ -4,6 +4,19 @@
 #  MODE=demo  → FakeRest (browser-side), no external dependencies
 #  MODE=full  → Local Supabase, requires host Docker socket
 # ─────────────────────────────────────────────────────────────
+
+# ── Builder: native-module compilation only ───────────────────
+# node-pty (chat-service) needs node-gyp (python3 + g++ + make) to compile.
+# Keep the toolchain here so the runtime image ships without g++.
+FROM node:24-trixie-slim AS chat-builder
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 g++ make \
+    && rm -rf /var/lib/apt/lists/*
+COPY chat-service/package.json chat-service/package-lock.json /chat-service/
+RUN cd /chat-service && npm ci
+
+# ── Runtime image ─────────────────────────────────────────────
 FROM node:24-trixie-slim
 
 # ── Version pins — update when upgrading tools ────────────────
@@ -20,8 +33,11 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 
 # ── System dependencies ───────────────────────────────────────
+# No g++: native compilation happens in the chat-builder stage. python3 stays —
+# the merger agent uses it at runtime (ticket-status update), and node-gyp can
+# fall back on it if an agent-added dependency ever needs a rebuild.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl wget git make python3 g++ zip unzip jq ca-certificates gnupg lsb-release \
+    curl wget git make python3 zip unzip jq ca-certificates gnupg lsb-release \
     supervisor procps tmux \
     chromium chromium-driver \
     libglib2.0-0 libnss3 libatk1.0-0 libatk-bridge2.0-0 \
@@ -121,9 +137,11 @@ RUN chmod +x /usr/local/bin/switch-mode /usr/local/bin/apply-migrations /usr/loc
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
 # ── Chat service ──────────────────────────────────────────────
+# node_modules (incl. the compiled node-pty) comes from the builder stage; the
+# source COPY stays separate so editing chat-service code never re-runs npm ci.
 COPY chat-service/ /chat-service/
-RUN cd /chat-service && npm ci \
-    && chown -R developer:developer /chat-service
+COPY --from=chat-builder /chat-service/node_modules /chat-service/node_modules
+RUN chown -R developer:developer /chat-service
 
 # ── Entrypoint ────────────────────────────────────────────────
 COPY entrypoint.sh /entrypoint.sh
