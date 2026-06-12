@@ -41,7 +41,7 @@ Tests: `cd chat-service && npm test` — uses glob `'test/**/*.test.js'` (direct
 | developer | opus | Implements + commits in worktree. Also writes ADRs in `adr/` when the change introduces a structural decision. Never writes SQL migrations — deploy-time only. |
 | simple-developer | sonnet | 1-file cosmetic OR 1 single-field change on an existing entity (schema + view + type + form + show) OR 1 list filter reusing existing components (no new custom React component). No team, no review, never writes ADRs — SubagentStop hooks validate. POST-DEV runs if a migration was written. |
 | quality-reviewer | sonnet | Semantic code + security review only. Never re-runs validation. |
-| test-validator | haiku | Integration wiring + e2e presence. |
+| test-validator | sonnet | Integration wiring + e2e presence. (Deliberately bumped from haiku in #17.) |
 | merger | haiku | `git merge --no-ff` only. **Never `git add`/`git commit`**. |
 | documentator | sonnet | Mode 1 — captures rules/skills to `~/.claude/local/` on explicit user request. Mode 2 — dispatched by the orchestrator (via `Agent`, run_in_background) at POST-DEV once the user validates the result; appends business knowledge to `/app/MEMORY.md` from the diff vs `origin/main`. Both modes run via the Agent tool (no `claude -p`); confined by `restrict-documentator-{write,bash}` (which trigger on `agent_type=documentator` or the legacy `DOCUMENTATOR_RUN=1`). |
 
