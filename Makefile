@@ -67,16 +67,20 @@ down-instance: ## Stop a named instance: make down-instance INSTANCE=feat-x
 	docker compose -p $(INSTANCE) \
 	  -f docker-compose.yml -f docker-compose.multi.yml down
 
-wipe-instance: ## Reset a named instance to zero: down + its own volumes + virgin crm-source (preserves shared claude-auth)
+wipe-instance: ## Reset a named instance to zero: down + its own volumes (preserves shared claude-auth + deploy config)
 	@if [ -z "$(INSTANCE)" ]; then \
 		echo "Usage: make wipe-instance INSTANCE=<name>"; \
 		exit 1; \
 	fi
 	docker compose -p $(INSTANCE) \
 	  -f docker-compose.yml -f docker-compose.multi.yml down
-	@docker volume ls -q --filter "name=$(INSTANCE)_" | xargs -r docker volume rm
-	docker run --rm -v "$(CURDIR)/crm-source:/x" alpine sh -c 'rm -rf /x/* /x/.[!.]* /x/..?* 2>/dev/null || true'
-	@echo "Instance '$(INSTANCE)' reset to virgin source. Next: make build-instance INSTANCE=$(INSTANCE) && make up-instance INSTANCE=$(INSTANCE) CRM=<port> CHAT=<port>"
+	@# Label filter = exact project match (a name filter is a substring match and
+	@# INSTANCE=foo would also catch myfoo_*). `down -v` is not usable here: the
+	@# pinned atomic-crm-* volumes (claude-auth, supabase-deploy-config) are
+	@# declared in the compose file and would be removed with it.
+	@docker volume ls -q --filter "label=com.docker.compose.project=$(INSTANCE)" \
+	  | grep -v '^atomic-crm-' | xargs -r docker volume rm
+	@echo "Instance '$(INSTANCE)' wiped. Next: make build-instance INSTANCE=$(INSTANCE) && make up-instance INSTANCE=$(INSTANCE) CRM=<port> CHAT=<port>"
 
 wipe: ## Stop container AND remove all volumes (wipes crm checkout, deps, sessions)
 	./scripts/down.sh -v
