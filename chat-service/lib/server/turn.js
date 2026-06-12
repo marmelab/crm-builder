@@ -108,6 +108,14 @@ export function applyWaveFlagsOnTurnSettle(runtime, waveInFlight) {
   clearBgDriver(runtime.session?.id);
 }
 
+// A progress bar may only be (re)rendered while something is actually running:
+// an active turn (busy) or a background wave (waveActive). Late PTY events —
+// e.g. the documentator dispatched at PD-RESPOND finishing after the session
+// settled — must not resurrect a stale bar.
+export function progressBarLive(runtime) {
+  return !!(runtime.busy || runtime.waveActive);
+}
+
 // Tear down a COMPLEX wave that is running as background turns. Called from the
 // STOP handler: during a background wave `busy` is false and `currentProc` is
 // null (the active turn handed off), so killCurrentProc no-ops — the heartbeat
@@ -503,7 +511,7 @@ async function processStatsEvent(runtime, event, sessionDir) {
       }
     }
   }
-  if (dispatchedThisEvent) updateProgressBar(runtime);
+  if (dispatchedThisEvent && progressBarLive(runtime)) updateProgressBar(runtime);
 
   if (event.type === 'system') {
     const isAgentTaskType =
@@ -529,7 +537,7 @@ async function processStatsEvent(runtime, event, sessionDir) {
         }
       }
       sendStats(runtime);
-      updateProgressBar(runtime);
+      if (progressBarLive(runtime)) updateProgressBar(runtime);
     }
   }
 }
@@ -762,7 +770,7 @@ export async function processMessage(runtime, prompt, opts = {}) {
         // Count background turns so the heartbeat treats them as progress and
         // doesn't escalate to a heavyweight resume while the wave is advancing.
         runtime.bgResultCount = (runtime.bgResultCount || 0) + 1;
-        updateProgressBar(runtime);
+        if (progressBarLive(runtime)) updateProgressBar(runtime);
         // Refresh the cumulative deduped total so the header advances during
         // background turns (most COMPLEX work runs here). Async; sendStats fires
         // both immediately and after the apply so the header never stalls.
