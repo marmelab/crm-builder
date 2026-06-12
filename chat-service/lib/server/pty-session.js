@@ -142,12 +142,20 @@ export class PtySession extends EventEmitter {
     // Sanitize message to avoid multi-byte UTF-8 sequences whose continuation
     // bytes (0x80–0xBF) land in the C1 control-code range and get mishandled
     // by Claude's Ink TUI input handler, silently garbling the message.
-    const safe = message
+    // Also neutralize anything the TUI would interpret as keystrokes rather
+    // than message text: a raw \r/\n submits early and types the remainder as
+    // a fresh input, ESC/control bytes drive the keyboard handler, and a
+    // leading "!" or "/" switches the input into bash-mode / slash-command —
+    // i.e. a chat message could inject arbitrary TUI commands.
+    let safe = message
       .replace(/[–—]/g, '-')   // en-dash, em-dash → hyphen
       .replace(/['']/g, "'")   // left/right single quote → apostrophe
       .replace(/[""]/g, '"')   // left/right double quote → straight quote
       .replace(/…/g, '...')         // ellipsis → triple dot
-      .replace(/ /g, ' ');          // non-breaking space → regular space
+      .replace(/ /g, ' ')           // non-breaking space → regular space
+      .replace(/\r\n|[\r\n\u2028\u2029]/g, ' ')        // newlines → space (no early submit)
+      .replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, '');    // C0/C1 controls, ESC, DEL
+    if (/^[!\/]/.test(safe)) safe = ' ' + safe;          // defuse bash-mode / slash-command prefix
     // Write the message text first, then send Enter (CR) after a short delay.
     // Sending safe + '\r' as one write causes Ink's input handler to miss the CR
     // for messages longer than ~50 chars: the TUI renders the input field but
@@ -155,7 +163,7 @@ export class PtySession extends EventEmitter {
     // characters before the CR arrives, so Enter always triggers submission
     // regardless of message length.
     this.#pty.write(safe);
-    setTimeout(() => this.#pty.write('\r'), 50);
+    setTimeout(() => { if (!this.closed) this.#pty.write('\r'); }, 50);
   }
 
   kill() {
