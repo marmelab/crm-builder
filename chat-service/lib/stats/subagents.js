@@ -146,6 +146,9 @@ async function appendSubagentToolUses(files, phase, toolCounts, allToolCalls) {
   // unique per conversation, so cross-file token dedup is automatic).
   phase.tokensTotal = 0;
   phase.opsCount = 0;
+  // Deduped API-call count (one per message.id). Unlike opsCount (tool calls),
+  // this is the billing unit: cacheRead/callsCount = effective context size.
+  phase.callsCount = 0;
   phase.tokensBreakdown = emptyBreakdown();
   phase.costUsd = 0;
   const tokensByModelMap = new Map(); // model → breakdown
@@ -188,6 +191,7 @@ async function appendSubagentToolUses(files, phase, toolCounts, allToolCalls) {
       const msgId = e.message?.id;
       if (u && msgId && !tokensByMessageId.has(msgId)) {
         tokensByMessageId.add(msgId);
+        phase.callsCount += 1;
         // Track the full breakdown (input + cache_creation + output + cache_read)
         // so the per-phase tooltip can show the same 4-way split as the global
         // summary. tokensTotal is the legacy sum (cache_read excluded) kept for

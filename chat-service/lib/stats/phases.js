@@ -246,6 +246,7 @@ export function accumulatePerPhaseTokens(events, phases) {
   const targets = [orch, ...phaseByToolUseId.values()].filter(Boolean);
   for (const p of targets) {
     p.tokensBreakdown = emptyBreakdown();
+    p.callsCount = 0;
     p._tokensByModelMap = new Map();
   }
 
@@ -272,6 +273,7 @@ export function accumulatePerPhaseTokens(events, phases) {
     if (!seen) { seen = new Set(); seenByPhase.set(owner.phaseId, seen); }
     if (msgId && seen.has(msgId)) continue;
     if (msgId) seen.add(msgId);
+    owner.callsCount = (owner.callsCount || 0) + 1;
     const b = breakdownFromUsage(u);
     owner.tokensBreakdown = addBreakdown(owner.tokensBreakdown, b);
     const model = ev.message?.model;
