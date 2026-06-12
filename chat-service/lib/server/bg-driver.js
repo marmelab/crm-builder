@@ -62,7 +62,7 @@ export function shouldSettleDrain(state, { pendingSig, sawProgress, nowMs }) {
 // Temporary instrumentation for the noAgentTeam PTY background-turn driver.
 // Writes to chat-err.log (supervisor stderr). Remove once the driver is proven.
 export function driverLog(msg) {
-  try { console.error(`[bg-driver ${new Date().toISOString()}] ${msg}`); } catch {}
+  console.error(`[bg-driver ${new Date().toISOString()}] ${msg}`);
 }
 
 // ── Background-turn driver ───────────────────────────────────────────────────
