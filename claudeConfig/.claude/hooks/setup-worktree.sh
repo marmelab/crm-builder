@@ -60,6 +60,11 @@ if [ -n "$WORKTREE_PATH" ]; then
   SESSION_SHORT=$(printf '%s\n' "$WORKTREE_PATH" | sed -nE 's#.*/worktrees/([^/]+)/.*#\1#p')
 fi
 [ -z "$SESSION_SHORT" ] && SESSION_SHORT=$(basename "${CHAT_SESSION_DIR:-}" | cut -d'-' -f1)
+# SESSION_SHORT is interpolated into the validation regexes below — keep it to
+# a plain hex/word token so it can't smuggle regex metacharacters or slashes.
+case "$SESSION_SHORT" in
+  *[!A-Za-z0-9_]*|'') SESSION_SHORT="" ;;
+esac
 
 # SIMPLE flow parity: a simple-developer always works in the fixed
 # <SHORT>/simple worktree. The orchestrator's templates pass WORKTREE_PATH, but
@@ -79,6 +84,23 @@ fi
 [ -z "$BRANCH_NAME" ] && BRANCH_NAME="${SESSION_SHORT}/${TASK_ID:-simple}"
 
 APP_DIR=${APP_DIR:-/app}
+
+# Both values are prompt-derived and feed destructive recovery below
+# (rm -rf "$WORKTREE_PATH", git branch -D "$BRANCH_NAME"). Enforce the exact
+# conventional shapes so a hallucinated/typoed dispatch line can never delete
+# an arbitrary directory (e.g. /app/src) or a protected ref (session/<id>,
+# session-base/<id>, main). Block the dispatch (exit 2) so the orchestrator
+# fixes the template instead of the developer improvising a worktree.
+if ! printf '%s\n' "$WORKTREE_PATH" | grep -qE "^${APP_DIR}/worktrees/${SESSION_SHORT}/(TASK-[0-9]+|simple)$"; then
+  echo "[$(date -Iseconds)] setup-worktree EXIT=2 invalid WORKTREE_PATH=$WORKTREE_PATH" >> "$LOG" 2>/dev/null || true
+  echo "[setup-worktree] Invalid WORKTREE_PATH '$WORKTREE_PATH' — must match ${APP_DIR}/worktrees/${SESSION_SHORT}/(TASK-XXX|simple). Fix the dispatch prompt." >&2
+  exit 2
+fi
+if ! printf '%s\n' "$BRANCH_NAME" | grep -qE "^${SESSION_SHORT}/(TASK-[0-9]+|simple)([-/][A-Za-z0-9._-]+)?$"; then
+  echo "[$(date -Iseconds)] setup-worktree EXIT=2 invalid BRANCH_NAME=$BRANCH_NAME" >> "$LOG" 2>/dev/null || true
+  echo "[setup-worktree] Invalid BRANCH_NAME '$BRANCH_NAME' — must start with ${SESSION_SHORT}/TASK-XXX or ${SESSION_SHORT}/simple. Fix the dispatch prompt." >&2
+  exit 2
+fi
 BASE=$(git -C "$APP_DIR" symbolic-ref --short HEAD 2>/dev/null || echo main)
 
 # Serialise the whole git-mutation region per session. A COMPLEX wave dispatches

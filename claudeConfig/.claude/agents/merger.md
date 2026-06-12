@@ -85,16 +85,8 @@ Not in any team. `BRANCH_NAME` (the rollback branch the `simple-developer` commi
 3. **Update ticket status** (skip when `TASK_ID` is `SIMPLE` or `TICKETS_DIR` is absent)
    ```bash
    if [ -n "${TICKETS_DIR:-}" ] && [ "${TASK_ID}" != "SIMPLE" ]; then
-     python3 -c "
-   import json, sys
-   path = '${TICKETS_DIR}/${TASK_ID}.json'
-   try:
-       with open(path) as f: data = json.load(f)
-       data['status'] = 'merged'
-       with open(path, 'w') as f: json.dump(data, f, indent=2)
-   except Exception as e:
-       print('ticket-status update failed (non-fatal):', e, file=sys.stderr)
-   " || true
+     python3 -c "import json; p = '${TICKETS_DIR}/${TASK_ID}.json'; d = json.load(open(p)); d['status'] = 'merged'; json.dump(d, open(p, 'w'), indent=2)" \
+       || echo "ticket-status update failed (non-fatal)" >&2
    fi
    ```
 
