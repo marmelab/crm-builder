@@ -2,7 +2,7 @@ import pty from 'node-pty';
 import stripAnsi from 'strip-ansi';
 import { EventEmitter } from 'node:events';
 import { access, unlink } from 'node:fs/promises';
-import { watch } from 'node:fs';
+import { watch, mkdirSync } from 'node:fs';
 import { CWD, CLAUDE_HOME, claudeProjectDir } from './config.js';
 import { getOrchestratorModel } from './system-prompt.js';
 import { buildSpawnEnv } from '../spawn-env.js';
@@ -36,7 +36,7 @@ export class PtySession extends EventEmitter {
   #outputBuffer = '';    // last 2 KB of PTY output (after strip-ansi) for friendlyError
   #ready = false;        // true once Claude's TUI shows its first ❯ prompt
   #pendingSend = null;   // message queued before Claude was ready
-  #stopDirWatcher = null; // fs.watch on /tmp for stop sentinel file
+  #stopDirWatcher = null; // fs.watch on /tmp/pty-sentinels for the stop sentinel
   closed = false;
 
   get stderr() { return this.#outputBuffer; }
@@ -220,11 +220,16 @@ export class PtySession extends EventEmitter {
   //       `background_result` so turn.js can forward output to clients.
   #watchForStop() {
     if (!this.#sessionId || this.#stopDirWatcher) return;
+    // Dedicated subdir (created by both sides; the Stop hook mkdir -p's it too):
+    // watching all of /tmp would wake every session's watcher on every file any
+    // process creates in /tmp for the PTY's whole lifetime.
     const sentinel = `pty-turn-done-${this.#sessionId}`;
-    const sentinelPath = `/tmp/${sentinel}`;
+    const sentinelDir = '/tmp/pty-sentinels';
+    const sentinelPath = `${sentinelDir}/${sentinel}`;
+    mkdirSync(sentinelDir, { recursive: true });
     console.error(`[pty ${new Date().toISOString()}] watchForStop armed for ${sentinel}`);
 
-    this.#stopDirWatcher = watch('/tmp', { persistent: false }, (_, filename) => {
+    this.#stopDirWatcher = watch(sentinelDir, { persistent: false }, (_, filename) => {
       if (filename !== sentinel) return;
       console.error(`[pty ${new Date().toISOString()}] sentinel fired ${sentinel} resultEmitted=${this.#resultEmitted}`);
       if (!this.#resultEmitted) {

@@ -27,7 +27,7 @@ claude --dangerously-skip-permissions
 
 The orchestrator TUI never exits between turns, so turn completion is detected by a **sentinel file** written by the `Stop` hook (`claudeConfig/.claude/hooks/turn-complete.sh`):
 
-- The hook fires AFTER Claude flushes its JSONL transcript and writes `/tmp/pty-turn-done-<CSID>` (an empty file; CSID read from the hook's stdin `session_id` via the shared `node -e` idiom — no `python3` dependency).
+- The hook fires AFTER Claude flushes its JSONL transcript and writes `/tmp/pty-sentinels/pty-turn-done-<CSID>` (an empty file; CSID read from the hook's stdin `session_id` via the shared `node -e` idiom — no `python3` dependency).
 - `PtySession.#watchForStop()` arms an `fs.watch` on `/tmp` (plus a post-attach `access()` check to catch a sentinel that landed before the watcher attached).
 - When the sentinel fires:
   - **active turn** (`#resultEmitted === false`): delete it, wait 150 ms (covers the 50 ms transcript-watcher debounce), emit `result` with `reason: 'sentinel'`.

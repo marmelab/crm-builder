@@ -26,7 +26,7 @@ chat-service is a Node.js server (:8080) that sits between the browser and the C
 **The Claude process** loads the harness (`~/.claude/` — agents, hooks, skills, rules, settings.json) and is the only thing that touches the CRM code. chat-service communicates with it through:
 - **Input**: PTY stdin (sanitized text + `\r`), spawn args + env vars (see `claude-cli-fake-contract.md`)
 - **Output**: the JSONL transcript under `~/.claude/projects/-app/CSID/` (tailed by `transcript-watcher.js`) — not stdout
-- **Completion signal**: the `Stop` hook writes `/tmp/pty-turn-done-<CSID>`; the TUI never exits between turns
+- **Completion signal**: the `Stop` hook writes `/tmp/pty-sentinels/pty-turn-done-<CSID>`; the TUI never exits between turns
 - **Filesystem**: `TASK-NNN.json`, `hooks.log`, subagent transcripts under `~/.claude/projects/-app/CSID/`
 
 **Visual overview** (for reference):
@@ -72,7 +72,7 @@ flowchart TD
     SPAWN -->|"spawns ONCE per session\n(env: HOME CHAT_SESSION_DIR MODE)"| CLI
     SPAWN -->|"PTY stdin: user messages"| CLI
     CLI -->|"loads agents+hooks+skills+rules"| HARNESS
-    CLI -->|"writes TASK-NNN.json\nhooks append hooks.log\nStop hook writes /tmp/pty-turn-done-CSID"| LOGS
+    CLI -->|"writes TASK-NNN.json\nhooks append hooks.log\nStop hook writes /tmp/pty-sentinels/pty-turn-done-CSID"| LOGS
     CLI -->|"writes JSONL transcripts"| TRANSCRIPTS
     WATCH -->|"tails (byte offsets)"| TRANSCRIPTS
     WATCH -->|"events"| TURN
@@ -98,7 +98,7 @@ Full reference: [turn.md](turn.md).
 | 5 | `turn.js` | Per event: broadcasts `debug_raw`, runs the orchestrator text pipeline (title/widget strip, dedup, broadcast + `log.jsonl`), progress-bar + agent accounting |
 | 6 | `subagent-tail.js` | Polls `~/.claude/projects/-app/CSID/subagents/` every 2500ms, broadcasts new lines to WebSocket |
 | 7 | CLI / hooks | Planner writes `TASK-NNN.json`, hooks append `hooks.log`, agents write transcripts, worktrees created/merged |
-| 8 | `pty-session.js` | Turn completion = `Stop` hook sentinel `/tmp/pty-turn-done-<CSID>` (positive signal); 120s silence fallback (degraded — `classifyTurn` decides completed vs failed) |
+| 8 | `pty-session.js` | Turn completion = `Stop` hook sentinel `/tmp/pty-sentinels/pty-turn-done-<CSID>` (positive signal); 120s silence fallback (degraded — `classifyTurn` decides completed vs failed) |
 | 9 | `turn.js` (finally) | Folds per-spawn usage into cumulative stats, snapshots `~/.claude/projects/-app/CSID/` to `/logs/UUID/claude/`, updates `meta.json`, broadcasts `status:working=false`, drains the queue |
 | 10 | `turn.js` (background) | COMPLEX waves run as background turns: `Agent({ run_in_background: true })` completions wake the idle TUI; an inactivity watchdog + heartbeat driver nudge or give up |
 

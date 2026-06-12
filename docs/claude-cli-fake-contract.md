@@ -39,7 +39,7 @@ Special rewrites applied to the user message before sending (turn-helpers.js):
 
 ## Output — what chat-service reads back
 
-In the PTY model, stdout is the raw TUI (ignored except for error sniffing). The events below are **reconstructed from the transcript** at `~/.claude/projects/-app/<CSID>.jsonl` by `transcript-watcher.js` and emitted to `turn.js` in the same shapes; a fake must append them to that file as newline-delimited JSON. Turn end is signalled by the Stop hook touching `/tmp/pty-turn-done-<CSID>`.
+In the PTY model, stdout is the raw TUI (ignored except for error sniffing). The events below are **reconstructed from the transcript** at `~/.claude/projects/-app/<CSID>.jsonl` by `transcript-watcher.js` and emitted to `turn.js` in the same shapes; a fake must append them to that file as newline-delimited JSON. Turn end is signalled by the Stop hook touching `/tmp/pty-sentinels/pty-turn-done-<CSID>`.
 
 **1. Mandatory first event** — gives `claudeSessionId`, stored in `meta.json`:
 ```json
