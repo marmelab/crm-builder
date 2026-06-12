@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { shouldSettleDrain } from '../lib/server/turn.js';
+import { shouldSettleDrain, applyCumulativeUsage } from '../lib/server/turn.js';
+import { emptyBreakdown } from '../lib/stats/io.js';
 
 // Mirror the live constant (turn.js: HEARTBEAT_DRAIN_QUIET_TICKS = 12).
 const QUIET_TICKS = 12;
@@ -90,4 +91,51 @@ test('cap does not fire early (within the window) when there is genuine progress
   assert.ok(start + 10 * 6000 - start < MAX_MS, 'sanity: still inside the window');
   const { settledAt } = runDrain(state, ticks);
   assert.equal(settledAt, null);
+});
+
+// ── applyCumulativeUsage: live header = deduped cumulative (single source) ──
+function freshStats() {
+  return {
+    tokensUsed: 0, tokensBreakdown: emptyBreakdown(),
+    tokensBreakdownCurrentSpawn: { input: 1, cacheCreate: 1, output: 1, cacheRead: 1 },
+    tokensByModel: [], tokensByModelCurrentSpawn: new Map([['x', {}]]),
+    costUsd: 0, costUsdCurrentSpawn: 7,
+  };
+}
+
+test('applyCumulativeUsage: sets cumulative stats from the watcher and zeroes *CurrentSpawn', () => {
+  const runtime = { stats: freshStats() };
+  // Deduped cumulative modelUsage (camelCase) — as cumulativeUsage() returns.
+  applyCumulativeUsage(runtime, {
+    'claude-opus-4-8': { inputTokens: 1_000_000, cacheCreationInputTokens: 0, cacheReadInputTokens: 0, outputTokens: 1_000_000 },
+  });
+  // cost = costFromBreakdown over the WHOLE cumulative ($5/M in + $25/M out = $30).
+  assert.equal(runtime.stats.costUsd, 30);
+  assert.deepEqual(runtime.stats.tokensBreakdown, { input: 1_000_000, cacheCreate: 0, output: 1_000_000, cacheRead: 0 });
+  assert.equal(runtime.stats.tokensByModel.length, 1);
+  assert.equal(runtime.stats.tokensByModel[0].model, 'claude-opus-4-8');
+  // *CurrentSpawn must be cleared so sendStats (which adds them) reports exactly
+  // the cumulative — not cumulative + a stale in-flight snapshot (the old inflation).
+  assert.deepEqual(runtime.stats.tokensBreakdownCurrentSpawn, emptyBreakdown());
+  assert.equal(runtime.stats.costUsdCurrentSpawn, 0);
+  assert.equal(runtime.stats.tokensByModelCurrentSpawn.size, 0);
+});
+
+test('applyCumulativeUsage: REPLACES (not adds) on each call — header tracks cumulative, never inflates', () => {
+  const runtime = { stats: freshStats() };
+  const mu = (out) => ({ 'claude-opus-4-8': { inputTokens: 0, outputTokens: out } });
+  applyCumulativeUsage(runtime, mu(1_000_000)); // cumulative so far
+  const after1 = runtime.stats.costUsd;
+  applyCumulativeUsage(runtime, mu(2_000_000)); // grown cumulative (NOT a delta)
+  // Replace semantics: the second call reflects the new cumulative ($50), not
+  // $25 + $50. This is the fix for summing per-spawn snapshots ($24.94 bug).
+  assert.equal(after1, 25);
+  assert.equal(runtime.stats.costUsd, 50);
+});
+
+test('applyCumulativeUsage: empty usage is a no-op (keeps digest-seeded values)', () => {
+  const runtime = { stats: { ...freshStats(), costUsd: 12.5, tokensByModel: [{ model: 'seed', breakdown: emptyBreakdown(), costUsd: 12.5 }] } };
+  applyCumulativeUsage(runtime, {});
+  applyCumulativeUsage(runtime, null);
+  assert.equal(runtime.stats.costUsd, 12.5, 'seeded digest value preserved when watcher has nothing');
 });

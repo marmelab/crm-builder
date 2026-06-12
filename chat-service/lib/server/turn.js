@@ -166,6 +166,42 @@ export async function reconcileWaveState(runtime) {
 // session stats, then reset the per-spawn accumulators. Run identically by the
 // active-turn `finally` and by the background drain-completed branch, so both
 // paths produce the same downstream stats shape.
+// Replace the runtime's cumulative stats with the watcher's session-cumulative
+// DEDUPED-by-message.id usage (camelCase modelUsage). This is the live single
+// source of truth: it converges to the same per-message-id-deduped figure
+// /api/stats reports, instead of summing per-spawn deltas (which double-count).
+// Zeroes the *CurrentSpawn accumulators so sendStats (which adds them) reports
+// exactly the cumulative. No-op when the watcher has no usage yet (keeps the
+// digest-seeded values from runtime init). Exported for unit tests.
+export function applyCumulativeUsage(runtime, modelUsage) {
+  if (!modelUsage || Object.keys(modelUsage).length === 0) return;
+  let breakdown = emptyBreakdown();
+  let costUsd = 0;
+  const byModel = [];
+  for (const [model, mu] of Object.entries(modelUsage)) {
+    const b = {
+      input:       mu?.inputTokens               || 0,
+      cacheCreate: mu?.cacheCreationInputTokens  || 0,
+      output:      mu?.outputTokens              || 0,
+      cacheRead:   mu?.cacheReadInputTokens      || 0,
+    };
+    breakdown = addBreakdown(breakdown, b);
+    const c = costFromBreakdown(model, b);
+    costUsd += c;
+    byModel.push({ model, breakdown: b, costUsd: c });
+  }
+  byModel.sort((a, b) => b.costUsd - a.costUsd);
+  runtime.stats.tokensBreakdown = breakdown;
+  runtime.stats.tokensUsed = breakdown.input + breakdown.cacheCreate + breakdown.output;
+  runtime.stats.tokensByModel = byModel;
+  runtime.stats.costUsd = costUsd;
+  // The cumulative already includes the in-flight spawn — clear the per-spawn
+  // accumulators so sendStats doesn't add them on top.
+  runtime.stats.tokensBreakdownCurrentSpawn = emptyBreakdown();
+  runtime.stats.tokensByModelCurrentSpawn = new Map();
+  runtime.stats.costUsdCurrentSpawn = 0;
+}
+
 function foldSpawnUsageIntoStats(runtime) {
   runtime.stats.costUsd += runtime.stats.costUsdCurrentSpawn;
   runtime.stats.costUsdCurrentSpawn = 0;
@@ -205,18 +241,13 @@ async function settleDrainedWave(current, sessionId) {
   // consumeTurnUsage() would otherwise be dropped. Collect + fold them in
   // here, using the same per-spawn → cumulative shape as the active-turn
   // finally, before settling completed.
-  const usage = await current.ptySession?.collectUsage().catch(() => null);
-  if (usage && Object.keys(usage.modelUsage).length > 0) {
-    current.stats.tokensBreakdownCurrentSpawn = breakdownFromModelUsage(usage.modelUsage);
-    current.stats.tokensByModelCurrentSpawn = new Map(Object.entries(usage.modelUsage).map(([model, mu]) => [model, {
-      breakdown: {
-        input: mu.inputTokens || 0, cacheCreate: mu.cacheCreationInputTokens || 0,
-        output: mu.outputTokens || 0, cacheRead: mu.cacheReadInputTokens || 0,
-      },
-      costUsd: mu.costUSD ?? null,
-    }]));
-    current.stats.costUsdCurrentSpawn = usage.total_cost_usd || 0;
-    foldSpawnUsageIntoStats(current);
+  // Refresh subagent offsets (collectUsage reads any new subagent lines into the
+  // watcher's cumulative), then set the cumulative deduped total as the final
+  // figure. The cumulative is the live source of truth — matches /api/stats.
+  await current.ptySession?.collectUsage().catch(() => null);
+  const cum = await current.ptySession?.cumulativeUsage?.().catch(() => null);
+  if (cum && Object.keys(cum).length > 0) {
+    applyCumulativeUsage(current, cum);
     sendStats(current);
   }
   // Always capture the final transcript on drain-completed, even if the last
@@ -679,7 +710,13 @@ export async function processMessage(runtime, prompt, opts = {}) {
         // doesn't escalate to a heavyweight resume while the wave is advancing.
         runtime.bgResultCount = (runtime.bgResultCount || 0) + 1;
         updateProgressBar(runtime);
+        // Refresh the cumulative deduped total so the header advances during
+        // background turns (most COMPLEX work runs here). Async; sendStats fires
+        // both immediately and after the apply so the header never stalls.
         sendStats(runtime);
+        runtime.ptySession?.cumulativeUsage?.()
+          .then((cum) => { if (cum && Object.keys(cum).length > 0) { applyCumulativeUsage(runtime, cum); sendStats(runtime); } })
+          .catch(() => {});
         // Snapshot subagent transcripts now: most COMPLEX work (dev, reviewers,
         // merger) runs in background turns, and snapshotClaudeSession otherwise
         // only fires at active-turn end — so without this, /api/stats would miss
@@ -703,8 +740,16 @@ export async function processMessage(runtime, prompt, opts = {}) {
 
   function spawnOrResumePty() {
     runtime.subagentUsageLines ??= new Map();   // survives PTY restarts → no double-count
+    // Session-cumulative deduped-by-message.id usage + its seen-id guard. Owned
+    // by the runtime so they survive PTY restarts (a fresh watcher keeps the
+    // running cumulative, never resets it mid-wave). This is the live source of
+    // truth: sendStats reports it so the header matches /api/stats.
+    runtime.cumulativeUsage ??= new Map();
+    runtime.seenMsgIds ??= new Set();
     runtime.ptySession = new PtySession(runtime.claudeSessionId, sessionDir, {
       subagentUsageLines: runtime.subagentUsageLines,
+      cumulativeUsage: runtime.cumulativeUsage,
+      seenMsgIds: runtime.seenMsgIds,
     });
     attachBgListener(runtime.ptySession);
     if (runtime.claudeSessionId) {
@@ -874,7 +919,15 @@ export async function processMessage(runtime, prompt, opts = {}) {
     // reviewers) still reaches the live feed. It is stopped only when the wave
     // truly settles (below / in the bg driver) or on teardown.
 
-    foldSpawnUsageIntoStats(runtime);
+    // Replace cumulative stats with the watcher's session-cumulative DEDUPED
+    // total (the live source of truth). Falls back to the additive per-spawn
+    // fold if the watcher reported nothing (e.g. a turn with no transcript
+    // usage) so the header never regresses to zero.
+    try {
+      const cum = await runtime.ptySession?.cumulativeUsage?.();
+      if (cum && Object.keys(cum).length > 0) applyCumulativeUsage(runtime, cum);
+      else foldSpawnUsageIntoStats(runtime);
+    } catch { foldSpawnUsageIntoStats(runtime); }
     runtime.currentProc = null;
     sendStats(runtime);
 

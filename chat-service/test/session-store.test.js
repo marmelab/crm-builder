@@ -152,6 +152,44 @@ test('digestLog: stats.tokensBreakdown carries the 4-way per-component split', (
   assert.equal(stats.tokensUsed, 350);
 });
 
+test('digestLog: commitSpawn uses ONE reduction — total == per-model sum, from the last cumulative snapshot', () => {
+  // Three result events in ONE spawn report a growing cumulative cost
+  // [$2.67, $16.69, $3.82-cumulative-here-modeled-as-growth]. The committed
+  // cost must be the spawn's FINAL cumulative per-model snapshot — NOT the sum
+  // of the snapshots (triple-count), and NOT a total taken from one reduction
+  // while the per-model rows come from another (the old bug: total used
+  // currentSpawnMax, per-model used the last modelUsage costUSD, so they
+  // disagreed). With one reduction, total === Σ per-model BY CONSTRUCTION.
+  const result = (cost, costUSD) => JSON.stringify({
+    ts: '2026-06-01T10:00:00Z', dir: 'out', type: 'debug_raw',
+    event: {
+      type: 'result',
+      total_cost_usd: cost,
+      modelUsage: {
+        'claude-opus-4-8': { inputTokens: 10, cacheCreationInputTokens: 0, cacheReadInputTokens: 0, outputTokens: 5, costUSD },
+      },
+      usage: { input_tokens: 1, output_tokens: 1 },
+    },
+  });
+  // Cumulative-within-spawn snapshots: cost grows 2.67 → 16.69 → 19.18 (final).
+  // The per-model costUSD mirrors the cumulative total (one model).
+  const log = [
+    result(2.67, 2.67),
+    result(16.69, 16.69),
+    result(19.18, 19.18),
+  ].join('\n');
+
+  const { stats } = digestLog(log);
+  const perModelSum = stats.tokensByModel.reduce((s, m) => s + (m.costUsd || 0), 0);
+  // Committed = the spawn's final cumulative snapshot, not the sum 2.67+16.69+19.18.
+  assert.ok(Math.abs(stats.costUsd - 19.18) < 1e-9, `expected $19.18, got $${stats.costUsd}`);
+  // Total and per-model rows agree — the core fix.
+  assert.ok(Math.abs(stats.costUsd - perModelSum) < 1e-9,
+    `total $${stats.costUsd} must equal Σ per-model $${perModelSum}`);
+  assert.equal(stats.tokensByModel.length, 1);
+  assert.equal(stats.tokensByModel[0].model, 'claude-opus-4-8');
+});
+
 test('digestLog: skips malformed JSON lines without crashing', () => {
   const log = [
     userMessage('Hello'),

@@ -41,7 +41,7 @@ export class PtySession extends EventEmitter {
 
   get stderr() { return this.#outputBuffer; }
 
-  constructor(claudeSessionId, sessionDir, { subagentUsageLines } = {}) {
+  constructor(claudeSessionId, sessionDir, { subagentUsageLines, cumulativeUsage, seenMsgIds } = {}) {
     super();
     this.#sessionId = claudeSessionId || null;
     const model = getOrchestratorModel();
@@ -93,7 +93,7 @@ export class PtySession extends EventEmitter {
       this.emit('exit', exitCode ?? 1);
     });
 
-    this.#watcher = new TranscriptWatcher(claudeSessionId, claudeProjectDir(), { subagentUsageLines });
+    this.#watcher = new TranscriptWatcher(claudeSessionId, claudeProjectDir(), { subagentUsageLines, cumulativeUsage, seenMsgIds });
     this.#watcher.on('event', e => {
       // Discover session_id for new sessions so we can watch for the stop sentinel.
       if (e.session_id && !this.#sessionId) {
@@ -293,6 +293,15 @@ export class PtySession extends EventEmitter {
   // Collect (and reset) the turn's accumulated usage. Public so turn.js can
   // fold in the cost of a wave that ends on the background drain path, where
   // no active-turn result event will ever fire.
+  // Session-cumulative, message.id-deduped usage (camelCase modelUsage). The
+  // live single source of truth — turn.js folds it into runtime.stats so the
+  // chat header converges to the same deduped figure /api/stats reports. Pure
+  // read (no reset). flush() first so the latest main-transcript lines are in.
+  async cumulativeUsage() {
+    await this.#watcher?.flush().catch(() => {});
+    return this.#watcher?.cumulativeUsage() ?? {};
+  }
+
   async collectUsage() {
     const modelUsage = await this.#watcher?.consumeTurnUsage().catch(() => null) ?? {};
     let total_cost_usd = 0;

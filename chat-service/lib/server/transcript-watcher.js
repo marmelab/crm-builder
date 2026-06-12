@@ -42,6 +42,16 @@ export class TranscriptWatcher extends EventEmitter {
   // assistant lines arrive. Consumed and reset by consumeTurnUsage() at turn end.
   // Map<model, {input, cacheCreate, output, cacheRead}>
   #turnUsage = new Map();
+  // Session-CUMULATIVE token accumulation, DEDUPED by message.id across the
+  // orchestrator transcript AND every subagent JSONL. This is the live single
+  // source of truth: sendStats reads it so the chat header converges to the
+  // same deduped-by-message.id figure /api/stats reports — instead of summing
+  // per-turn deltas (which double-count: each tool_use yields two assistant
+  // events sharing one message.id, and a resume re-reads history). Both maps are
+  // INJECTED by the runtime so they survive PTY restarts (a fresh watcher must
+  // keep the running cumulative, never reset it mid-wave).
+  #cumulativeUsage; // Map<model, {input, cacheCreate, output, cacheRead}>
+  #seenMsgIds;      // Set<message.id> — dedup guard for the cumulative accumulator
   // Per-subagent-file line offsets already counted in a previous
   // consumeTurnUsage() call. Map<filename, linesConsumed>. Injected by the
   // runtime so it survives PTY restarts (a fresh watcher must not re-count
@@ -58,11 +68,17 @@ export class TranscriptWatcher extends EventEmitter {
 
   // projectDir: directory containing <sessionId>.jsonl files.
   // sessionId: null for new sessions (watch dir), string for resumed sessions.
-  constructor(sessionId, projectDir, { subagentUsageLines = new Map() } = {}) {
+  constructor(sessionId, projectDir, {
+    subagentUsageLines = new Map(),
+    cumulativeUsage = new Map(),
+    seenMsgIds = new Set(),
+  } = {}) {
     super();
     this.#sessionId = sessionId || null;
     this.#projectDir = projectDir;
     this.#subagentUsageLines = subagentUsageLines;
+    this.#cumulativeUsage = cumulativeUsage;
+    this.#seenMsgIds = seenMsgIds;
     if (sessionId) {
       this.#jsonlPath = join(projectDir, `${sessionId}.jsonl`);
     }
@@ -218,6 +234,10 @@ export class TranscriptWatcher extends EventEmitter {
             this.#turnUsage.get(model) || emptyBreakdown(),
             breakdownFromUsage(u),
           ));
+          // Feed the session-cumulative DEDUPED accumulator (the live source of
+          // truth for sendStats). Each tool_use emits two assistant events with
+          // the same message.id — count only the first, mirroring stats/subagents.js.
+          this.#accumulateCumulative(entry.message?.id, model, u);
         }
 
         // Emit synthetic task_started for each Agent() tool call so activeAgents
@@ -323,6 +343,9 @@ export class TranscriptWatcher extends EventEmitter {
                 const u = e.message?.usage;
                 if (!model || !u) continue;
                 usage.set(model, addBreakdown(usage.get(model) || emptyBreakdown(), breakdownFromUsage(u)));
+                // Same deduped cumulative accumulator the main transcript feeds —
+                // subagent message ids are globally unique, so one Set is enough.
+                this.#accumulateCumulative(e.message?.id, model, u);
               }
               this.#subagentUsageLines.set(f, counted);
             })
@@ -333,6 +356,38 @@ export class TranscriptWatcher extends EventEmitter {
     // Convert to turn.js modelUsage format (camelCase).
     const modelUsage = {};
     for (const [model, u] of usage) {
+      modelUsage[model] = {
+        inputTokens:              u.input,
+        cacheCreationInputTokens: u.cacheCreate,
+        cacheReadInputTokens:     u.cacheRead,
+        outputTokens:             u.output,
+      };
+    }
+    return modelUsage;
+  }
+
+  // Fold one assistant `usage` block into the session-cumulative deduped
+  // accumulator, keyed by message.id (counted once — the first occurrence wins).
+  // A message with no id is always counted (can't dedup it), matching the
+  // pre-existing per-turn behaviour. Exposed only via cumulativeUsage().
+  #accumulateCumulative(msgId, model, u) {
+    if (msgId != null) {
+      if (this.#seenMsgIds.has(msgId)) return;
+      this.#seenMsgIds.add(msgId);
+    }
+    this.#cumulativeUsage.set(model, addBreakdown(
+      this.#cumulativeUsage.get(model) || emptyBreakdown(),
+      breakdownFromUsage(u),
+    ));
+  }
+
+  // Session-cumulative, message.id-DEDUPED usage in turn.js modelUsage format
+  // (camelCase). Read by sendStats so the live chat header reports the same
+  // deduped figure /api/stats computes — not the inflated sum of per-spawn
+  // snapshots. Pure read: does NOT reset state (cumulative, by definition).
+  cumulativeUsage() {
+    const modelUsage = {};
+    for (const [model, u] of this.#cumulativeUsage) {
       modelUsage[model] = {
         inputTokens:              u.input,
         cacheCreationInputTokens: u.cacheCreate,

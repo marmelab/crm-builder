@@ -292,6 +292,80 @@ const assistantLine = (output) => JSON.stringify({
   message: { model: 'claude-opus-4-8', usage: { input_tokens: 10, output_tokens: output } },
 }) + '\n';
 
+const assistantLineWithId = (id, output, model = 'claude-opus-4-8') => JSON.stringify({
+  type: 'assistant',
+  message: { id, model, usage: { input_tokens: 10, cache_creation_input_tokens: 5, cache_read_input_tokens: 20, output_tokens: output } },
+}) + '\n';
+
+test('cumulativeUsage: a repeated message.id (tool_use decide+stream) is counted ONCE', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'tw-cum-'));
+  const sessionId = 'cum-dedup-session';
+  const jsonlPath = join(dir, `${sessionId}.jsonl`);
+  await writeFile(jsonlPath, '');
+  const watcher = new TranscriptWatcher(sessionId, dir);
+  await watcher.start();
+
+  // Same message.id twice — the decide event then the post-stream event. A
+  // naive per-line summer double-counts; cumulativeUsage must dedup by id.
+  await appendFile(jsonlPath, assistantLineWithId('msg_A', 50));
+  await appendFile(jsonlPath, assistantLineWithId('msg_A', 50));
+  await appendFile(jsonlPath, assistantLineWithId('msg_B', 70));
+  await watcher.flush();
+
+  const cum = watcher.cumulativeUsage();
+  // msg_A once (in 10, cc 5, read 20, out 50) + msg_B once (in 10, cc 5, read 20, out 70).
+  assert.equal(cum['claude-opus-4-8'].outputTokens, 120, 'msg_A counted once + msg_B');
+  assert.equal(cum['claude-opus-4-8'].inputTokens, 20);
+  assert.equal(cum['claude-opus-4-8'].cacheCreationInputTokens, 10);
+  assert.equal(cum['claude-opus-4-8'].cacheReadInputTokens, 40);
+  watcher.close();
+  await rm(dir, { recursive: true });
+});
+
+test('cumulativeUsage: survives a PTY restart (injected maps) without re-counting history', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'tw-cum-restart-'));
+  const sessionId = 'cum-restart-session';
+  const jsonlPath = join(dir, `${sessionId}.jsonl`);
+  await writeFile(jsonlPath, '');
+
+  const cumulativeUsage = new Map();   // = runtime.cumulativeUsage
+  const seenMsgIds = new Set();        // = runtime.seenMsgIds
+  const w1 = new TranscriptWatcher(sessionId, dir, { cumulativeUsage, seenMsgIds });
+  await w1.start();
+  await appendFile(jsonlPath, assistantLineWithId('msg_1', 100));
+  await w1.flush();
+  assert.equal(w1.cumulativeUsage()['claude-opus-4-8'].outputTokens, 100);
+  w1.close();
+
+  // Fresh watcher (PTY restart) with the SAME injected maps. It seeks to EOF, so
+  // it won't re-read msg_1 — and even if a stale line repeats, seenMsgIds blocks it.
+  const w2 = new TranscriptWatcher(sessionId, dir, { cumulativeUsage, seenMsgIds });
+  await w2.start();
+  await appendFile(jsonlPath, assistantLineWithId('msg_2', 200));
+  await w2.flush();
+  assert.equal(w2.cumulativeUsage()['claude-opus-4-8'].outputTokens, 300, 'kept msg_1, added msg_2');
+  w2.close();
+  await rm(dir, { recursive: true });
+});
+
+test('cumulativeUsage: subagent assistant lines feed the deduped cumulative', async () => {
+  const projectDir = await mkdtemp(join(tmpdir(), 'tw-cum-sub-'));
+  const csid = 'cum-sub-conv';
+  const subDir = join(projectDir, csid, 'subagents');
+  await mkdir(subDir, { recursive: true });
+  await writeFile(join(subDir, 'agent-1.jsonl'), assistantLineWithId('sub_msg_1', 40));
+
+  const watcher = new TranscriptWatcher(csid, projectDir);
+  // consumeTurnUsage reads the subagent file → also feeds cumulative (deduped).
+  await watcher.consumeTurnUsage();
+  assert.equal(watcher.cumulativeUsage()['claude-opus-4-8'].outputTokens, 40);
+  // A second consume with no new lines must NOT double-count.
+  await watcher.consumeTurnUsage();
+  assert.equal(watcher.cumulativeUsage()['claude-opus-4-8'].outputTokens, 40);
+  watcher.close();
+  await rm(projectDir, { recursive: true });
+});
+
 test('consumeTurnUsage counts only new subagent lines, across watcher instances', async () => {
   const projectDir = await mkdtemp(join(tmpdir(), 'tw-usage-'));
   const csid = 'conv-test';
