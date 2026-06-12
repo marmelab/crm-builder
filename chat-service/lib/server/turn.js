@@ -268,6 +268,29 @@ async function settleDrainedWave(current, sessionId) {
   }
 }
 
+// Settle a wave that can no longer advance (heartbeat give-up, or PTY dead with
+// no restart pending). Surfaces the stall once, transitions to `error` so the
+// UI stops showing a live progress bar, and drains one queued message (a typed
+// "continue" is exactly what the stall message asks for).
+async function settleStalledWave(current, sessionId, { total, pendingCount }) {
+  current.waveActive = false;
+  current.bgDriverState = null;
+  clearBgDriver(sessionId);
+  await stopSubagentTailer(current).catch(() => {});
+  const done = Math.max(0, total - pendingCount);
+  const stallText = `I finished ${done} of ${total} planned pieces, but ${pendingCount} ${pendingCount === 1 ? 'is' : 'are'} still unfinished. Say "continue" and I'll pick the rest back up.`;
+  broadcast(current, { type: 'message', role: 'assistant', content: stallText, ts: new Date().toISOString() });
+  await current.session?.recordMessage('assistant', stallText).catch(() => {});
+  await transitionState(current, 'error');
+  broadcast(current, { type: 'status', working: false });
+  if (current.queue.length > 0) {
+    const next = current.queue.shift();
+    broadcast(current, { type: 'queue_updated', queuedIds: current.queue.map((q) => q.id) });
+    current.busy = true;
+    processMessage(current, next.content).catch(() => { current.busy = false; });
+  }
+}
+
 // Driver state survives the AUTO_CONTINUE escalation cycle (clearBgDriver →
 // resume turn → startBgDriver): it lives on the runtime, not in the closure,
 // so noProgress keeps climbing toward the give-up threshold across restarts.
@@ -280,6 +303,7 @@ export function ensureBgDriverState(runtime) {
   };
   state.resumed = false;          // each (re)start allows one new escalation
   state.timer = null;
+  state.ticking = false;          // re-entrance guard for the async heartbeat tick
   return state;
 }
 
@@ -291,7 +315,10 @@ function startBgDriver(runtime, runtimes) {
   const state = ensureBgDriverState(runtime);
   driverLog(`heartbeat started session=${sessionId}`);
 
-  state.timer = setInterval(async () => {
+  // Re-entrance guard: a tick can outlast HEARTBEAT_MS (the settle paths flush
+  // usage + snapshot transcripts). Overlapping ticks would double-settle the
+  // wave — two queue.shift()s and two concurrent turns on the same PTY.
+  const tick = async () => {
     const current = runtimes.get(sessionId);
     // Stop the heartbeat if the runtime is gone, an active turn is running, or
     // the PTY has died (a fresh PTY's exit handler / next turn re-arms it).
@@ -307,10 +334,25 @@ function startBgDriver(runtime, runtimes) {
       return;
     }
     if (!current.ptySession || current.ptySession.closed) {
+      // A restart-once may still be scheduled (PTY exit handler) — give it a
+      // chance to respawn and re-arm the wave before declaring it dead.
+      if (current.ptyRestartPending) return;
       driverLog(`heartbeat stop: PTY gone session=${sessionId}`);
-      current.waveActive = false;
-      current.bgDriverState = null;
-      clearBgDriver(sessionId);
+      // PTY dead with no restart coming: the wave cannot advance. Without an
+      // explicit settle the session stays in_progress with a live progress bar
+      // forever (reconcileWaveState refuses to clear while tickets are pending).
+      const { total, pendingCount } = await readTicketStatuses(sDir)
+        .catch(() => ({ total: 0, pendingCount: 0 }));
+      if (total > 0 && pendingCount > 0) {
+        await settleStalledWave(current, sessionId, { total, pendingCount });
+      } else {
+        current.waveActive = false;
+        current.bgDriverState = null;
+        clearBgDriver(sessionId);
+        await stopSubagentTailer(current).catch(() => {});
+        await transitionState(current, 'completed');
+        broadcast(current, { type: 'status', working: false });
+      }
       return;
     }
 
@@ -363,23 +405,7 @@ function startBgDriver(runtime, runtimes) {
     if (state.noProgress >= HEARTBEAT_GIVEUP_TICKS) {
       // Genuinely stuck — surface the stall once and stop nudging.
       driverLog(`heartbeat give-up: stall ${state.noProgress} ticks pending=${pendingCount} session=${sessionId}`);
-      current.waveActive = false;
-      current.bgDriverState = null;
-      clearBgDriver(sessionId);
-      await stopSubagentTailer(current).catch(() => {});
-      const done = Math.max(0, total - pendingCount);
-      const stallText = `I finished ${done} of ${total} planned pieces, but ${pendingCount} ${pendingCount === 1 ? 'is' : 'are'} still unfinished. Say "continue" and I'll pick the rest back up.`;
-      broadcast(current, { type: 'message', role: 'assistant', content: stallText, ts: new Date().toISOString() });
-      await current.session?.recordMessage('assistant', stallText).catch(() => {});
-      await transitionState(current, 'error');
-      // A queued message (a typed "continue") is exactly what the stall asks for —
-      // drain it now that the session is free instead of leaving it stuck.
-      if (current.queue.length > 0) {
-        const next = current.queue.shift();
-        broadcast(current, { type: 'queue_updated', queuedIds: current.queue.map((q) => q.id) });
-        current.busy = true;
-        processMessage(current, next.content).catch(() => { current.busy = false; });
-      }
+      await settleStalledWave(current, sessionId, { total, pendingCount });
       return;
     }
 
@@ -404,6 +430,14 @@ function startBgDriver(runtime, runtimes) {
     // completions and runs its Step 2 background turn.
     driverLog(`heartbeat nudge: noProgress=${state.noProgress} pending=${pendingCount} session=${sessionId}`);
     current.ptySession.nudge();
+  };
+
+  state.timer = setInterval(() => {
+    if (state.ticking) return;
+    state.ticking = true;
+    tick()
+      .catch((e) => driverLog(`heartbeat tick error: ${e?.message || e} session=${sessionId}`))
+      .finally(() => { state.ticking = false; });
   }, HEARTBEAT_MS);
 
   bgDrivers.set(sessionId, { timer: state.timer });
