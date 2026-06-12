@@ -135,14 +135,23 @@ export async function aggregateSession({ sessionLogPath, hooksLogPath, sessionId
   // total — do NOT re-add them.
   //
   // opsCount is different: it comes from computeSummary, which walks only the
-  // orchestrator's main stream and so misses in_process_teammate tool_uses
-  // (those live in their own subagent JSONL files). Add the COMPLEX-team ops
-  // back in here.
+  // main stream. Sub-agent tool calls live in their own subagent JSONL files —
+  // in the PTY model that is EVERY Agent dispatch (local_agent), not just
+  // in_process_teammates — so add every agent phase's opsCount back in. Legacy
+  // stream-json sessions also carried sub-agent events in the main stream
+  // (parent_tool_use_id != null), where computeSummary already counted them:
+  // deduct those so phase ops are not added twice.
   let extraOps = 0;
-  for (const p of agentPhases) {
-    if (p.taskType === 'in_process_teammate') extraOps += p.opsCount || 0;
+  for (const p of agentPhases) extraOps += p.opsCount || 0;
+  let parentedOps = 0;
+  for (const rec of events) {
+    if (rec.type !== 'debug_raw' || !rec.event) continue;
+    const ev = rec.event;
+    if (ev.type === 'assistant' && ev.parent_tool_use_id != null) {
+      parentedOps += (ev.message?.content || []).filter((b) => b.type === 'tool_use').length;
+    }
   }
-  s.opsCount += extraOps;
+  s.opsCount += Math.max(0, extraOps - parentedOps);
 
   // Only keep phases if orchestrator has children or if there are agent phases
   const hasOrchestratorWork = orchestrator.children.length > 0;
