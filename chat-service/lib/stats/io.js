@@ -113,6 +113,7 @@ export function spawnBoundaryTimestamps(events) {
 // published standard pricing — they may drift; the derived per-model figures
 // are best-effort and may not sum to the SDK total to the penny.
 export const MODEL_RATES = {
+  'claude-opus-4-8':           { input: 5,   cacheCreate: 6.25,  cacheRead: 0.5,  output: 25 },
   'claude-opus-4-7':           { input: 5,   cacheCreate: 6.25,  cacheRead: 0.5,  output: 25 },
   'claude-opus-4-6':           { input: 5,   cacheCreate: 6.25,  cacheRead: 0.5,  output: 25 },
   'claude-opus-4-5':           { input: 5,   cacheCreate: 6.25,  cacheRead: 0.5,  output: 25 },
@@ -130,8 +131,18 @@ export function shortModelName(name) {
     .replace(/-\d{8}$/, '');
 }
 
+// Models we've already warned about, so the fallback log fires once per id.
+const warnedUnknownModels = new Set();
+
 export function costFromBreakdown(model, b) {
-  const r = MODEL_RATES[model] || MODEL_RATES['claude-sonnet-4-6'];
+  let r = MODEL_RATES[model];
+  if (!r) {
+    if (!warnedUnknownModels.has(model)) {
+      warnedUnknownModels.add(model);
+      console.warn(`[stats] no rate for model "${model}", using sonnet fallback`);
+    }
+    r = MODEL_RATES['claude-sonnet-4-6'];
+  }
   return (
     (b?.input       || 0) * r.input +
     (b?.cacheCreate || 0) * r.cacheCreate +

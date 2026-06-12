@@ -6,6 +6,7 @@ import { aggregateSession } from '../lib/stats.js';
 import {
   computeSummary, tokensFromModelUsage,
   breakdownFromModelUsage, breakdownFromUsage, sumBreakdown,
+  costFromBreakdown,
 } from '../lib/stats/io.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -516,4 +517,17 @@ test('phases group multiple task_started for the same task_id (SendMessage resum
   const unknown = agentPhases.filter((p) => p.agentType === 'unknown');
   assert.equal(unknown.length, 0, 'no unknown phases');
   assert.ok((devPhases[0].activations || []).length >= 2, 'developer should have >=2 activations');
+});
+
+test('costFromBreakdown: claude-opus-4-8 is priced at the Opus tier, not sonnet', () => {
+  const b = { input: 1_000_000, cacheCreate: 0, cacheRead: 0, output: 1_000_000 };
+  const opus48 = costFromBreakdown('claude-opus-4-8', b);
+  const opus47 = costFromBreakdown('claude-opus-4-7', b);
+  const sonnet = costFromBreakdown('claude-sonnet-4-6', b);
+  // Opus 4.8 must match the existing Opus tier (4.7) exactly...
+  assert.equal(opus48, opus47, 'opus-4-8 should equal opus-4-7 cost');
+  // ...and must NOT silently fall back to the cheaper sonnet rate.
+  assert.notEqual(opus48, sonnet, 'opus-4-8 must not be priced as sonnet');
+  // Opus tier: $5/M input + $25/M output = $30 for this breakdown.
+  assert.equal(opus48, 30);
 });
