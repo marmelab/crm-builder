@@ -20,16 +20,14 @@ echo -e "${BOLD}${BLUE}╚══════════════════
 echo ""
 
 # ── First-run bootstrap ───────────────────────────────────────
-# /app is bind-mounted from ./crm-source on the host so users can browse and
-# share the CRM source. On the first run that host folder is empty, so we
+# crm-app:/app is a named volume. On first boot the volume is empty, so we
 # restore the build artifacts staged at /opt/atomic-crm-source by the
-# Dockerfile (includes node_modules, .git, etc. — keeps `cp -al` worktree
-# hard-links working since everything stays on the same device).
+# Dockerfile (includes node_modules, .git, etc.).
 if [ ! -f /app/package.json ] && [ -d /opt/atomic-crm-source ]; then
   echo -e "${BOLD}${BLUE}First run — populating /app from image (this takes ~30s)…${NC}"
   cp -a /opt/atomic-crm-source/. /app/
   chown -R developer:developer /app
-  echo -e "${GREEN}✓  Source ready in ./crm-source${NC}"
+  echo -e "${GREEN}✓  Source ready${NC}"
   echo ""
 fi
 
@@ -56,6 +54,22 @@ for f in ${AUTH_FILES}; do
   [ -f "${AUTH_DIR}/${f}" ] && cp -a "${AUTH_DIR}/${f}" "${CLAUDE_DIR}/${f}" 2>/dev/null || true
 done
 chown -R developer:developer "${CLAUDE_DIR}" "${AUTH_DIR}" 2>/dev/null || true
+
+# Ensure the interactive orchestrator PTY skips claude's first-run onboarding.
+# claude >=2.1 gates the interactive TUI on hasCompletedOnboarding; `claude login`
+# sets oauthAccount but NOT this flag, so a fresh login (or a wiped auth volume)
+# leaves the orchestrator stuck on the login-method/theme picker — no transcript,
+# no Stop sentinel, every session hangs to the 120 s silence timeout. Idempotent;
+# the mirror loop below propagates the change back to AUTH_DIR.
+CLAUDE_DIR="${CLAUDE_DIR}" node -e '
+  const fs = require("fs"); const p = process.env.CLAUDE_DIR + "/.claude.json";
+  let c = {}; try { c = JSON.parse(fs.readFileSync(p, "utf8")); } catch {}
+  let changed = false;
+  if (c.hasCompletedOnboarding !== true) { c.hasCompletedOnboarding = true; changed = true; }
+  if (!c.theme) { c.theme = "dark"; changed = true; }
+  if (changed) fs.writeFileSync(p, JSON.stringify(c));
+' 2>/dev/null || true
+chown developer:developer "${CLAUDE_DIR}/.claude.json" 2>/dev/null || true
 
 # Persist: mirror login files CLAUDE_DIR → AUTH_DIR whenever they change (token
 # refresh or fresh `make claude` login). Survives `exec` below as an orphan under
@@ -136,10 +150,9 @@ touch /chat-service/logs/hooks.log 2>/dev/null || true
 chown developer:developer /chat-service/logs/hooks.log 2>/dev/null || true
 chmod 664 /chat-service/logs/hooks.log 2>/dev/null || true
 
-# Runtime-generated docs (reflections, learnings) — live inside the ./crm-source
-# bind mount at /app/docs. On a fresh host, parent dirs may be missing or owned
-# by an unexpected UID after the first-run bootstrap; ensure they exist and are
-# writable by developer so Mode 2 can persist reflections.
+# Runtime-generated docs (reflections, learnings) — live at /app/docs inside
+# the crm-app volume. Ensure they exist and are writable by developer so
+# Mode 2 can persist reflections.
 # Note: ticket files (TASK-XXX.json) live in /chat-service/logs/<sessionId>/ now,
 # alongside log.jsonl and meta.json — chown'd via the chat-service logs block above.
 mkdir -p /app/docs/learnings /app/adr 2>/dev/null || true
@@ -174,9 +187,9 @@ if [ -f /app/.gitignore ] && ! grep -qxF 'worktrees/' /app/.gitignore; then
 fi
 
 # ── Sync node_modules with package-lock.json ──────────────────
-# The ./crm-source bind mount persists node_modules across restarts. If an
-# agent modifies package.json/package-lock.json (e.g. adds a dependency) and
-# commits, the host folder keeps the old node_modules. Hash-check at boot:
+# Volume crm-app:/app persists node_modules across restarts. If an agent
+# modifies package.json/package-lock.json (e.g. adds a dependency) and
+# commits, the volume keeps the old node_modules. Hash-check at boot:
 # if package-lock.json changed since last npm ci, re-install.
 LOCK_HASH=$(sha256sum /app/package-lock.json 2>/dev/null | cut -d' ' -f1)
 PREV_HASH=$(cat /app/.npm-ci-hash 2>/dev/null || echo "")

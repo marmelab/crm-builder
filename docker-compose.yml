@@ -7,11 +7,6 @@
 #  makes Supabase's localhost:54321 reachable from inside the
 #  container when MODE=full or when switched at runtime.
 #
-#  ./crm-source:/app is a bind mount so users can browse and edit the
-#  CRM source from their machine (share with co-workers, edit in their
-#  IDE, etc.). The Dockerfile stages the initial source in
-#  /opt/atomic-crm-source; entrypoint.sh copies it into /app on first
-#  run when ./crm-source is empty.
 # ─────────────────────────────────────────────────────────────
 
 services:
@@ -25,7 +20,7 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - MODE=${MODE:-demo}
     volumes:
-      - ./crm-source:/app
+      - crm-app:/app
       # Shared volume carries ONLY the OAuth login (entrypoint.sh symlinks the
       # credential files into .claude). The harness config — agents, skills,
       # hooks, rules, settings.json — comes purely from the image, so each
@@ -38,6 +33,7 @@ services:
       - ./sessions:/chat-service/logs
 
 volumes:
+  crm-app:
   supabase-cache:
   # Pinned name so the OAuth login survives `-p <instance>` namespacing and is
   # shared with every multi-instance stack (see docker-compose.multi.yml).

@@ -135,12 +135,10 @@ COPY claudeConfig/.claude/ /root/.claude/
 RUN cp -r /root/.claude /home/developer/.claude \
     && chown -R developer:developer /home/developer/.claude
 
-# ── Stage source for bind-mounted /app ────────────────────────
-# /app is bind-mounted from ./crm-source on the host (see docker-compose.yml)
-# so users can browse and share the CRM source from their machine. The bind
-# mount hides any content baked into the image at /app, so we relocate the
-# build artifacts here. entrypoint.sh restores them into /app on first run
-# when the bind mount is empty.
+# ── Stage source for named volume /app ────────────────────────
+# crm-app:/app is a named volume — the mount hides any content baked at /app,
+# so we relocate build artifacts here. entrypoint.sh copies them into /app on
+# first boot (empty volume) so the volume is bootstrapped from the image.
 RUN mv /app /opt/atomic-crm-source \
     && mkdir -p /app \
     && chown developer:developer /app
