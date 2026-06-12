@@ -124,7 +124,7 @@ export async function stopBackgroundWave(runtime) {
     const next = runtime.queue.shift();
     broadcast(runtime, { type: 'queue_updated', queuedIds: runtime.queue.map((q) => q.id) });
     runtime.busy = true;
-    processMessage(runtime, next.content);
+    processMessage(runtime, next.content).catch(() => { runtime.busy = false; });
   }
   return true;
 }
@@ -154,7 +154,7 @@ export async function reconcileWaveState(runtime) {
     const next = runtime.queue.shift();
     broadcast(runtime, { type: 'queue_updated', queuedIds: runtime.queue.map((q) => q.id) });
     runtime.busy = true;
-    processMessage(runtime, next.content);
+    processMessage(runtime, next.content).catch(() => { runtime.busy = false; });
   }
   return true;
 }
@@ -264,19 +264,15 @@ async function settleDrainedWave(current, sessionId) {
     const next = current.queue.shift();
     broadcast(current, { type: 'queue_updated', queuedIds: current.queue.map((q) => q.id) });
     current.busy = true;
-    processMessage(current, next.content);
+    processMessage(current, next.content).catch(() => { current.busy = false; });
   }
 }
 
-function startBgDriver(runtime, runtimes) {
-  const sessionId = runtime.session?.id;
-  if (!sessionId) return;
-  clearBgDriver(sessionId);
-  const sDir = `${LOG_DIR}/${sessionId}`;
-  // Driver state survives the AUTO_CONTINUE escalation cycle (clearBgDriver →
-  // resume turn → startBgDriver): it lives on the runtime, not in the closure,
-  // so noProgress keeps climbing toward the give-up threshold across restarts.
-  // Reset only by a real user message (processMessage non-auto) or a wave end.
+// Driver state survives the AUTO_CONTINUE escalation cycle (clearBgDriver →
+// resume turn → startBgDriver): it lives on the runtime, not in the closure,
+// so noProgress keeps climbing toward the give-up threshold across restarts.
+// Reset only by a real user message (processMessage non-auto) or a wave end.
+export function ensureBgDriverState(runtime) {
   const state = runtime.bgDriverState ??= {
     prevSig: null, noProgress: 0, resumed: false, escalations: 0,
     seenBgCount: runtime.bgResultCount || 0, drainQuiet: 0,
@@ -284,6 +280,15 @@ function startBgDriver(runtime, runtimes) {
   };
   state.resumed = false;          // each (re)start allows one new escalation
   state.timer = null;
+  return state;
+}
+
+function startBgDriver(runtime, runtimes) {
+  const sessionId = runtime.session?.id;
+  if (!sessionId) return;
+  clearBgDriver(sessionId);
+  const sDir = `${LOG_DIR}/${sessionId}`;
+  const state = ensureBgDriverState(runtime);
   driverLog(`heartbeat started session=${sessionId}`);
 
   state.timer = setInterval(async () => {
@@ -373,7 +378,7 @@ function startBgDriver(runtime, runtimes) {
         const next = current.queue.shift();
         broadcast(current, { type: 'queue_updated', queuedIds: current.queue.map((q) => q.id) });
         current.busy = true;
-        processMessage(current, next.content);
+        processMessage(current, next.content).catch(() => { current.busy = false; });
       }
       return;
     }
@@ -809,22 +814,25 @@ export async function processMessage(runtime, prompt, opts = {}) {
   const spawnedWithResume = !!runtime.claudeSessionId;
   let staleRetry = false;
 
-  if (!runtime.ptySession || runtime.ptySession.closed) {
-    spawnOrResumePty();
-  } else {
-    attachBgListener(runtime.ptySession);
-  }
-
-  runtime.ptySession.send(buildPrompt(prompt));
-  // The session_id discovery event only fires once per brand-new conversation;
-  // resumed sessions and turn 2+ must (re)start the tailer themselves. The call
-  // is idempotent, so this is safe when it is already running.
-  if (runtime.claudeSessionId) {
-    startSubagentTailer(runtime).catch((e) => console.error('[subagent-tail]', e));
-  }
-  runtime.currentProc = { kill: () => runtime.ptySession?.kill() };
-
   try {
+    // Inside the try: node-pty's spawn can throw synchronously (e.g. ENOMEM,
+    // missing binary) and send() writes to the fresh PTY — an unguarded throw
+    // here would skip the finally and leave runtime.busy=true forever.
+    if (!runtime.ptySession || runtime.ptySession.closed) {
+      spawnOrResumePty();
+    } else {
+      attachBgListener(runtime.ptySession);
+    }
+
+    runtime.ptySession.send(buildPrompt(prompt));
+    // The session_id discovery event only fires once per brand-new conversation;
+    // resumed sessions and turn 2+ must (re)start the tailer themselves. The call
+    // is idempotent, so this is safe when it is already running.
+    if (runtime.claudeSessionId) {
+      startSubagentTailer(runtime).catch((e) => console.error('[subagent-tail]', e));
+    }
+    runtime.currentProc = { kill: () => runtime.ptySession?.kill() };
+
     for await (const event of ptyEventsUntilResult(runtime.ptySession)) {
       if (event.session_id) {
         runtime.claudeSessionId = event.session_id;
@@ -938,12 +946,12 @@ export async function processMessage(runtime, prompt, opts = {}) {
       runtime.claudeSessionId = null;
       runtime.session?.setClaudeSessionId(null).catch(() => {});
       runtime.busy = true;
-      processMessage(runtime, prompt, { ...opts, staleRetried: true });
+      processMessage(runtime, prompt, { ...opts, staleRetried: true }).catch(() => { runtime.busy = false; });
     } else if (!wasStopped && !rateLimit && runtime.queue.length > 0) {
       broadcast(runtime, { type: 'status', working: false });
       const next = runtime.queue.shift();
       broadcast(runtime, { type: 'queue_updated', queuedIds: runtime.queue.map((q) => q.id) });
-      processMessage(runtime, next.content);
+      processMessage(runtime, next.content).catch(() => { runtime.busy = false; });
     } else {
       if (wasStopped || rateLimit) runtime.queue = [];
       runtime.busy = false;
