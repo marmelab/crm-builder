@@ -45,7 +45,7 @@ Tests: `cd chat-service && npm test` — uses glob `'test/**/*.test.js'` (direct
 | merger | haiku | `git merge --no-ff` only. **Never `git add`/`git commit`**. |
 | documentator | sonnet | Mode 1 — captures rules/skills to `~/.claude/local/` on explicit user request. Mode 2 — dispatched by the orchestrator (via `Agent`, run_in_background) at POST-DEV once the user validates the result; appends business knowledge to `/app/MEMORY.md` from the diff vs `origin/main`. Both modes run via the Agent tool (no `claude -p`); confined by `restrict-documentator-{write,bash}` (which trigger on `agent_type=documentator` or the legacy `DOCUMENTATOR_RUN=1`). |
 
-Team layout (`agent-team` skill): one `TeamCreate` per wave, `3×N + 1` members in one dispatch (developer + 2 reviewers per ticket + one shared merger). Constraint: one team per lead, no nested teams. Single merger eliminates `.git/index.lock` contention.
+Dispatch layout (no team): the orchestrator dispatches each wave's agents directly via the `Agent` tool — one developer per ticket, then 2 reviewers per ticket, then the merger. Merges run one at a time into the `_session` worktree, so there is no `.git/index.lock` contention.
 
 ### Hooks (`claudeConfig/.claude/settings.json`)
 

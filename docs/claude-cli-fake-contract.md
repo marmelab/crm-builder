@@ -1,37 +1,26 @@
 # Claude CLI — Fake contract
 
-Everything chat-service sends to the `claude -p` subprocess, and everything it expects back.
+Everything chat-service sends to the persistent interactive `claude` PTY, and everything it expects back.
 Replace this contract with a stub to test chat-service tools without a real Claude CLI.
 
 ---
 
 ## Input — what chat-service sends
 
-**Command line** (built by `pty-session.js`):
+**Command line** (built by `pty-session.js`, spawned interactively via node-pty — no `-p`, no stdout JSON):
 ```
 claude
-  --output-format stream-json
-  --verbose
   --dangerously-skip-permissions
   --strict-mcp-config --mcp-config '{"mcpServers":{}}'
-  --model <model>           # from chat-orchestrator.md YAML frontmatter
   [--resume <CSID>]         # only when resuming an existing session
-  -p <prompt>
+  --agent chat-orchestrator # loads ~/.claude/agents/chat-orchestrator.md as system prompt
+  --model <model>           # from chat-orchestrator.md YAML frontmatter
+  --append-system-prompt '<mode>demo|full</mode>\n<session_dir>/chat-service/logs/<UUID></session_dir>'
 ```
 
-**Prompt structure:**
-```
-<instructions>
-{full content of ~/.claude/agents/chat-orchestrator.md}
-</instructions>
+**Per-turn input**: the user message is typed into the TUI stdin (sanitized: control chars stripped, newlines flattened), followed by a CR 50 ms later. The orchestrator instructions and `<mode>`/`<session_dir>` live in the system prompt, not the message.
 
-<mode>demo|full</mode>
-<session_dir>/chat-service/logs/<UUID></session_dir>
-
-{user message}
-```
-
-Special rewrites applied to the user message before spawn:
+Special rewrites applied to the user message before sending (turn-helpers.js):
 - `FULL_SETUP` → `<intent>setup</intent>\nUser clicked "Define your business"…`
 - If previous process was killed AND TASK-*.json files exist → message replaced with `<intent>recovery</intent>\nThe previous run was interrupted…\n\nOriginal: {original message}` and `--resume` is dropped (fresh session)
 
@@ -48,9 +37,9 @@ Special rewrites applied to the user message before spawn:
 
 ---
 
-## Output — what chat-service reads from stdout
+## Output — what chat-service reads back
 
-The subprocess must write **newline-delimited JSON** to stdout. `turn.js` processes each line as it arrives.
+In the PTY model, stdout is the raw TUI (ignored except for error sniffing). The events below are **reconstructed from the transcript** at `~/.claude/projects/-app/<CSID>.jsonl` by `transcript-watcher.js` and emitted to `turn.js` in the same shapes; a fake must append them to that file as newline-delimited JSON. Turn end is signalled by the Stop hook touching `/tmp/pty-turn-done-<CSID>`.
 
 **1. Mandatory first event** — gives `claudeSessionId`, stored in `meta.json`:
 ```json
