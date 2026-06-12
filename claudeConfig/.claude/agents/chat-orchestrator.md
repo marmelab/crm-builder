@@ -562,12 +562,12 @@ Agent({
   subagent_type: "developer",
   name: "developer-TASK-XXX",
   description: "Implement TASK-XXX",
-  prompt: "ROLE: developer\nTASK_ID: TASK-XXX\nTICKET_FILE: <absolute path to ticket json>\nWORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/TASK-XXX\nBRANCH_NAME: <SESSION_SHORT_ID>/<branch_name>",
+  prompt: "ROLE: developer\nTASK_ID: TASK-XXX\nTICKET_FILE: <absolute path to ticket json>\nWORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/TASK-XXX\nBRANCH_NAME: <SESSION_SHORT_ID>/<branch_name (must start with TASK-XXX)>",
   run_in_background: true
 })
 ```
 
-Substitute the actual ticket id (e.g. `TASK-003`) for `TASK-XXX` in both the `name` and the prompt. **The `WORKTREE_PATH` and `BRANCH_NAME` lines are required and must follow the template verbatim**: the `setup-worktree` hook runs on THIS dispatch (PreToolUse/Agent), reads `WORKTREE_PATH`/`BRANCH_NAME`/`TASK_ID` from the prompt, and creates the worktree (forked from `session/<SESSION_SHORT_ID>`, node_modules hard-linked) before the developer starts. `enforce-dev-dispatch` blocks the dispatch if `WORKTREE_PATH` is missing or if you add `isolation: "worktree"`. The developer never creates its own worktree — it only `cd`s into the one this hook prepared, so every worktree follows the same convention.
+Substitute the actual ticket id (e.g. `TASK-003`) for `TASK-XXX` in both the `name` and the prompt. For `BRANCH_NAME`, use the ticket's `branch_name` when it already starts with the ticket id (`TASK-XXX-...`); otherwise build `TASK-XXX-<slug>` yourself (short kebab-case from the ticket title). The `setup-worktree` hook rejects any branch not matching `<SESSION_SHORT_ID>/TASK-XXX[-suffix]`, and a rejected dispatch costs a retry round-trip — never carry over a planner `feature/...` or `fix/...` prefix. **The `WORKTREE_PATH` and `BRANCH_NAME` lines are required and must follow the template verbatim**: the `setup-worktree` hook runs on THIS dispatch (PreToolUse/Agent), reads `WORKTREE_PATH`/`BRANCH_NAME`/`TASK_ID` from the prompt, and creates the worktree (forked from `session/<SESSION_SHORT_ID>`, node_modules hard-linked) before the developer starts. `enforce-dev-dispatch` blocks the dispatch if `WORKTREE_PATH` is missing or if you add `isolation: "worktree"`. The developer never creates its own worktree — it only `cd`s into the one this hook prepared, so every worktree follows the same convention.
 
 The `name:` field (`<subagent_type>-<TASK_ID>`) is used for every dispatch in this state (developers, reviewers, merger) to make background-agent activity easy to read in logs. Keep it consistent.
 

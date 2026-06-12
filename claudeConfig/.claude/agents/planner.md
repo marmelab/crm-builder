@@ -86,7 +86,7 @@ Rules:
   ],
   "dependencies": ["TASK-000"],
   "parallel_safe": true,
-  "branch_name": "feature/company-importance-type",
+  "branch_name": "TASK-001-company-importance-type",
   "visual_customization": false,
   "status": "pending"
 }
@@ -104,7 +104,7 @@ Rules:
 
 Normal feature tickets (type / component / config prop) → `parallel_safe: true`.
 
-**`branch_name`**: filesystem-safe, `feature/<short-kebab>` or `fix/<short-kebab>`. Used to create the worktree.
+**`branch_name`**: filesystem-safe, `<TICKET_ID>-<short-kebab>` (e.g. `TASK-002-deal-stage-filter`). It MUST start with the ticket's own id: the orchestrator dispatches with `BRANCH_NAME: <SESSION_SHORT_ID>/<branch_name>`, and the `setup-worktree` hook rejects any branch that does not match `<SESSION_SHORT_ID>/TASK-XXX[-suffix]`. Never prefix with `feature/` or `fix/`.
 
 **`visual_customization`**: set `true` when the ticket touches colors, theme, component styling, dark/light mode, or layout preferences. The developer loads `Skill({skill: "shadcn-customization"})` as its first action on such tickets.
 
