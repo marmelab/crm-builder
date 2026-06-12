@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyWaveFlagsOnTurnSettle, progressBarLive } from '../lib/server/turn.js';
+import { applyWaveFlagsOnTurnSettle, progressBarLive } from '../lib/server/bg-driver.js';
 
 // Both branches of the active-turn `finally` settle path must go through this
 // helper so the wave flags can never desync from the settle decision.

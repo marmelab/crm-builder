@@ -13,7 +13,8 @@ import { runtimes, wsToRuntime, runtimeForWs, createRuntime, safeSend, killCurre
 import { sendToWs, broadcast } from './lib/server/ws-bus.js';
 import { updateProgressBar } from './lib/server/progress-bar.ts';
 import { extractText, extractToolUses, planResume } from './lib/server/turn-helpers.js';
-import { processMessage, stopBackgroundWave, reconcileWaveState } from './lib/server/turn.js';
+import { processMessage } from './lib/server/turn.js';
+import { stopBackgroundWave, reconcileWaveState } from './lib/server/bg-driver.js';
 import { endsWithQuestion } from './lib/server/session-store.js';
 
 // Re-exported for unit tests (test/server.test.js imports from '../server.js').

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ensureBgDriverState } from '../lib/server/turn.js';
+import { ensureBgDriverState } from '../lib/server/bg-driver.js';
 
 // The driver state object survives a clear/start cycle because it lives on the
 // runtime (ensureBgDriverState is what startBgDriver calls on every (re)start).
