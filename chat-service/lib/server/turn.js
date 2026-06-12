@@ -94,6 +94,20 @@ function clearBgDriver(sessionId) {
   if (d) { clearInterval(d.timer); bgDrivers.delete(sessionId); }
 }
 
+// Sync the wave flags with the active-turn settle decision. Both branches of
+// the turn `finally` go through here: wave still in flight → mark it active for
+// the bg driver; wave done (or none) → clear the flags and stop any driver, so
+// a stale waveActive can never outlive the wave and trap messages in the queue.
+export function applyWaveFlagsOnTurnSettle(runtime, waveInFlight) {
+  if (waveInFlight) {
+    runtime.waveActive = true;
+    return;
+  }
+  runtime.waveActive = false;
+  runtime.bgDriverState = null;
+  clearBgDriver(runtime.session?.id);
+}
+
 // Tear down a COMPLEX wave that is running as background turns. Called from the
 // STOP handler: during a background wave `busy` is false and `currentProc` is
 // null (the active turn handed off), so killCurrentProc no-ops — the heartbeat
@@ -1017,10 +1031,15 @@ export async function processMessage(runtime, prompt, opts = {}) {
         // subagent activity (mergers especially) stays in the live feed.
         await transitionState(runtime, 'in_progress');
         broadcast(runtime, { type: 'status', working: true });
-        runtime.waveActive = true;
+        applyWaveFlagsOnTurnSettle(runtime, true);
         startBgDriver(runtime, runtimes);
       } else {
-        // Truly settling — flush and stop the tailer.
+        // Truly settling — flush and stop the tailer. The wave flags must be
+        // cleared here too: when the wave's last turn was an AUTO_CONTINUE,
+        // processMessage left waveActive=true (only non-auto turns clear it),
+        // and a stale true makes every later user message queue forever
+        // (`r.busy || r.waveActive` guard in server.js).
+        applyWaveFlagsOnTurnSettle(runtime, false);
         await stopSubagentTailer(runtime).catch(() => {});
         await transitionState(runtime, nextState);
         broadcast(runtime, { type: 'status', working: false });
