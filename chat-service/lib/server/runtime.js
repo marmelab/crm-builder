@@ -50,8 +50,21 @@ export function createRuntime(session) {
     toolMap: new Map(),
     taskRole: new Map(),
     // Monotonic count of background turns (background_result events). The bg
-    // driver's heartbeat reads it to treat a background turn as wave progress.
+    // driver's heartbeat reads it to treat a background turn as wave progress
+    // WHILE TICKETS ARE STILL PENDING. It is deliberately NOT used as the
+    // drain-quiet progress signal: in the drain phase the heartbeat nudges the
+    // idle TUI every tick, and each nudge makes the orchestrator emit an empty
+    // background_result, so bgResultCount climbs forever even when nothing new
+    // is being said — which used to keep the drain alive indefinitely.
     bgResultCount: 0,
+    // Set true whenever a background turn produced NEW assistant text since the
+    // last drain-quiet tick (real recap output, not a nudge echo). Read + reset
+    // each drain-quiet tick: this is the honest "the orchestrator is still
+    // talking" signal that gates whether the drain keeps waiting.
+    sawBgProgressSinceTick: false,
+    // ms timestamp when the drain phase began (pendingCount first hit 0) — used
+    // for the wall-clock cap so the drain can never run forever.
+    drainSince: null,
     clients: new Set(),
     // Subagent-transcript tailer state. Lives on the runtime so it survives
     // across turns: a long-running session re-dispatches the same subagent

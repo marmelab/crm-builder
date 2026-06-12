@@ -13,7 +13,7 @@ import { runtimes, wsToRuntime, runtimeForWs, createRuntime, safeSend, killCurre
 import { sendToWs, broadcast } from './lib/server/ws-bus.js';
 import { updateProgressBar } from './lib/server/progress-bar.ts';
 import { extractText, extractToolUses, planResume } from './lib/server/claude-spawn.js';
-import { processMessage, stopBackgroundWave } from './lib/server/turn.js';
+import { processMessage, stopBackgroundWave, reconcileWaveState } from './lib/server/turn.js';
 import { endsWithQuestion } from './lib/server/session-store.js';
 
 // Re-exported for unit tests (test/server.test.js imports from '../server.js').
@@ -74,6 +74,11 @@ wss.on('connection', async (ws, req) => {
     // newly-opened session handle (it would duplicate the log stream);
     // the runtime keeps the original.
     session.close();
+    // A runtime that survived a long idle gap can carry a stale waveActive=true
+    // (e.g. a PTY that died without a heartbeat clearing it). Re-derive from
+    // disk: if every ticket is terminal and nothing is actively driving, clear
+    // it so the next message dispatches instead of queueing forever.
+    reconcileWaveState(runtime).catch(() => {});
   }
   runtime.clients.add(ws);
   cancelIdleTeardown(runtime);

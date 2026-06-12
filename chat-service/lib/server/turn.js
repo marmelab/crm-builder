@@ -39,6 +39,31 @@ const MAX_BG_ESCALATIONS = 3;       // hard cap on AUTO_CONTINUE resumes per wav
 // before the bar disappears. Must exceed the promotion merger's run time (~30-60s)
 // so we never complete during the idle gap while it runs. 12 ticks ≈ 72 s.
 const HEARTBEAT_DRAIN_QUIET_TICKS = 12;
+// Absolute wall-clock cap on the drain phase. Even if the quiet signal
+// misbehaves, the drain force-settles after this long. Generous so a slow
+// promotion merger + final recap always finishes first. 3 min ≫ 12 ticks·6 s.
+const HEARTBEAT_DRAIN_MAX_MS = 3 * 60 * 1000;
+
+// Pure drain-quiet decision, factored out so it's unit-testable without a live
+// PTY. The drain phase runs after every ticket is merged while promotion + the
+// final recap still run as background turns. "Progress" that should reset the
+// quiet counter is REAL new output — a pending-ticket-set change (a late merge)
+// or new assistant text from the orchestrator — NOT the empty background_result
+// the heartbeat's own nudge induces every tick. Returns the next drainQuiet
+// count and whether to settle (threshold reached, or the wall-clock cap hit).
+// `nowMs`/`drainSince` are injected so callers (and tests) control the clock.
+export function shouldSettleDrain(state, { pendingSig, sawProgress, nowMs }) {
+  const madeProgress = pendingSig !== state.prevDrainSig || sawProgress;
+  const drainQuiet = madeProgress ? 0 : (state.drainQuiet || 0) + 1;
+  const capHit = state.drainSince != null
+    && nowMs - state.drainSince >= HEARTBEAT_DRAIN_MAX_MS;
+  return {
+    drainQuiet,
+    prevDrainSig: pendingSig,
+    settle: drainQuiet >= HEARTBEAT_DRAIN_QUIET_TICKS || capHit,
+    reason: drainQuiet >= HEARTBEAT_DRAIN_QUIET_TICKS ? 'quiet' : (capHit ? 'cap' : null),
+  };
+}
 
 function parseResetsAtFromText(text) {
   const m = /resets?\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b.*?\butc\b/i.exec(text || '');
@@ -92,6 +117,45 @@ export async function stopBackgroundWave(runtime) {
   }
   await transitionState(runtime, 'completed');
   broadcast(runtime, { type: 'status', working: false });
+  // A message queued before this settle (waveActive guard in server.js) would
+  // otherwise be orphaned — no active turn will run a finally to drain it on
+  // this non-busy path. Drain one now, mirroring the drain-completed branch.
+  if (runtime.queue.length > 0) {
+    const next = runtime.queue.shift();
+    broadcast(runtime, { type: 'queue_updated', queuedIds: runtime.queue.map((q) => q.id) });
+    runtime.busy = true;
+    processMessage(runtime, next.content);
+  }
+  return true;
+}
+
+// Reconcile a possibly-stale `waveActive` against disk when a client (re)joins
+// an existing runtime. A runtime that survived a long idle gap (e.g. overnight)
+// can carry a stale waveActive=true — e.g. the old infinite-drain bug, or a PTY
+// that died without a heartbeat tick clearing the flag. If every ticket is
+// terminal (pendingCount===0), the runtime is not busy, and no bg-driver is
+// actively running, the wave is over: clear the flag so the next user message
+// dispatches instead of queueing forever. Drain any orphaned queued message.
+// Minimal + safe: never clears while tickets are pending or a driver is live.
+// Mirrors spawnOrResumePty's readTicketStatuses reconciliation pattern.
+export async function reconcileWaveState(runtime) {
+  if (!runtime?.waveActive || runtime.busy) return false;
+  const sessionId = runtime.session?.id;
+  if (!sessionId) return false;
+  if (bgDrivers.has(sessionId)) return false;   // a driver is actively settling it
+  const { total, pendingCount } = await readTicketStatuses(`${LOG_DIR}/${sessionId}`)
+    .catch(() => ({ total: 0, pendingCount: 0 }));
+  if (total > 0 && pendingCount > 0) return false;   // wave genuinely still running
+  driverLog(`reconcile: clearing stale waveActive session=${sessionId} (total=${total} pending=${pendingCount})`);
+  runtime.waveActive = false;
+  runtime.bgDriverState = null;
+  await transitionState(runtime, 'completed').catch(() => {});
+  if (runtime.queue.length > 0) {
+    const next = runtime.queue.shift();
+    broadcast(runtime, { type: 'queue_updated', queuedIds: runtime.queue.map((q) => q.id) });
+    runtime.busy = true;
+    processMessage(runtime, next.content);
+  }
   return true;
 }
 
@@ -127,6 +191,52 @@ function foldSpawnUsageIntoStats(runtime) {
   runtime.stats.tokensByModelCurrentSpawn = new Map();
 }
 
+// Settle a COMPLEX wave that finished on the background drain path: all tickets
+// merged, promotion + recap done. Factored out of the heartbeat so the quiet
+// threshold and the wall-clock cap share one settle path (collect usage,
+// snapshot, transition completed, drain the queue) — they must stay identical.
+async function settleDrainedWave(current, sessionId) {
+  current.waveActive = false;
+  current.bgDriverState = null;
+  clearBgDriver(sessionId);
+  await stopSubagentTailer(current).catch(() => {});
+  // The wave ended on the background drain path: no active-turn `result`
+  // event fired, so the subagent tokens accumulated since the last
+  // consumeTurnUsage() would otherwise be dropped. Collect + fold them in
+  // here, using the same per-spawn → cumulative shape as the active-turn
+  // finally, before settling completed.
+  const usage = await current.ptySession?.collectUsage().catch(() => null);
+  if (usage && Object.keys(usage.modelUsage).length > 0) {
+    current.stats.tokensBreakdownCurrentSpawn = breakdownFromModelUsage(usage.modelUsage);
+    current.stats.tokensByModelCurrentSpawn = new Map(Object.entries(usage.modelUsage).map(([model, mu]) => [model, {
+      breakdown: {
+        input: mu.inputTokens || 0, cacheCreate: mu.cacheCreationInputTokens || 0,
+        output: mu.outputTokens || 0, cacheRead: mu.cacheReadInputTokens || 0,
+      },
+      costUsd: mu.costUSD ?? null,
+    }]));
+    current.stats.costUsdCurrentSpawn = usage.total_cost_usd || 0;
+    foldSpawnUsageIntoStats(current);
+    sendStats(current);
+  }
+  // Always capture the final transcript on drain-completed, even if the last
+  // background_result snapshot was throttled.
+  snapshotClaudeSession(current.claudeSessionId, current.session?.id).catch(() => {});
+  await transitionState(current, 'completed');
+  broadcast(current, { type: 'status', working: false });
+  // The documentator (Mode 2) is now dispatched by the orchestrator itself
+  // (Agent, at PD-RESPOND once the user confirms) — chat-service no longer
+  // spawns it. Nothing to do here.
+  // A user message that arrived while the wave ran in background was queued
+  // (waveActive guard in server.js); drain it now that the session is free.
+  if (current.queue.length > 0) {
+    const next = current.queue.shift();
+    broadcast(current, { type: 'queue_updated', queuedIds: current.queue.map((q) => q.id) });
+    current.busy = true;
+    processMessage(current, next.content);
+  }
+}
+
 function startBgDriver(runtime, runtimes) {
   const sessionId = runtime.session?.id;
   if (!sessionId) return;
@@ -139,6 +249,7 @@ function startBgDriver(runtime, runtimes) {
   const state = runtime.bgDriverState ??= {
     prevSig: null, noProgress: 0, resumed: false, escalations: 0,
     seenBgCount: runtime.bgResultCount || 0, drainQuiet: 0,
+    prevDrainSig: null, drainSince: null,
   };
   state.resumed = false;          // each (re)start allows one new escalation
   state.timer = null;
@@ -176,50 +287,25 @@ function startBgDriver(runtime, runtimes) {
       // All tickets merged, but promotion (session→main) and any follow-up still
       // run as background turns. Stay in_progress (bar visible) and keep nudging
       // until the orchestrator goes quiet — only then settle, so the final recap
-      // message reaches chat first.
-      if (bgCount !== state.seenBgCount) { state.drainQuiet = 0; state.seenBgCount = bgCount; }
-      else state.drainQuiet = (state.drainQuiet || 0) + 1;
-      if (state.drainQuiet >= HEARTBEAT_DRAIN_QUIET_TICKS) {
-        driverLog(`heartbeat done: drained quiet session=${sessionId}`);
-        current.waveActive = false;
-        current.bgDriverState = null;
-        clearBgDriver(sessionId);
-        await stopSubagentTailer(current).catch(() => {});
-        // The wave ended on the background drain path: no active-turn `result`
-        // event fired, so the subagent tokens accumulated since the last
-        // consumeTurnUsage() would otherwise be dropped. Collect + fold them in
-        // here, using the same per-spawn → cumulative shape as the active-turn
-        // finally, before settling completed.
-        const usage = await current.ptySession?.collectUsage().catch(() => null);
-        if (usage && Object.keys(usage.modelUsage).length > 0) {
-          current.stats.tokensBreakdownCurrentSpawn = breakdownFromModelUsage(usage.modelUsage);
-          current.stats.tokensByModelCurrentSpawn = new Map(Object.entries(usage.modelUsage).map(([model, mu]) => [model, {
-            breakdown: {
-              input: mu.inputTokens || 0, cacheCreate: mu.cacheCreationInputTokens || 0,
-              output: mu.outputTokens || 0, cacheRead: mu.cacheReadInputTokens || 0,
-            },
-            costUsd: mu.costUSD ?? null,
-          }]));
-          current.stats.costUsdCurrentSpawn = usage.total_cost_usd || 0;
-          foldSpawnUsageIntoStats(current);
-          sendStats(current);
-        }
-        // Always capture the final transcript on drain-completed, even if the last
-        // background_result snapshot was throttled.
-        snapshotClaudeSession(current.claudeSessionId, current.session?.id).catch(() => {});
-        await transitionState(current, 'completed');
-        broadcast(current, { type: 'status', working: false });
-        // The documentator (Mode 2) is now dispatched by the orchestrator itself
-        // (Agent, at PD-RESPOND once the user confirms) — chat-service no longer
-        // spawns it. Nothing to do here.
-        // A user message that arrived while the wave ran in background was queued
-        // (waveActive guard in server.js); drain it now that the session is free.
-        if (current.queue.length > 0) {
-          const next = current.queue.shift();
-          broadcast(current, { type: 'queue_updated', queuedIds: current.queue.map((q) => q.id) });
-          current.busy = true;
-          processMessage(current, next.content);
-        }
+      // message reaches chat first. CRITICAL: "quiet" is REAL new output (a late
+      // merge changing pendingSig, or new assistant text via sawBgProgressSinceTick),
+      // NOT bgResultCount — the nudge below makes the idle TUI emit an empty
+      // background_result every tick, which used to reset the counter forever so
+      // the wave never settled (P0: waveActive stuck true, every future message
+      // queued and never drained).
+      if (state.drainSince == null) state.drainSince = Date.now();
+      const dec = shouldSettleDrain(state, {
+        pendingSig,
+        sawProgress: !!current.sawBgProgressSinceTick,
+        nowMs: Date.now(),
+      });
+      state.drainQuiet = dec.drainQuiet;
+      state.prevDrainSig = dec.prevDrainSig;
+      current.sawBgProgressSinceTick = false;   // consume the per-tick progress flag
+      if (dec.settle) {
+        driverLog(`heartbeat done: drain settling (${dec.reason}) session=${sessionId}`);
+        if (dec.reason === 'cap') driverLog(`heartbeat drain: wall-clock cap, settling session=${sessionId}`);
+        await settleDrainedWave(current, sessionId);
         return;
       }
       driverLog(`heartbeat drain: quiet=${state.drainQuiet} session=${sessionId}`);
@@ -584,7 +670,10 @@ export async function processMessage(runtime, prompt, opts = {}) {
       // Advance progress/stats from this background turn's events, identical to
       // the active-turn loop, so the bar keeps moving between user turns.
       processStatsEvent(runtime, event, sessionDir).catch(() => {});
-      handleOrchestratorText(runtime, event, bgCtx);
+      // Real new assistant text = honest drain-quiet progress. A nudge-induced
+      // empty background_result returns false here, so it never resets the quiet
+      // counter (that was the infinite-drain bug).
+      if (handleOrchestratorText(runtime, event, bgCtx)) runtime.sawBgProgressSinceTick = true;
       if (event.type === 'background_result') {
         // Count background turns so the heartbeat treats them as progress and
         // doesn't escalate to a heavyweight resume while the wave is advancing.
