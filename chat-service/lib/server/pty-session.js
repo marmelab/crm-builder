@@ -41,7 +41,7 @@ export class PtySession extends EventEmitter {
 
   get stderr() { return this.#outputBuffer; }
 
-  constructor(claudeSessionId, sessionDir, { subagentUsageLines, cumulativeUsage, seenMsgIds } = {}) {
+  constructor(claudeSessionId, sessionDir, { subagentUsageOffsets, cumulativeUsage, seenMsgIds } = {}) {
     super();
     this.#sessionId = claudeSessionId || null;
     const model = getOrchestratorModel();
@@ -93,7 +93,7 @@ export class PtySession extends EventEmitter {
       this.emit('exit', exitCode ?? 1);
     });
 
-    this.#watcher = new TranscriptWatcher(claudeSessionId, claudeProjectDir(), { subagentUsageLines, cumulativeUsage, seenMsgIds });
+    this.#watcher = new TranscriptWatcher(claudeSessionId, claudeProjectDir(), { subagentUsageOffsets, cumulativeUsage, seenMsgIds });
     this.#watcher.on('event', e => {
       // Discover session_id for new sessions so we can watch for the stop sentinel.
       if (e.session_id && !this.#sessionId) {

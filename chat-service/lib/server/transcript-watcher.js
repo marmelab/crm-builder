@@ -57,7 +57,7 @@ export class TranscriptWatcher extends EventEmitter {
   // runtime so it survives PTY restarts (a fresh watcher must not re-count
   // historical files in full). Tracking offsets — not a "seen" set — lets a
   // file's later-appended lines be counted on subsequent turns.
-  #subagentUsageLines;
+  #subagentUsageOffsets;
   // Tool-use IDs of pending Agent() calls — used to emit synthetic task_started /
   // task_notification events so activeAgents tracking works without system events.
   #pendingAgentIds = new Set();
@@ -69,14 +69,14 @@ export class TranscriptWatcher extends EventEmitter {
   // projectDir: directory containing <sessionId>.jsonl files.
   // sessionId: null for new sessions (watch dir), string for resumed sessions.
   constructor(sessionId, projectDir, {
-    subagentUsageLines = new Map(),
+    subagentUsageOffsets = new Map(),
     cumulativeUsage = new Map(),
     seenMsgIds = new Set(),
   } = {}) {
     super();
     this.#sessionId = sessionId || null;
     this.#projectDir = projectDir;
-    this.#subagentUsageLines = subagentUsageLines;
+    this.#subagentUsageOffsets = subagentUsageOffsets;
     this.#cumulativeUsage = cumulativeUsage;
     this.#seenMsgIds = seenMsgIds;
     if (sessionId) {
@@ -315,9 +315,12 @@ export class TranscriptWatcher extends EventEmitter {
     this.#turnUsage.clear();
 
     // Subagent JSONLs live at <projectDir>/<sessionId>/subagents/*.jsonl.
-    // Count only lines we haven't consumed yet (per-file offset), so a file's
-    // later-appended assistant lines are credited on subsequent turns instead
-    // of being lost after a near-empty first read.
+    // Read only the bytes appended since the last call (readAppendedLines, the
+    // same incremental tail subagent-tail.js uses), so a turn's cost is O(new
+    // bytes) instead of a full re-read + re-split of every transcript. The
+    // per-file {offset, mtimeMs} map is injected by the runtime so it survives
+    // PTY restarts; a file rewritten by a context-compaction continuation is
+    // re-read from the start, where the seenMsgIds dedup absorbs the replay.
     if (this.#sessionId) {
       try {
         const subDir = join(this.#projectDir, this.#sessionId, 'subagents');
@@ -326,18 +329,12 @@ export class TranscriptWatcher extends EventEmitter {
           files
             .filter((f) => f.endsWith('.jsonl'))
             .map(async (f) => {
-              const consumed = this.#subagentUsageLines.get(f) || 0;
-              const content = await readFile(join(subDir, f), 'utf8').catch(() => null);
-              if (!content) return;
-              const lines = content.split('\n');
-              let counted = consumed;
-              for (let i = consumed; i < lines.length; i++) {
-                const line = lines[i];
-                // Mirror #poll(): never advance past a trailing empty line — a
-                // later append turns it into content we must still count.
-                if (!line.trim()) { if (i < lines.length - 1) counted = i + 1; continue; }
-                let e; try { e = JSON.parse(line); } catch { break; } // partial tail — retry next call
-                counted = i + 1;
+              const prev = this.#subagentUsageOffsets.get(f) || { offset: 0, mtimeMs: 0 };
+              const r = await readAppendedLines(join(subDir, f), prev.offset, prev.mtimeMs)
+                .catch(() => null);
+              if (!r) return;
+              for (const line of r.lines) {
+                let e; try { e = JSON.parse(line); } catch { continue; }
                 if (e.type !== 'assistant') continue;
                 const model = e.message?.model;
                 const u = e.message?.usage;
@@ -347,7 +344,7 @@ export class TranscriptWatcher extends EventEmitter {
                 // subagent message ids are globally unique, so one Set is enough.
                 this.#accumulateCumulative(e.message?.id, model, u);
               }
-              this.#subagentUsageLines.set(f, counted);
+              this.#subagentUsageOffsets.set(f, { offset: r.newOffset, mtimeMs: r.mtimeMs });
             })
         );
       } catch { /* no subagents dir — normal for first turn */ }

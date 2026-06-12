@@ -373,8 +373,8 @@ test('consumeTurnUsage counts only new subagent lines, across watcher instances'
   await mkdir(subDir, { recursive: true });
   await writeFile(join(subDir, 'agent-1.jsonl'), assistantLine(100));
 
-  const shared = new Map();                       // = runtime.subagentUsageLines
-  const w1 = new TranscriptWatcher(csid, projectDir, { subagentUsageLines: shared });
+  const shared = new Map();                       // = runtime.subagentUsageOffsets
+  const w1 = new TranscriptWatcher(csid, projectDir, { subagentUsageOffsets: shared });
   const u1 = await w1.consumeTurnUsage();
   assert.equal(u1['claude-opus-4-8'].outputTokens, 100);
 
@@ -382,7 +382,7 @@ test('consumeTurnUsage counts only new subagent lines, across watcher instances'
   const u2 = await w1.consumeTurnUsage();
   assert.equal(u2['claude-opus-4-8'].outputTokens, 900);   // delta only
 
-  const w2 = new TranscriptWatcher(csid, projectDir, { subagentUsageLines: shared });
+  const w2 = new TranscriptWatcher(csid, projectDir, { subagentUsageOffsets: shared });
   const u3 = await w2.consumeTurnUsage();
   assert.equal(u3['claude-opus-4-8'], undefined);          // nothing new
   w1.close(); w2.close();

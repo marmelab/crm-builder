@@ -345,7 +345,7 @@ export async function processMessage(runtime, prompt, opts = {}) {
   }
 
   function spawnOrResumePty() {
-    runtime.subagentUsageLines ??= new Map();   // survives PTY restarts → no double-count
+    runtime.subagentUsageOffsets ??= new Map();   // survives PTY restarts → no double-count
     // Session-cumulative deduped-by-message.id usage + its seen-id guard. Owned
     // by the runtime so they survive PTY restarts (a fresh watcher keeps the
     // running cumulative, never resets it mid-wave). This is the live source of
@@ -353,7 +353,7 @@ export async function processMessage(runtime, prompt, opts = {}) {
     runtime.cumulativeUsage ??= new Map();
     runtime.seenMsgIds ??= new Set();
     runtime.ptySession = new PtySession(runtime.claudeSessionId, sessionDir, {
-      subagentUsageLines: runtime.subagentUsageLines,
+      subagentUsageOffsets: runtime.subagentUsageOffsets,
       cumulativeUsage: runtime.cumulativeUsage,
       seenMsgIds: runtime.seenMsgIds,
     });
