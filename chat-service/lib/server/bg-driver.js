@@ -4,6 +4,14 @@
 // escalates on stalls, and settles the wave (completed / error / rate_limited).
 // Split out of turn.js; the processMessage import is a deliberate module cycle
 // (both sides only call each other at runtime, never during module init).
+//
+// State contract: `runtime` is the session's SHARED state object, held in the
+// `runtimes` map and read concurrently by the WS handler, this heartbeat, the
+// PTY exit handler and the idle reaper. The apply/note/ensure/settle/stop
+// helpers below MUTATE it in place — object identity is load-bearing (live
+// closures hold the same reference; a copy would orphan them). Decision logic
+// stays pure by convention (shouldSettleDrain returns a decision, the caller
+// applies it).
 import { LOG_DIR } from './config.js';
 import { broadcast, sendStats } from './ws-bus.js';
 import { transitionState } from './runtime.js';
