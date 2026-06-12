@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { shouldSettleDrain, applyCumulativeUsage } from '../lib/server/turn.js';
+import { shouldSettleDrain } from '../lib/server/bg-driver.js';
+import { applyCumulativeUsage } from '../lib/server/turn-usage.js';
 import { emptyBreakdown } from '../lib/stats/io.js';
 
 // Mirror the live constant (turn.js: HEARTBEAT_DRAIN_QUIET_TICKS = 12).
@@ -138,4 +139,35 @@ test('applyCumulativeUsage: empty usage is a no-op (keeps digest-seeded values)'
   applyCumulativeUsage(runtime, {});
   applyCumulativeUsage(runtime, null);
   assert.equal(runtime.stats.costUsd, 12.5, 'seeded digest value preserved when watcher has nothing');
+});
+
+test('REGRESSION: createRuntime seeds cumulativeUsage from the digest, so a chat-service restart cannot wipe historic totals', async () => {
+  // The bug: TranscriptWatcher seeks to EOF on resume, so after a chat-service
+  // restart its cumulative only holds post-restart turns. applyCumulativeUsage
+  // REPLACES runtime.stats — without a digest baseline in runtime.cumulativeUsage
+  // the first post-restart turn dropped the header to post-restart-only figures.
+  const { createRuntime } = await import('../lib/server/runtime.js');
+  const session = {
+    meta: {},
+    stats: {
+      tokensUsed: 150,
+      tokensBreakdown: { input: 100, cacheCreate: 0, cacheCreate1h: 0, output: 50, cacheRead: 1000 },
+      tokensByModel: [{
+        model: 'claude-opus-4-8',
+        breakdown: { input: 100, cacheCreate: 0, cacheCreate1h: 0, output: 50, cacheRead: 1000 },
+        costUsd: 1.25,
+      }],
+      costUsd: 1.25,
+    },
+  };
+  const rt = createRuntime(session);
+  assert.ok(rt.cumulativeUsage instanceof Map);
+  assert.deepEqual(rt.cumulativeUsage.get('claude-opus-4-8'),
+    { input: 100, cacheCreate: 0, cacheCreate1h: 0, output: 50, cacheRead: 1000 });
+  // The baseline is a copy — watcher folds must not alias the digest row.
+  assert.notEqual(rt.cumulativeUsage.get('claude-opus-4-8'), session.stats.tokensByModel[0].breakdown);
+  assert.equal(rt.seenMsgIds.size, 0);
+  // No digest → empty map (brand-new session).
+  const fresh = createRuntime({ meta: {}, stats: null });
+  assert.equal(fresh.cumulativeUsage.size, 0);
 });

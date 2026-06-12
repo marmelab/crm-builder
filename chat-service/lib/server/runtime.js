@@ -57,6 +57,16 @@ export function createRuntime(session) {
     // background_result, so bgResultCount climbs forever even when nothing new
     // is being said — which used to keep the drain alive indefinitely.
     bgResultCount: 0,
+    // Session-cumulative deduped usage (model → breakdown) + its seen-id guard,
+    // injected into each TranscriptWatcher (turn.js spawnOrResumePty's ??= keeps
+    // these instances). Seeded from the digest: the watcher seeks to EOF when
+    // resuming, so its cumulative only covers post-(chat-service-)restart turns —
+    // without this baseline the first applyCumulativeUsage after a restart would
+    // REPLACE the digest-seeded header totals with post-restart-only figures.
+    cumulativeUsage: new Map(
+      (session.stats?.tokensByModel || []).map((row) => [row.model, { ...row.breakdown }]),
+    ),
+    seenMsgIds: new Set(),
     // Set true whenever a background turn produced NEW assistant text since the
     // last drain-quiet tick (real recap output, not a nudge echo). Read + reset
     // each drain-quiet tick: this is the honest "the orchestrator is still
