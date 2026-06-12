@@ -357,10 +357,11 @@ export class TranscriptWatcher extends EventEmitter {
     const modelUsage = {};
     for (const [model, u] of usage) {
       modelUsage[model] = {
-        inputTokens:              u.input,
-        cacheCreationInputTokens: u.cacheCreate,
-        cacheReadInputTokens:     u.cacheRead,
-        outputTokens:             u.output,
+        inputTokens:                u.input,
+        cacheCreationInputTokens:   u.cacheCreate,
+        cacheCreation1hInputTokens: u.cacheCreate1h || 0,
+        cacheReadInputTokens:       u.cacheRead,
+        outputTokens:               u.output,
       };
     }
     return modelUsage;
@@ -389,10 +390,11 @@ export class TranscriptWatcher extends EventEmitter {
     const modelUsage = {};
     for (const [model, u] of this.#cumulativeUsage) {
       modelUsage[model] = {
-        inputTokens:              u.input,
-        cacheCreationInputTokens: u.cacheCreate,
-        cacheReadInputTokens:     u.cacheRead,
-        outputTokens:             u.output,
+        inputTokens:                u.input,
+        cacheCreationInputTokens:   u.cacheCreate,
+        cacheCreation1hInputTokens: u.cacheCreate1h || 0,
+        cacheReadInputTokens:       u.cacheRead,
+        outputTokens:               u.output,
       };
     }
     return modelUsage;

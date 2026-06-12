@@ -147,7 +147,7 @@ test('digestLog: stats.tokensBreakdown carries the 4-way per-component split', (
     },
   });
   const { stats } = digestLog(log);
-  assert.deepEqual(stats.tokensBreakdown, { input: 100, cacheCreate: 200, output: 50, cacheRead: 5000 });
+  assert.deepEqual(stats.tokensBreakdown, { input: 100, cacheCreate: 200, cacheCreate1h: 0, output: 50, cacheRead: 5000 });
   // tokensUsed remains the legacy figure (cache_read excluded).
   assert.equal(stats.tokensUsed, 350);
 });

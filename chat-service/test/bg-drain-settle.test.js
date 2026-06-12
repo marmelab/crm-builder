@@ -111,7 +111,7 @@ test('applyCumulativeUsage: sets cumulative stats from the watcher and zeroes *C
   });
   // cost = costFromBreakdown over the WHOLE cumulative ($5/M in + $25/M out = $30).
   assert.equal(runtime.stats.costUsd, 30);
-  assert.deepEqual(runtime.stats.tokensBreakdown, { input: 1_000_000, cacheCreate: 0, output: 1_000_000, cacheRead: 0 });
+  assert.deepEqual(runtime.stats.tokensBreakdown, { input: 1_000_000, cacheCreate: 0, cacheCreate1h: 0, output: 1_000_000, cacheRead: 0 });
   assert.equal(runtime.stats.tokensByModel.length, 1);
   assert.equal(runtime.stats.tokensByModel[0].model, 'claude-opus-4-8');
   // *CurrentSpawn must be cleared so sendStats (which adds them) reports exactly

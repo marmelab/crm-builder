@@ -36,14 +36,18 @@ export function tailPayload(obj, maxLen = 800) {
 // components are exposed so the UI can display the full split on hover while
 // the headline shows the grand total. cache_read is the cheapest tier (~10×
 // discount) but is real billable consumption and now contributes to the total.
+// `cacheCreate1h` is the sub-portion of `cacheCreate` written with a 1h TTL
+// (billed 2x input vs 1.25x for the default 5m TTL). It is NOT an additional
+// token count — never add it to totals; it only refines pricing.
 export function emptyBreakdown() {
-  return { input: 0, cacheCreate: 0, output: 0, cacheRead: 0 };
+  return { input: 0, cacheCreate: 0, cacheCreate1h: 0, output: 0, cacheRead: 0 };
 }
 
 export function addBreakdown(a, b) {
   return {
     input: (a.input || 0) + (b.input || 0),
     cacheCreate: (a.cacheCreate || 0) + (b.cacheCreate || 0),
+    cacheCreate1h: (a.cacheCreate1h || 0) + (b.cacheCreate1h || 0),
     output: (a.output || 0) + (b.output || 0),
     cacheRead: (a.cacheRead || 0) + (b.cacheRead || 0),
   };
@@ -58,10 +62,11 @@ export function sumBreakdown(b) {
 export function breakdownFromModelUsage(modelUsage) {
   const out = emptyBreakdown();
   for (const m of Object.values(modelUsage || {})) {
-    out.input       += m.inputTokens               || 0;
-    out.cacheCreate += m.cacheCreationInputTokens  || 0;
-    out.output      += m.outputTokens              || 0;
-    out.cacheRead   += m.cacheReadInputTokens      || 0;
+    out.input         += m.inputTokens                || 0;
+    out.cacheCreate   += m.cacheCreationInputTokens   || 0;
+    out.cacheCreate1h += m.cacheCreation1hInputTokens || 0;
+    out.output        += m.outputTokens               || 0;
+    out.cacheRead     += m.cacheReadInputTokens       || 0;
   }
   return out;
 }
@@ -69,10 +74,11 @@ export function breakdownFromModelUsage(modelUsage) {
 // Extract a breakdown from a per-turn `result.usage` block (snake_case fields).
 export function breakdownFromUsage(u) {
   return {
-    input:       u?.input_tokens                || 0,
-    cacheCreate: u?.cache_creation_input_tokens || 0,
-    output:      u?.output_tokens               || 0,
-    cacheRead:   u?.cache_read_input_tokens     || 0,
+    input:         u?.input_tokens                || 0,
+    cacheCreate:   u?.cache_creation_input_tokens || 0,
+    cacheCreate1h: u?.cache_creation?.ephemeral_1h_input_tokens || 0,
+    output:        u?.output_tokens               || 0,
+    cacheRead:     u?.cache_read_input_tokens     || 0,
   };
 }
 
@@ -143,20 +149,24 @@ export function costFromBreakdown(model, b) {
     }
     r = MODEL_RATES['claude-sonnet-4-6'];
   }
+  // cacheCreate1h is a sub-portion of cacheCreate billed at 2x input instead
+  // of 1.25x — add the 0.75x-input surcharge on top of the flat 1.25x base.
   return (
-    (b?.input       || 0) * r.input +
-    (b?.cacheCreate || 0) * r.cacheCreate +
-    (b?.cacheRead   || 0) * r.cacheRead +
-    (b?.output      || 0) * r.output
+    (b?.input         || 0) * r.input +
+    (b?.cacheCreate   || 0) * r.cacheCreate +
+    (b?.cacheCreate1h || 0) * r.input * 0.75 +
+    (b?.cacheRead     || 0) * r.cacheRead +
+    (b?.output        || 0) * r.output
   ) / 1_000_000;
 }
 
 function breakdownFromOneModelUsage(mu) {
   return {
-    input:       mu?.inputTokens               || 0,
-    cacheCreate: mu?.cacheCreationInputTokens  || 0,
-    output:      mu?.outputTokens              || 0,
-    cacheRead:   mu?.cacheReadInputTokens      || 0,
+    input:         mu?.inputTokens                || 0,
+    cacheCreate:   mu?.cacheCreationInputTokens   || 0,
+    cacheCreate1h: mu?.cacheCreation1hInputTokens || 0,
+    output:        mu?.outputTokens               || 0,
+    cacheRead:     mu?.cacheReadInputTokens       || 0,
   };
 }
 

@@ -307,10 +307,11 @@ export class PtySession extends EventEmitter {
     let total_cost_usd = 0;
     for (const [model, mu] of Object.entries(modelUsage)) {
       const perModelCost = costFromBreakdown(model, {
-        input:       mu.inputTokens              || 0,
-        cacheCreate: mu.cacheCreationInputTokens || 0,
-        output:      mu.outputTokens             || 0,
-        cacheRead:   mu.cacheReadInputTokens     || 0,
+        input:         mu.inputTokens                || 0,
+        cacheCreate:   mu.cacheCreationInputTokens   || 0,
+        cacheCreate1h: mu.cacheCreation1hInputTokens || 0,
+        output:        mu.outputTokens               || 0,
+        cacheRead:     mu.cacheReadInputTokens       || 0,
       });
       mu.costUSD = perModelCost;
       total_cost_usd += perModelCost;

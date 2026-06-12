@@ -405,7 +405,7 @@ test('breakdownFromModelUsage: sums input/cacheCreate/output/cacheRead across mo
     'claude-sonnet-4-6': { inputTokens: 100, cacheCreationInputTokens: 200, cacheReadInputTokens: 1000, outputTokens: 50 },
     'claude-opus-4-6':   { inputTokens: 10,  cacheCreationInputTokens: 20,  cacheReadInputTokens: 100,  outputTokens: 5 },
   });
-  assert.deepEqual(b, { input: 110, cacheCreate: 220, output: 55, cacheRead: 1100 });
+  assert.deepEqual(b, { input: 110, cacheCreate: 220, cacheCreate1h: 0, output: 55, cacheRead: 1100 });
   assert.equal(sumBreakdown(b), 1485);
 });
 
@@ -413,7 +413,7 @@ test('breakdownFromUsage: maps snake_case fields to breakdown shape', () => {
   const b = breakdownFromUsage({
     input_tokens: 1, cache_creation_input_tokens: 2, cache_read_input_tokens: 3, output_tokens: 4,
   });
-  assert.deepEqual(b, { input: 1, cacheCreate: 2, output: 4, cacheRead: 3 });
+  assert.deepEqual(b, { input: 1, cacheCreate: 2, cacheCreate1h: 0, output: 4, cacheRead: 3 });
 });
 
 test('computeSummary: returns tokensBreakdown alongside tokensTotal', () => {
@@ -431,7 +431,7 @@ test('computeSummary: returns tokensBreakdown alongside tokensTotal', () => {
   const { tokensTotal, tokensBreakdown } = computeSummary(events);
   // Legacy headline excludes cache_read.
   assert.equal(tokensTotal, 350);
-  assert.deepEqual(tokensBreakdown, { input: 100, cacheCreate: 200, output: 50, cacheRead: 9999 });
+  assert.deepEqual(tokensBreakdown, { input: 100, cacheCreate: 200, cacheCreate1h: 0, output: 50, cacheRead: 9999 });
 });
 
 test('computeSummary: user_message events mark spawn boundaries (regression: cost-decrease heuristic absorbed small spawns)', () => {
@@ -530,7 +530,7 @@ test('summarizeFromPhases: sums per-model deduped breakdowns; cost = Σ costFrom
     { tokensByModel: [{ model: 'claude-opus-4-8', breakdown: { input: 0, cacheCreate: 0, cacheRead: 0, output: 1_000_000 } }] },
   ];
   const s = summarizeFromPhases(phases);
-  assert.deepEqual(s.tokensBreakdown, { input: 1_000_000, cacheCreate: 0, output: 1_000_000, cacheRead: 0 });
+  assert.deepEqual(s.tokensBreakdown, { input: 1_000_000, cacheCreate: 0, cacheCreate1h: 0, output: 1_000_000, cacheRead: 0 });
   // Opus: $5/M input + $25/M output = $30.
   assert.equal(s.costUsd, 30);
   assert.equal(s.tokensByModel.length, 1);
@@ -551,7 +551,7 @@ test('summarizeFromPhases: a message.id counted once per phase is counted once i
   const once = summarizeFromPhases(phases);
   // Counting the same phase twice (the bug) would double every component.
   const twice = summarizeFromPhases([phases[0], phases[0]]);
-  assert.deepEqual(once.tokensBreakdown, { input: 100, cacheCreate: 50, output: 25, cacheRead: 200 });
+  assert.deepEqual(once.tokensBreakdown, { input: 100, cacheCreate: 50, cacheCreate1h: 0, output: 25, cacheRead: 200 });
   assert.equal(twice.tokensBreakdown.input, 200);
   assert.ok(Math.abs(twice.costUsd - 2 * once.costUsd) < 1e-9);
 });
@@ -590,4 +590,26 @@ test('costFromBreakdown: claude-opus-4-8 is priced at the Opus tier, not sonnet'
   assert.notEqual(opus48, sonnet, 'opus-4-8 must not be priced as sonnet');
   // Opus tier: $5/M input + $25/M output = $30 for this breakdown.
   assert.equal(opus48, 30);
+});
+
+test('breakdownFromUsage: captures 1h cache writes from cache_creation TTL split', () => {
+  const b = breakdownFromUsage({
+    input_tokens: 10, cache_creation_input_tokens: 100,
+    cache_read_input_tokens: 0, output_tokens: 5,
+    cache_creation: { ephemeral_5m_input_tokens: 60, ephemeral_1h_input_tokens: 40 },
+  });
+  // cacheCreate stays the TOTAL of all writes; cacheCreate1h is the 1h sub-portion
+  assert.deepEqual(b, { input: 10, cacheCreate: 100, cacheCreate1h: 40, output: 5, cacheRead: 0 });
+});
+
+test('costFromBreakdown: 1h cache writes are billed at 2x input, not 1.25x', () => {
+  // 1M tokens written to the 1h cache on sonnet: $6/MTok, not $3.75/MTok
+  const all1h = { input: 0, cacheCreate: 1_000_000, cacheCreate1h: 1_000_000, cacheRead: 0, output: 0 };
+  assert.equal(costFromBreakdown('claude-sonnet-4-6', all1h), 6);
+  // Mixed: 600k at 5m (1.25x) + 400k at 1h (2x) on sonnet = 0.6*3.75 + 0.4*6 = $4.65
+  const mixed = { input: 0, cacheCreate: 1_000_000, cacheCreate1h: 400_000, cacheRead: 0, output: 0 };
+  assert.ok(Math.abs(costFromBreakdown('claude-sonnet-4-6', mixed) - 4.65) < 1e-9);
+  // Breakdowns without the field (legacy) keep the flat 1.25x pricing
+  const legacy = { input: 0, cacheCreate: 1_000_000, cacheRead: 0, output: 0 };
+  assert.equal(costFromBreakdown('claude-sonnet-4-6', legacy), 3.75);
 });
