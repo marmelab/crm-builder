@@ -169,6 +169,46 @@ export function costFromModelUsage(mu) {
   return typeof mu?.costUSD === 'number' ? mu.costUSD : null;
 }
 
+// Single source of truth for the panel summary. The per-phase code
+// (accumulatePerPhaseTokens for orchestrator + local_agent phases,
+// enrichSubagentChildren for in_process_teammate phases) has already built a
+// per-message-id-DEDUPED token breakdown for every phase, broken down per
+// model in `phase.tokensByModel`. Summing those gives the session's true
+// billable consumption with no double-counting: each message.id is counted
+// exactly once within its owning phase, and a message belongs to exactly one
+// phase, so the cross-phase sum is itself deduped by construction.
+//
+// cost = Σ_model costFromBreakdown(model, dedupedBreakdown) — priced once over
+// the summed breakdown, identical to summing the per-phase per-model costs
+// (costFromBreakdown is linear in the breakdown). Because phases and summary
+// are reductions of the SAME deduped per-message breakdown, they are
+// consistent BY CONSTRUCTION — no post-hoc rescaling (the old
+// calibratePhaseCostsToSdk) is needed.
+//
+// "tokens" = input + cacheCreate + output + cacheRead (the real billable
+// total, cache_read included). `tokensTotal` keeps the legacy meaning
+// (cache_read excluded) for back-compat with older clients reading that field.
+export function summarizeFromPhases(phases) {
+  const byModel = new Map(); // model → breakdown
+  for (const p of phases || []) {
+    for (const r of p.tokensByModel || []) {
+      byModel.set(r.model, addBreakdown(byModel.get(r.model) || emptyBreakdown(), r.breakdown));
+    }
+  }
+  let tokensBreakdown = emptyBreakdown();
+  let costUsd = 0;
+  const tokensByModel = [];
+  for (const [model, breakdown] of byModel) {
+    tokensBreakdown = addBreakdown(tokensBreakdown, breakdown);
+    const c = costFromBreakdown(model, breakdown);
+    costUsd += c;
+    tokensByModel.push({ model, breakdown, costUsd: c });
+  }
+  tokensByModel.sort((a, b) => b.costUsd - a.costUsd);
+  const tokensTotal = tokensBreakdown.input + tokensBreakdown.cacheCreate + tokensBreakdown.output;
+  return { tokensTotal, tokensBreakdown, tokensByModel, costUsd };
+}
+
 export function computeSummary(events) {
   let opsCount = 0;
   let costUsd = 0;

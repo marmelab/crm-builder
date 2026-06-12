@@ -6,7 +6,7 @@ import { aggregateSession } from '../lib/stats.js';
 import {
   computeSummary, tokensFromModelUsage,
   breakdownFromModelUsage, breakdownFromUsage, sumBreakdown,
-  costFromBreakdown,
+  costFromBreakdown, summarizeFromPhases,
 } from '../lib/stats/io.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -517,6 +517,66 @@ test('phases group multiple task_started for the same task_id (SendMessage resum
   const unknown = agentPhases.filter((p) => p.agentType === 'unknown');
   assert.equal(unknown.length, 0, 'no unknown phases');
   assert.ok((devPhases[0].activations || []).length >= 2, 'developer should have >=2 activations');
+});
+
+// ----- summarizeFromPhases: deduped single-source-of-truth summary -----
+
+test('summarizeFromPhases: sums per-model deduped breakdowns; cost = Σ costFromBreakdown', () => {
+  // Two phases, same model. The summary breakdown is the per-component sum and
+  // the summary cost equals costFromBreakdown applied to that summed breakdown
+  // (linear), which also equals the sum of the per-phase costs.
+  const phases = [
+    { tokensByModel: [{ model: 'claude-opus-4-8', breakdown: { input: 1_000_000, cacheCreate: 0, cacheRead: 0, output: 0 } }] },
+    { tokensByModel: [{ model: 'claude-opus-4-8', breakdown: { input: 0, cacheCreate: 0, cacheRead: 0, output: 1_000_000 } }] },
+  ];
+  const s = summarizeFromPhases(phases);
+  assert.deepEqual(s.tokensBreakdown, { input: 1_000_000, cacheCreate: 0, output: 1_000_000, cacheRead: 0 });
+  // Opus: $5/M input + $25/M output = $30.
+  assert.equal(s.costUsd, 30);
+  assert.equal(s.tokensByModel.length, 1);
+  assert.equal(s.tokensByModel[0].costUsd, 30);
+});
+
+test('summarizeFromPhases: a message.id counted once per phase is counted once in the summary', () => {
+  // The per-phase enrichment already dedups by message.id, so each phase
+  // breakdown reflects unique messages. A repeated message.id across the
+  // synthetic transcript would have been folded into ONE phase contribution;
+  // summarizeFromPhases must not re-inflate it. Model the deduped result of two
+  // phases — the second carries the SAME tokens a naive (non-deduped) summer
+  // would have double-counted, but here it appears exactly once.
+  const dedupedPerPhase = { input: 100, cacheCreate: 50, cacheRead: 200, output: 25 };
+  const phases = [
+    { tokensByModel: [{ model: 'claude-sonnet-4-6', breakdown: dedupedPerPhase }] },
+  ];
+  const once = summarizeFromPhases(phases);
+  // Counting the same phase twice (the bug) would double every component.
+  const twice = summarizeFromPhases([phases[0], phases[0]]);
+  assert.deepEqual(once.tokensBreakdown, { input: 100, cacheCreate: 50, output: 25, cacheRead: 200 });
+  assert.equal(twice.tokensBreakdown.input, 200);
+  assert.ok(Math.abs(twice.costUsd - 2 * once.costUsd) < 1e-9);
+});
+
+test('aggregateSession: summary equals Σ phases (orchestrator + subagents) — no calibrate rescale', async () => {
+  // After removing calibratePhaseCostsToSdk, the summary IS the sum of the
+  // per-phase deduped breakdowns, so summary.costUsd === Σ phase.costUsd and
+  // summary.tokensByModel === the per-model sum across phases, by construction.
+  const out = await aggregateSession({
+    sessionLogPath: fx('parallel-two-teams.jsonl'),
+    hooksLogPath: null,
+    sessionId: 'sess-parallel',
+  });
+  const phaseCost = out.phases.reduce((s, p) => s + (p.costUsd || 0), 0);
+  assert.ok(Math.abs(out.summary.costUsd - phaseCost) < 1e-9,
+    `summary $${out.summary.costUsd} should equal Σ phases $${phaseCost}`);
+  // Per-model: summing each phase's per-model cost must match summary per model.
+  const byModel = new Map();
+  for (const p of out.phases) for (const r of p.tokensByModel || []) {
+    byModel.set(r.model, (byModel.get(r.model) || 0) + (r.costUsd || 0));
+  }
+  for (const r of out.summary.tokensByModel) {
+    assert.ok(Math.abs(r.costUsd - (byModel.get(r.model) || 0)) < 1e-9,
+      `summary model ${r.model} $${r.costUsd} should equal Σ phases $${byModel.get(r.model)}`);
+  }
 });
 
 test('costFromBreakdown: claude-opus-4-8 is priced at the Opus tier, not sonnet', () => {
