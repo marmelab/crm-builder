@@ -610,7 +610,7 @@ Otherwise, end the turn silently (with a single space if your client needs at le
 | developer of T returns `FAILED` | `T.stage = FAILED` | none |
 | 1 reviewer of T returns a verdict | store in `T.reviews.{quality|test}` | wait for the other reviewer |
 | both reviewers of T = `APPROVED` | `T.stage = MERGE` | `Agent({subagent_type: "merger", name: "merger-T", description: "Merge T", prompt: "ROLE: merger\nTASK_ID: T\nBRANCH_NAME: <SESSION_SHORT_ID>/<branch>\nWORKTREE_PATH: /app/worktrees/<SESSION_SHORT_ID>/T\nTICKETS_DIR: <absolute path>", run_in_background: true})` |
-| at least 1 reviewer of T = `REJECTED`, then increment `T.retries`: if `T.retries <= MAX_RETRIES` | `T.stage = DEV`; clear `T.reviews` | re-dispatch developer with `name: "developer-T"`, the same prompt PLUS `RETRY_FEEDBACK=<for each reviewer that returned REJECTED, prefix with 'quality:' or 'test:' and include its REJECTED body verbatim; omit APPROVED reviewers entirely. Separate the two prefixed blocks with a blank line when both are present.>` |
+| at least 1 reviewer of T = `REJECTED`, then increment `T.retries`: if `T.retries <= MAX_RETRIES` | `T.stage = DEV`; clear `T.reviews` | re-dispatch developer with `name: "developer-T"`, the same prompt — **including the `TASK_ID`/`WORKTREE_PATH`/`BRANCH_NAME` identity lines verbatim from Step 1** — PLUS `RETRY_FEEDBACK=<for each reviewer that returned REJECTED, prefix with 'quality:' or 'test:' and include its REJECTED body verbatim; omit APPROVED reviewers entirely. Separate the two prefixed blocks with a blank line when both are present.>` |
 | at least 1 reviewer of T = `REJECTED`, then increment `T.retries`: if `T.retries > MAX_RETRIES` | `T.stage = FAILED` | none |
 | merger of T returns `DONE` | `T.stage = DONE` | none |
 | merger of T returns `FAILED` | `T.stage = FAILED` | none |
@@ -620,6 +620,8 @@ Otherwise, end the turn silently (with a single space if your client needs at le
 > **`<branch>` in the merger row** is the `branch=` value parsed from `T.dev_output` (the developer's `DONE: branch=... commit=... files=[...]` line stored when the developer returned `DONE`). Do not re-derive it from the ticket file — the developer may have used a different branch name than the planner suggested.
 >
 > **Retry counter ordering** — the predicate on the REJECTED rows is checked *after* incrementing `T.retries`. With `MAX_RETRIES = 2`, this gives up to 3 developer attempts total (initial + 2 retries) before `T.stage = FAILED`.
+>
+> **Retry must carry the identity block** — a developer re-dispatch is a fresh `PreToolUse/Agent` event, so `setup-worktree` re-reads `WORKTREE_PATH`/`BRANCH_NAME`/`TASK_ID` from the retry prompt (it `SKIP`s harmlessly when the worktree already exists). Dropping those lines on a retry yields `setup-worktree SKIP missing identity` — keep them verbatim from Step 1.
 
 > If both reviewers of the same ticket return verdicts in the same background turn, apply the single-verdict transitions first (storing each verdict in `T.reviews`), then evaluate the combined-verdict transitions on the updated state.
 

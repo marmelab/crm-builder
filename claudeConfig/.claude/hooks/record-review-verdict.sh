@@ -157,7 +157,11 @@ US=$'\x1f'
 IFS="$US" read -r ROLE TASK VERDICT USED DBG <<< "$OUT"
 
 # Always log what we received — diagnostic for the experimental teams runtime.
-echo "[$(date -Iseconds)] record-review role=${ROLE:-?} task=${TASK:-?} verdict=${VERDICT:-UNKNOWN} ${DBG}" >> "$LOG" 2>/dev/null || true
+# Missing identity (no-team PTY SubagentStop arriving with empty agent_type and
+# no recoverable dispatch prompt) is logged as role/task=UNKNOWN — never a
+# misleading concrete default like TASK-001 — and takes the safe no-op branch
+# below (no approval flag written).
+echo "[$(date -Iseconds)] record-review role=${ROLE:-UNKNOWN} task=${TASK:-UNKNOWN} verdict=${VERDICT:-UNKNOWN} ${DBG}" >> "$LOG" 2>/dev/null || true
 
 [ -z "$ROLE" ] && exit 0
 [ -z "$TASK" ] && exit 0

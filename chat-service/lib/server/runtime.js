@@ -62,9 +62,6 @@ export function createRuntime(session) {
     // each drain-quiet tick: this is the honest "the orchestrator is still
     // talking" signal that gates whether the drain keeps waiting.
     sawBgProgressSinceTick: false,
-    // ms timestamp when the drain phase began (pendingCount first hit 0) — used
-    // for the wall-clock cap so the drain can never run forever.
-    drainSince: null,
     clients: new Set(),
     // Subagent-transcript tailer state. Lives on the runtime so it survives
     // across turns: a long-running session re-dispatches the same subagent
