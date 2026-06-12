@@ -7,7 +7,7 @@ Dockerised sandbox: non-technical users describe CRM changes in chat → agent t
 ```
 supervisord (pid 1)
   ├─ crm-frontend   :5173  (Vite, /app/src)
-  └─ chat-service   :8080  (WebSocket + spawn claude -p)
+  └─ chat-service   :8080  (WebSocket + persistent PTY orchestrator)
 ```
 
 Two compose profiles: `demo` (FakeRest) and `full` (Supabase, needs Docker socket).
@@ -23,7 +23,7 @@ Node.js server (:8080) — WebSocket + REST. Entry: `server.js`. Split: `lib/ser
 Architecture reference: [docs/chat-service-architecture.md](docs/chat-service-architecture.md)
 
 Key modules:
-- `server/claude-spawn.js` — builds + spawns `claude -p`, injects `<mode>` + `<session_dir>` tags
+- `server/turn-helpers.js` — turn helpers: assistant-message extraction, `FULL_SETUP` intent rewrite, resume planning (fresh vs `--resume`), user-facing error text (formerly `claude-spawn.js`; the PTY model removed headless spawning)
 - `server/turn.js` — streams stdout, writes `log.jsonl`, recovery decision, snapshots transcripts — see [docs/turn.md](docs/turn.md)
 - `server/session-store.js` — chat UUID, `meta.json`, `TASK-*.json` detection
 - `server/subagent-tail.js` — polls subagents/ every 2500ms → WS broadcast

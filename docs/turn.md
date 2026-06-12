@@ -102,7 +102,7 @@ It runs at three points so background-only waves are still captured:
 
 ## Recovery (resume vs fresh session)
 
-`planResume` (`claude-spawn.js`, called via `resolveResumePlan` in `server.js`) decides how a resume re-enters:
+`planResume` (`turn-helpers.js`, called via `resolveResumePlan` in `server.js`) decides how a resume re-enters:
 
 | Condition | Result |
 |---|---|

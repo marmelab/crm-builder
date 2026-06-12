@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { LOG_DIR, claudeProjectDir, claudeSessionDir } from './config.js';
 import { broadcast, sendStats } from './ws-bus.js';
 import { runtimes, transitionState, noteRateLimit, cancelIdleTeardown } from './runtime.js';
-import { rewriteUserMessage, extractText, extractToolUses, friendlyError } from './claude-spawn.js';
+import { rewriteUserMessage, extractText, extractToolUses, friendlyError } from './turn-helpers.js';
 import { PtySession } from './pty-session.js';
 import { endsWithQuestion } from './session-store.js';
 import { decideNextState, turnFailedFrom, classifyTurn } from './turn-state.js';

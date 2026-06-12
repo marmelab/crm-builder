@@ -12,7 +12,8 @@ chat-service is a Node.js server (:8080) that sits between the browser and the C
 
 | Module | File | Role |
 |---|---|---|
-| Spawner | `server/claude-spawn.js` | Builds the `claude -p` command, loads `chat-orchestrator.md` as system prompt, injects `<mode>` + `<session_dir>` tags, sets env vars |
+| PTY session | `server/pty-session.js` | Spawns the persistent interactive `claude` process in a PTY, sets env vars (`CHAT_SESSION_DIR`, …) |
+| Turn helpers | `server/turn-helpers.js` | Assistant-message extraction, `FULL_SETUP` intent rewrite, resume planning, user-facing error text |
 | Turn orchestrator | `server/turn.js` | Streams Claude stdout, extracts `claudeSessionId`, appends to `log.jsonl`, snapshots transcripts at turn end, triggers documentator |
 | Session store | `server/session-store.js` | Generates chat UUID, reads/writes `meta.json`, detects `TASK-*.json` to decide resume vs recovery |
 | Subagent tailer | `server/subagent-tail.js` | Polls `~/.claude/projects/-app/CSID/subagents/` every 2500ms, broadcasts new lines to WebSocket |
@@ -40,7 +41,7 @@ flowchart TD
 
     subgraph CHATSERVICE ["chat-service (Node.js :8080)"]
         direction TB
-        SPAWN(["claude-spawn.js\nbuilds + spawns claude -p\nloads system prompt from agents/chat-orchestrator.md\ninjects mode + session_dir into prompt"]):::svc
+        SPAWN(["pty-session.js\nspawns persistent interactive claude in a PTY\nsets CHAT_SESSION_DIR env"]):::svc
         TURN(["turn.js\nstreams Claude stdout line by line\nappends events to log.jsonl\ncaptures claudeSessionId from first event\nsnapshots transcripts at turn end"]):::svc
         STORE(["session-store.js\nrandomUUID() -> chat session UUID\nwrites + reads meta.json\ndetects TASK-*.json -> recovery vs resume decision"]):::svc
         TAIL(["subagent-tail.js\npolls ~/.claude/projects/-app/CSID/subagents/\nevery 2500ms -> broadcasts to WebSocket"]):::svc
@@ -87,7 +88,7 @@ flowchart TD
 |---|---|---|
 | 1 | `turn.js` | Receives message from WebSocket queue, broadcasts `status:working=true` |
 | 2 | `session-store.js` | Checks state + TASK-*.json presence: `--resume CSID` or fresh + `<intent>recovery</intent>` |
-| 3 | `claude-spawn.js` | Builds command, reads `chat-orchestrator.md`, injects `<mode>` + `<session_dir>` tags, spawns subprocess |
+| 3 | `pty-session.js` | Spawns (or reuses) the persistent PTY claude process for the session |
 | 4 | `turn.js` | Reads stdout line by line, extracts `claudeSessionId` from first `system/init` event, broadcasts each event, appends to `log.jsonl` |
 | 5 | `subagent-tail.js` | Starts polling `~/.claude/projects/-app/CSID/subagents/` every 2500ms, broadcasts new lines to WebSocket |
 | 6 | CLI / hooks | Planner writes `TASK-NNN.json`, hooks append `hooks.log`, agents write transcripts, worktrees created/merged |
@@ -120,5 +121,5 @@ flowchart TD
 | chat session UUID | `a1b2c3d4-e5f6-7890-1234-567890abcdef` | `randomUUID()` in `session-store.js` |
 | SESSION_SHORT | `a1b2c3d4` | first UUID segment — `cut -d'-' -f1` in hooks |
 | claudeSessionId (CSID) | `conv_0123abc` | Claude CLI's own ID, from `event.session_id` in stdout |
-| CHAT_SESSION_DIR | `/chat-service/logs/UUID` | env var set by `claude-spawn.js` |
+| CHAT_SESSION_DIR | `/chat-service/logs/UUID` | env var set by `pty-session.js` |
 | transcript base | `~/.claude/projects/-app/CSID/` | CWD `/app` with `/` replaced by `-` |

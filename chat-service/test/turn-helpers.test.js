@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { buildSpawnEnv } from '../lib/spawn-env.js';
-import { rewriteUserMessage, buildRecoveryPrompt, planResume } from '../lib/server/claude-spawn.js';
+import { rewriteUserMessage, buildRecoveryPrompt, planResume } from '../lib/server/turn-helpers.js';
 
 test('buildSpawnEnv injects CLAUDE_SESSION_ID', () => {
   const baseEnv = { PATH: '/usr/bin', HOME: '/home/x' };

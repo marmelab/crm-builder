@@ -7,7 +7,7 @@ Replace this contract with a stub to test chat-service tools without a real Clau
 
 ## Input — what chat-service sends
 
-**Command line** (built by `claude-spawn.js`):
+**Command line** (built by `pty-session.js`):
 ```
 claude
   --output-format stream-json
@@ -162,7 +162,7 @@ Written and read exclusively by `session-store.js`.
 | chat session UUID | `a1b2c3d4-e5f6-7890-1234-567890abcdef` | `randomUUID()` in `session-store.js` |
 | SESSION_SHORT | `a1b2c3d4` | first UUID segment — `cut -d'-' -f1` in hooks, not chat-service |
 | claudeSessionId (CSID) | `conv_0123abc` | Claude CLI's own ID, read from `event.session_id` in stdout |
-| CHAT_SESSION_DIR | `/chat-service/logs/<UUID>` | `claude-spawn.js`, set as env var at spawn |
+| CHAT_SESSION_DIR | `/chat-service/logs/<UUID>` | `pty-session.js`, set as env var at PTY spawn |
 | transcript base dir | `~/.claude/projects/-app/<CSID>/` | CWD `/app` with `/` replaced by `-` (`config.js:14`) |
 | worktree (COMPLEX) | `/app/worktrees/<SHORT>/TASK-NNN` | `setup-worktree.sh` |
 | worktree (SIMPLE) | `/app/worktrees/<SHORT>/simple` | `setup-worktree.sh` |

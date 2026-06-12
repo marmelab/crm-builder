@@ -12,7 +12,7 @@ import { createRequestHandler, switchMode } from './lib/server/http-routes.js';
 import { runtimes, wsToRuntime, runtimeForWs, createRuntime, safeSend, killCurrentProc, scheduleIdleTeardown, cancelIdleTeardown } from './lib/server/runtime.js';
 import { sendToWs, broadcast } from './lib/server/ws-bus.js';
 import { updateProgressBar } from './lib/server/progress-bar.ts';
-import { extractText, extractToolUses, planResume } from './lib/server/claude-spawn.js';
+import { extractText, extractToolUses, planResume } from './lib/server/turn-helpers.js';
 import { processMessage, stopBackgroundWave, reconcileWaveState } from './lib/server/turn.js';
 import { endsWithQuestion } from './lib/server/session-store.js';
 
