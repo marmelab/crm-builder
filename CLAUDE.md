@@ -38,8 +38,8 @@ Tests: `cd chat-service && npm test` — uses glob `'test/**/*.test.js'` (direct
 |---|---|---|
 | chat-orchestrator | sonnet | User-facing, routes, narrates. SIMPLE flow dispatches simple-developer + merger directly (no team). |
 | planner | sonnet | Decomposes → tickets JSON with waves + file hints. |
-| developer | opus | Implements + commits in worktree. Also writes ADRs in `adr/` when the change introduces a structural decision. Never writes SQL migrations — deploy-time only. |
-| simple-developer | sonnet | 1-file cosmetic OR 1 single-field change on an existing entity (schema + view + type + form + show) OR 1 list filter reusing existing components (no new custom React component). No team, no review, never writes ADRs — SubagentStop hooks validate. POST-DEV runs if a migration was written. |
+| developer | opus | Implements + commits in worktree. Applies the **Ponytail** minimization ladder (`.claude/rules/ponytail.md`, full mode) automatically on every ticket. Also writes ADRs in `adr/` when the change introduces a structural decision. Never writes SQL migrations — deploy-time only. |
+| simple-developer | sonnet | 1-file cosmetic OR 1 single-field change on an existing entity (schema + view + type + form + show) OR 1 list filter reusing existing components (no new custom React component). Applies the **Ponytail** ladder (`.claude/rules/ponytail.md`) automatically. No team, no review, never writes ADRs — SubagentStop hooks validate. POST-DEV runs if a migration was written. |
 | quality-reviewer | sonnet | Semantic code + security review only. Never re-runs validation. |
 | test-validator | sonnet | Integration wiring + e2e presence. (Deliberately bumped from haiku in #17.) |
 | merger | haiku | `git merge --no-ff` only. **Never `git add`/`git commit`**. |
@@ -89,5 +89,5 @@ Hot-reload bind-mounts (dev only, remove before release): `claudeConfig/.claude`
 ## Gotchas
 
 - `git reset --hard HEAD` on `/app` silently reverts App.tsx — merger re-applies variant via `/entrypoint-helpers/apply-app-variant.sh`.
-- Cold cache is expensive (~$0.17 for a "Hi!") — keep `enabledPlugins` minimal in `settings.json`.
+- Cold cache is expensive (~$0.17 for a "Hi!") — keep `enabledPlugins` minimal in `settings.json`. The one deliberately-enabled plugin is **Ponytail** (`ponytail@ponytail`, from `DietrichGebert/ponytail`, declared via `extraKnownMarketplaces`): "lazy senior dev" guidance, baked into the image at build time (`Dockerfile`, `claude plugin install` under `/home/developer/.claude/plugins/`) so the runtime PTY orchestrator never clones it nor stalls on an install prompt (~540 always-on tokens/session, no MCP/agents/LSP). ⚠️ Its `SessionStart`/`UserPromptSubmit` hooks reach ONLY the main session (chat-orchestrator) — NOT the `Agent`-dispatched developer/simple-developer subagents (Claude Code issues #27661, #34692). The code-writing agents get Ponytail via the embedded ruleset [`.claude/rules/ponytail.md`](claudeConfig/.claude/rules/ponytail.md), applied automatically — not via the plugin. The plugin's remaining value is the manual skills `/ponytail`, `/ponytail-review`, `/ponytail-audit`, `/ponytail-debt` in an interactive session on the repo.
 - Migrations are generated at deploy time from `git diff session-base/<SESSION_SHORT_ID>..session/<SESSION_SHORT_ID>`; the developer never writes them. Diffing against main would pull in other sessions' schema work — always diff against `session-base/<id>`.

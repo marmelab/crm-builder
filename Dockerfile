@@ -153,6 +153,18 @@ COPY claudeConfig/.claude/ /root/.claude/
 RUN cp -r /root/.claude /home/developer/.claude \
     && chown -R developer:developer /home/developer/.claude
 
+# ── Ponytail plugin — bake the cache into the image ───────────
+# The plugin (ponytail@ponytail) is declared in settings.json via
+# extraKnownMarketplaces + enabledPlugins. Install it at build time so the
+# marketplace + plugin cache lives under /home/developer/.claude/plugins/:
+# the runtime PTY orchestrator then loads it from disk and never clones from
+# GitHub nor stops on an install prompt (which would hang a non-interactive
+# session). Runs as developer with an explicit HOME so absolute paths in the
+# plugin registry are correct; the SSH clone falls back to HTTPS (no keys at
+# build), and the install writes through the .claude.json symlink (L116).
+RUN su developer -c 'HOME=/home/developer claude plugin marketplace add DietrichGebert/ponytail \
+    && HOME=/home/developer claude plugin install ponytail@ponytail'
+
 # ── Stage source for named volume /app ────────────────────────
 # crm-app:/app is a named volume — the mount hides any content baked at /app,
 # so we relocate build artifacts here. entrypoint.sh copies them into /app on
