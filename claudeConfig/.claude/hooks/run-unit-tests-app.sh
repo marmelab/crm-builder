@@ -10,21 +10,48 @@ echo "[$(date -Iseconds)] unit-app START pwd=$(pwd) CLAUDE_PROJECT_DIR=$CLAUDE_P
 REPO="${CLAUDE_PROJECT_DIR:-/app}"
 cd "$REPO" || { echo "[$(date -Iseconds)] unit-app EXIT=0 cd_failed" >> "$LOG"; exit 0; }
 
-# VALIDATE_WORKTREE narrows to one worktree (set by validate-before-review.sh).
-# See typecheck hook header for rationale.
+# Scope to the STOPPING subagent's own worktree via the shared resolver. The old
+# hook LOOPED over every session worktree and launched a separate vitest in each;
+# with M worktrees × N developers stopping that's N×M browser-mode vitest runs,
+# many concurrent — they thrash the shared Chromium/CPU pool and a 30s run
+# balloons past the timeout. resolve-validate-worktree.sh derives the agent's OWN
+# worktree from its transcript and excludes _session (the merger's tree).
 SESSION_SHORT=$(basename "${CHAT_SESSION_DIR:-}" | cut -d'-' -f1)
-if [ -n "${VALIDATE_WORKTREE:-}" ] && [ -d "$VALIDATE_WORKTREE" ]; then
-  WORKTREES="$VALIDATE_WORKTREE"
-elif [ -n "$SESSION_SHORT" ]; then
-  WORKTREES=$(git worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2}' | grep "^/app/worktrees/${SESSION_SHORT}/" || true)
-else
-  WORKTREES=$(git worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2}' | grep "^/app/worktrees/" || true)
-fi
+HOOK_TAG="unit-app"
+. /home/developer/.claude/hooks/resolve-validate-worktree.sh
+resolve_validate_worktree
 
 if [ -z "$WORKTREES" ]; then
   echo "[$(date -Iseconds)] unit-app EXIT=0 no_active_worktree" >> "$LOG"
   exit 0
 fi
+
+# Kill ONLY orphan Chromium from previous timed-out runs, never a sibling hook's
+# live browser. `timeout 150 npx vitest` kills the vitest node process but leaves
+# its Chromium children alive, holding the Vite dev-server port — so the next run
+# wastes its whole budget searching for a free port. We must NOT kill a Chromium
+# that a concurrently-running sibling hook is still using (that reintroduces the
+# hang). A live browser tree always has a vitest node process somewhere up its
+# ancestor chain; an orphaned tree (parent vitest gone) does not. So: for each
+# chrome-headless-shell process, walk its PPID chain up to init — keep it if ANY
+# ancestor's cmdline contains "vitest", otherwise kill it.
+ancestor_has_vitest() {
+  local pid="$1" depth=0 cmd ppid
+  while [ "$pid" -gt 1 ] && [ "$depth" -lt 20 ]; do
+    cmd=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)
+    case "$cmd" in *vitest*) return 0 ;; esac
+    ppid=$(awk '{print $4}' "/proc/$pid/stat" 2>/dev/null || echo 1)
+    [ -z "$ppid" ] && ppid=1
+    pid="$ppid"; depth=$((depth + 1))
+  done
+  return 1
+}
+for CPID in $(pgrep -f 'chrome-headless-shell' 2>/dev/null || true); do
+  if ancestor_has_vitest "$CPID"; then
+    continue  # live browser owned by a running vitest → keep
+  fi
+  kill "$CPID" 2>/dev/null && echo "[$(date -Iseconds)] unit-app ORPHAN_KILLED pid=$CPID" >> "$LOG" || true
+done
 
 FAILED=0
 AGGREGATED_ERR=""
@@ -52,14 +79,34 @@ for WT in $WORKTREES; do
   # Use a temp file instead of $() -- avoids blocking if vitest worker processes
   # keep the stdout pipe open after the main process exits.
   TMPOUT=$(mktemp)
-  CI=true timeout 180 npx vitest run --config vitest.config.ts > "$TMPOUT" 2>&1
+  # CONFINE: --root "$WT" pins Vite's project root to this worktree, so the test
+  # glob and the dependency scan can never reach sibling worktrees nested under
+  # /app/worktrees (which carry Deno `jsr:`/`npm:` supabase imports Vite can't
+  # resolve — that breaks dep pre-bundling and stalls the run). `cd "$WT"` above
+  # already does this; --root makes it explicit and robust to stray worktrees.
+  #
+  # SERIALIZE: flock on a container-wide lock so only ONE browser-mode vitest runs
+  # at a time. Parallel developers in the same session each trigger this hook;
+  # without the lock their Chromium pools thrash the shared CPU and a 30s run
+  # balloons past the timeout. Serialized, every run gets full resources (~30s).
+  # Sessions in separate containers (up-instance) have their own lock and stay
+  # parallel. flock auto-releases if the hook is killed (fd close).
+  #
+  # Inner timeout 150s is well under the Claude Code hook timeout (see
+  # settings.json) so we always return our own exit code — the gate — even after
+  # waiting on the lock.
+  flock /tmp/vitest-app.lock \
+    env CI=true timeout 150 npx vitest run --config vitest.config.ts --root "$WT" > "$TMPOUT" 2>&1
   EXIT_CODE=$?
   OUTPUT=$(tail -40 "$TMPOUT")
   rm -f "$TMPOUT"
   if [ $EXIT_CODE -eq 124 ]; then
-    echo "[$(date -Iseconds)] unit-app TIMEOUT wt=$WT (180s)" >> "$LOG"
+    # With confinement + serialization a clean run finishes in ~30s, so a 150s
+    # timeout now genuinely means this worktree's tests hang — block it like any
+    # failure so the developer investigates, instead of silently shipping.
     FAILED=1
-    AGGREGATED_ERR+="=== unit-app TIMEOUT in $WT (>180s) -- vitest did not exit. Tests may be hanging. ===\n\n"
+    AGGREGATED_ERR+="=== unit-app TIMEOUT in $WT (>150s) -- tests did not finish. ===\n\n"
+    echo "[$(date -Iseconds)] unit-app TIMEOUT wt=$WT (150s) BLOCKING" >> "$LOG"
     continue
   fi
   if [ $EXIT_CODE -ne 0 ]; then

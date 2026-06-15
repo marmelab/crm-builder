@@ -36,14 +36,18 @@ export function tailPayload(obj, maxLen = 800) {
 // components are exposed so the UI can display the full split on hover while
 // the headline shows the grand total. cache_read is the cheapest tier (~10×
 // discount) but is real billable consumption and now contributes to the total.
+// `cacheCreate1h` is the sub-portion of `cacheCreate` written with a 1h TTL
+// (billed 2x input vs 1.25x for the default 5m TTL). It is NOT an additional
+// token count — never add it to totals; it only refines pricing.
 export function emptyBreakdown() {
-  return { input: 0, cacheCreate: 0, output: 0, cacheRead: 0 };
+  return { input: 0, cacheCreate: 0, cacheCreate1h: 0, output: 0, cacheRead: 0 };
 }
 
 export function addBreakdown(a, b) {
   return {
     input: (a.input || 0) + (b.input || 0),
     cacheCreate: (a.cacheCreate || 0) + (b.cacheCreate || 0),
+    cacheCreate1h: (a.cacheCreate1h || 0) + (b.cacheCreate1h || 0),
     output: (a.output || 0) + (b.output || 0),
     cacheRead: (a.cacheRead || 0) + (b.cacheRead || 0),
   };
@@ -58,10 +62,11 @@ export function sumBreakdown(b) {
 export function breakdownFromModelUsage(modelUsage) {
   const out = emptyBreakdown();
   for (const m of Object.values(modelUsage || {})) {
-    out.input       += m.inputTokens               || 0;
-    out.cacheCreate += m.cacheCreationInputTokens  || 0;
-    out.output      += m.outputTokens              || 0;
-    out.cacheRead   += m.cacheReadInputTokens      || 0;
+    out.input         += m.inputTokens                || 0;
+    out.cacheCreate   += m.cacheCreationInputTokens   || 0;
+    out.cacheCreate1h += m.cacheCreation1hInputTokens || 0;
+    out.output        += m.outputTokens               || 0;
+    out.cacheRead     += m.cacheReadInputTokens       || 0;
   }
   return out;
 }
@@ -69,10 +74,11 @@ export function breakdownFromModelUsage(modelUsage) {
 // Extract a breakdown from a per-turn `result.usage` block (snake_case fields).
 export function breakdownFromUsage(u) {
   return {
-    input:       u?.input_tokens                || 0,
-    cacheCreate: u?.cache_creation_input_tokens || 0,
-    output:      u?.output_tokens               || 0,
-    cacheRead:   u?.cache_read_input_tokens     || 0,
+    input:         u?.input_tokens                || 0,
+    cacheCreate:   u?.cache_creation_input_tokens || 0,
+    cacheCreate1h: u?.cache_creation?.ephemeral_1h_input_tokens || 0,
+    output:        u?.output_tokens               || 0,
+    cacheRead:     u?.cache_read_input_tokens     || 0,
   };
 }
 
@@ -113,6 +119,7 @@ export function spawnBoundaryTimestamps(events) {
 // published standard pricing — they may drift; the derived per-model figures
 // are best-effort and may not sum to the SDK total to the penny.
 export const MODEL_RATES = {
+  'claude-opus-4-8':           { input: 5,   cacheCreate: 6.25,  cacheRead: 0.5,  output: 25 },
   'claude-opus-4-7':           { input: 5,   cacheCreate: 6.25,  cacheRead: 0.5,  output: 25 },
   'claude-opus-4-6':           { input: 5,   cacheCreate: 6.25,  cacheRead: 0.5,  output: 25 },
   'claude-opus-4-5':           { input: 5,   cacheCreate: 6.25,  cacheRead: 0.5,  output: 25 },
@@ -130,22 +137,36 @@ export function shortModelName(name) {
     .replace(/-\d{8}$/, '');
 }
 
+// Models we've already warned about, so the fallback log fires once per id.
+const warnedUnknownModels = new Set();
+
 export function costFromBreakdown(model, b) {
-  const r = MODEL_RATES[model] || MODEL_RATES['claude-sonnet-4-6'];
+  let r = MODEL_RATES[model];
+  if (!r) {
+    if (!warnedUnknownModels.has(model)) {
+      warnedUnknownModels.add(model);
+      console.warn(`[stats] no rate for model "${model}", using sonnet fallback`);
+    }
+    r = MODEL_RATES['claude-sonnet-4-6'];
+  }
+  // cacheCreate1h is a sub-portion of cacheCreate billed at 2x input instead
+  // of 1.25x — add the 0.75x-input surcharge on top of the flat 1.25x base.
   return (
-    (b?.input       || 0) * r.input +
-    (b?.cacheCreate || 0) * r.cacheCreate +
-    (b?.cacheRead   || 0) * r.cacheRead +
-    (b?.output      || 0) * r.output
+    (b?.input         || 0) * r.input +
+    (b?.cacheCreate   || 0) * r.cacheCreate +
+    (b?.cacheCreate1h || 0) * r.input * 0.75 +
+    (b?.cacheRead     || 0) * r.cacheRead +
+    (b?.output        || 0) * r.output
   ) / 1_000_000;
 }
 
 function breakdownFromOneModelUsage(mu) {
   return {
-    input:       mu?.inputTokens               || 0,
-    cacheCreate: mu?.cacheCreationInputTokens  || 0,
-    output:      mu?.outputTokens              || 0,
-    cacheRead:   mu?.cacheReadInputTokens      || 0,
+    input:         mu?.inputTokens                || 0,
+    cacheCreate:   mu?.cacheCreationInputTokens   || 0,
+    cacheCreate1h: mu?.cacheCreation1hInputTokens || 0,
+    output:        mu?.outputTokens               || 0,
+    cacheRead:     mu?.cacheReadInputTokens       || 0,
   };
 }
 
@@ -156,6 +177,46 @@ function breakdownFromOneModelUsage(mu) {
 // right number to attribute per model.
 export function costFromModelUsage(mu) {
   return typeof mu?.costUSD === 'number' ? mu.costUSD : null;
+}
+
+// Single source of truth for the panel summary. The per-phase code
+// (accumulatePerPhaseTokens for orchestrator + local_agent phases,
+// enrichSubagentChildren for in_process_teammate phases) has already built a
+// per-message-id-DEDUPED token breakdown for every phase, broken down per
+// model in `phase.tokensByModel`. Summing those gives the session's true
+// billable consumption with no double-counting: each message.id is counted
+// exactly once within its owning phase, and a message belongs to exactly one
+// phase, so the cross-phase sum is itself deduped by construction.
+//
+// cost = Σ_model costFromBreakdown(model, dedupedBreakdown) — priced once over
+// the summed breakdown, identical to summing the per-phase per-model costs
+// (costFromBreakdown is linear in the breakdown). Because phases and summary
+// are reductions of the SAME deduped per-message breakdown, they are
+// consistent BY CONSTRUCTION — no post-hoc rescaling (the old
+// calibratePhaseCostsToSdk) is needed.
+//
+// "tokens" = input + cacheCreate + output + cacheRead (the real billable
+// total, cache_read included). `tokensTotal` keeps the legacy meaning
+// (cache_read excluded) for back-compat with older clients reading that field.
+export function summarizeFromPhases(phases) {
+  const byModel = new Map(); // model → breakdown
+  for (const p of phases || []) {
+    for (const r of p.tokensByModel || []) {
+      byModel.set(r.model, addBreakdown(byModel.get(r.model) || emptyBreakdown(), r.breakdown));
+    }
+  }
+  let tokensBreakdown = emptyBreakdown();
+  let costUsd = 0;
+  const tokensByModel = [];
+  for (const [model, breakdown] of byModel) {
+    tokensBreakdown = addBreakdown(tokensBreakdown, breakdown);
+    const c = costFromBreakdown(model, breakdown);
+    costUsd += c;
+    tokensByModel.push({ model, breakdown, costUsd: c });
+  }
+  tokensByModel.sort((a, b) => b.costUsd - a.costUsd);
+  const tokensTotal = tokensBreakdown.input + tokensBreakdown.cacheCreate + tokensBreakdown.output;
+  return { tokensTotal, tokensBreakdown, tokensByModel, costUsd };
 }
 
 export function computeSummary(events) {

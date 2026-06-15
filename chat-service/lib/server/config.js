@@ -4,7 +4,6 @@ export const PORT = Number(process.env.PORT) || 8080;
 export const CWD = '/app';
 export const CLAUDE_HOME = '/home/developer';
 export const ORCHESTRATOR_MD = `${CLAUDE_HOME}/.claude/agents/chat-orchestrator.md`;
-export const DOCUMENTATOR_MD = `${CLAUDE_HOME}/.claude/agents/documentator.md`;
 export const LOG_DIR = process.env.CHAT_LOG_DIR || '/chat-service/logs';
 
 // Live Claude CLI workspace layout under $HOME/.claude/projects/<slug>/<csid>/.

@@ -136,7 +136,23 @@ function renderPhaseRow(phase, relLabel) {
     activeSpan = el('span', { className: 'phase-active' }, activeFmt);
   }
 
-  const opsSpan = el('span', { className: 'phase-ops' }, `${phase.opsCount} ops`);
+  // Ops cell. When the deduped API-call count is available, hover drills down
+  // to calls + effective context size (cacheRead / call) — the two figures that
+  // drive cost-optimisation work (cost ≈ context × calls).
+  let opsSpan;
+  if (phase.callsCount > 0) {
+    opsSpan = el('span', { className: 'phase-ops tk-host' }, `${phase.opsCount} ops`);
+    const otip = el('span', { className: 'tk-tip tk-tip-anchor-right' });
+    const ctxPerCall = Math.round((bk?.cacheRead || 0) / phase.callsCount / 1000);
+    otip.textContent = [
+      `ops        ${phase.opsCount}`,
+      `api calls  ${phase.callsCount}`,
+      `ctx/call   ${ctxPerCall}k tok`,
+    ].join('\n');
+    opsSpan.appendChild(otip);
+  } else {
+    opsSpan = el('span', { className: 'phase-ops' }, `${phase.opsCount} ops`);
+  }
 
   // Tokens cell: 4-way breakdown only. No timing, no cost — those have their
   // own dedicated cells. Skipped when there's no per-component split (e.g.

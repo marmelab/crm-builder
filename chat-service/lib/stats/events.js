@@ -2,18 +2,27 @@
 // Centralised here so phases/children/hooks all share a consistent extraction
 // strategy and any change to the event shape lands in one place.
 
+// Handles both stream-json format {type: "assistant"|"user"} and PTY/JSONL
+// transcript format {message: {role: "assistant"|"user"}}.
+function getRole(ev) {
+  if (ev.type === 'assistant' || ev.type === 'user') return ev.type;
+  const r = ev.message?.role;
+  if (r === 'assistant' || r === 'user') return r;
+  return null;
+}
+
 export function extractToolUsesFromAssistant(ev) {
-  if (ev.type !== 'assistant') return [];
+  if (getRole(ev) !== 'assistant') return [];
   return (ev.message?.content || []).filter((b) => b.type === 'tool_use');
 }
 
 export function extractToolResultsFromUser(ev) {
-  if (ev.type !== 'user') return [];
+  if (getRole(ev) !== 'user') return [];
   return (ev.message?.content || []).filter((b) => b.type === 'tool_result');
 }
 
 export function isDebugRaw(rec) { return rec.type === 'debug_raw' && !!rec.event; }
-export function isDebugRawAssistant(rec) { return rec.type === 'debug_raw' && rec.event?.type === 'assistant'; }
+export function isDebugRawAssistant(rec) { return rec.type === 'debug_raw' && !!rec.event && getRole(rec.event) === 'assistant'; }
 
 // Both kinds of task_started events represent a real subagent we want to track:
 // - 'local_agent': dispatched without team_name (planner, simple-developer, ...).
@@ -31,8 +40,7 @@ export function buildEventTsIndex(events) {
   const arr = [];
   for (const rec of events) {
     if (rec.type !== 'debug_raw' || !rec.ts) continue;
-    const t = rec.event?.type;
-    if (t === 'assistant' || t === 'user') arr.push(new Date(rec.ts).getTime());
+    if (getRole(rec.event) !== null) arr.push(new Date(rec.ts).getTime());
   }
   arr.sort((a, b) => a - b);
   return arr;
@@ -58,7 +66,7 @@ export function countEventsStrictlyBetween(tsIndex, startTs, endTs) {
 export function buildToolResultMap(events) {
   const m = new Map();
   for (const rec of events) {
-    if (rec.type !== 'debug_raw' || rec.event?.type !== 'user') continue;
+    if (rec.type !== 'debug_raw' || getRole(rec.event) !== 'user') continue;
     for (const b of extractToolResultsFromUser(rec.event)) {
       if (b.tool_use_id && !m.has(b.tool_use_id)) m.set(b.tool_use_id, rec.ts);
     }

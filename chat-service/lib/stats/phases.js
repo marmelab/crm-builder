@@ -9,6 +9,7 @@ export function extractPhases(events, agentToolIdToTeam) {
   const agentTypeByToolId = new Map();
   const agentNameByToolId = new Map();
   const agentTypeByTaskId = new Map();
+  const isBackgroundByToolId = new Map();
   // First pass: index Agent/Task tool_uses by their tool_use_id.
   // Also capture the dispatch `name` (e.g. "developer-TASK-001") which is needed
   // to map a phase to its per-activation subagent transcripts (N reveils via
@@ -19,6 +20,7 @@ export function extractPhases(events, agentToolIdToTeam) {
       if ((b.name === 'Agent' || b.name === 'Task') && b.input?.subagent_type) {
         agentTypeByToolId.set(b.id, b.input.subagent_type);
         if (b.input.name) agentNameByToolId.set(b.id, b.input.name);
+        if (b.input.run_in_background) isBackgroundByToolId.set(b.id, true);
       }
     }
   }
@@ -59,6 +61,9 @@ export function extractPhases(events, agentToolIdToTeam) {
           // Falls back to undefined for local_agent dispatches without a name.
           agentName: agentNameByToolId.get(ev.tool_use_id),
           taskType: ev.task_type, // 'local_agent' | 'in_process_teammate' — distinguishes COMPLEX team members from planner/simple-developer
+          // Background local_agents (run_in_background: true) write only to their own
+          // JSONL file, never to the main stream — enriched via enrichSubagentChildren.
+          isBackground: isBackgroundByToolId.get(ev.tool_use_id) ?? false,
           description: ev.description || '',
           teamName: agentToolIdToTeam.get(ev.tool_use_id) ?? null,
           startTs: rec.ts,
@@ -231,7 +236,7 @@ export function accumulatePerPhaseTokens(events, phases) {
   const orch = phases.find((p) => p.kind === 'orchestrator');
   const phaseByToolUseId = new Map();
   for (const p of phases) {
-    if (p.kind !== 'agent' || p.taskType === 'in_process_teammate') continue;
+    if (p.kind !== 'agent' || p.taskType === 'in_process_teammate' || p.isBackground) continue;
     if (p._toolUseId) phaseByToolUseId.set(p._toolUseId, p);
   }
 
@@ -241,6 +246,7 @@ export function accumulatePerPhaseTokens(events, phases) {
   const targets = [orch, ...phaseByToolUseId.values()].filter(Boolean);
   for (const p of targets) {
     p.tokensBreakdown = emptyBreakdown();
+    p.callsCount = 0;
     p._tokensByModelMap = new Map();
   }
 
@@ -267,6 +273,7 @@ export function accumulatePerPhaseTokens(events, phases) {
     if (!seen) { seen = new Set(); seenByPhase.set(owner.phaseId, seen); }
     if (msgId && seen.has(msgId)) continue;
     if (msgId) seen.add(msgId);
+    owner.callsCount = (owner.callsCount || 0) + 1;
     const b = breakdownFromUsage(u);
     owner.tokensBreakdown = addBreakdown(owner.tokensBreakdown, b);
     const model = ev.message?.model;
@@ -292,52 +299,6 @@ export function accumulatePerPhaseTokens(events, phases) {
     const bk = p.tokensBreakdown;
     p.tokensTotal = bk.input + bk.cacheCreate + bk.output;
     delete p._tokensByModelMap;
-  }
-}
-
-// Reconcile per-phase costs with the SDK's authoritative per-model total.
-//
-// Per-phase costs are derived locally from a rate table (see MODEL_RATES in
-// io.js) applied to each phase's token breakdown. The SDK's
-// `modelUsage[model].costUSD` is the source of truth at the SPAWN/MODEL
-// level. Our rate table tends to over- or under-shoot Claude Code's actual
-// billed prices because the published Anthropic rates don't always match
-// what the CLI is billed (subscription / batch tiers).
-//
-// This pass keeps the RELATIVE split between phases intact (it's based on
-// real per-message usage) but SCALES each phase's per-model cost so the sum
-// over all phases of model M equals the SDK total for model M. After this
-// pass, sum(phase.costUsd for phase) === summary.costUsd (modulo phases for
-// models that don't appear in summary.tokensByModel, which we leave alone).
-export function calibratePhaseCostsToSdk(phases, sdkTokensByModel) {
-  if (!Array.isArray(sdkTokensByModel) || sdkTokensByModel.length === 0) return;
-  const sdkCostByModel = new Map(sdkTokensByModel.map((r) => [r.model, r.costUsd || 0]));
-
-  // Estimated cost per model across all phases (rate table).
-  const estByModel = new Map();
-  for (const p of phases) {
-    for (const r of p.tokensByModel || []) {
-      estByModel.set(r.model, (estByModel.get(r.model) || 0) + (r.costUsd || 0));
-    }
-  }
-
-  // Correction factor per model. Skip when the rate-table sum is zero
-  // (nothing to scale) or the SDK reports no cost for that model.
-  const factorByModel = new Map();
-  for (const [model, est] of estByModel) {
-    const sdk = sdkCostByModel.get(model);
-    if (sdk != null && est > 0) factorByModel.set(model, sdk / est);
-  }
-
-  for (const p of phases) {
-    if (!p.tokensByModel || p.tokensByModel.length === 0) continue;
-    let newTotal = 0;
-    for (const r of p.tokensByModel) {
-      const f = factorByModel.get(r.model);
-      if (f != null) r.costUsd = (r.costUsd || 0) * f;
-      newTotal += r.costUsd || 0;
-    }
-    p.costUsd = newTotal;
   }
 }
 

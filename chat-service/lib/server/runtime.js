@@ -3,6 +3,7 @@ import { LOG_DIR } from './config.js';
 import { sendToWs, broadcast } from './ws-bus.js';
 import { patchSession } from './session-store.js';
 import { emptyBreakdown } from '../stats/io.js';
+import { readTicketStatuses } from './auto-continue.js';
 
 // One runtime per open session. Multiple WebSockets (tabs, reconnects
 // after navigating away and back) share the same runtime — so a turn that
@@ -28,15 +29,49 @@ export function createRuntime(session) {
     session,
     claudeSessionId: session.meta.claudeSessionId || null,
     busy: false,
+    waveActive: false,      // a COMPLEX wave is running as background turns (busy=false but the session isn't free)
     queue: [],
     queueIdSeq: 0,
     stopping: false,
     currentProc: null,
+    ptySession: null,       // PtySession instance, null when no PTY is alive
+    idleTimer: null,        // armed on last-client disconnect, reaps an idle PTY
+    tearingDown: false,     // set by the reaper so turn.js's exit handler won't restart
     // Set when a blocked rate_limit_event is seen — either on the main stream
     // (turn.js) or in a subagent transcript (subagent-tail.js). The turn's read
     // loop reconciles it into the local `rateLimit` so a subagent-triggered
     // limit settles the session on `rate_limited` instead of hanging forever.
     pendingRateLimit: null,
+    bgRateLimitSettling: false,  // terminal guard: set once a background-turn rate limit settles; cleared at next turn entry
+    // tool_use_id → tool, and task_id → role. Persisted on the runtime (not
+    // local to a turn) so a background turn can correlate a `task_notification`
+    // with the dispatch that started it on an earlier turn. Reset on a fresh
+    // (non-auto-continue) user message.
+    toolMap: new Map(),
+    taskRole: new Map(),
+    // Monotonic count of background turns (background_result events). The bg
+    // driver's heartbeat reads it to treat a background turn as wave progress
+    // WHILE TICKETS ARE STILL PENDING. It is deliberately NOT used as the
+    // drain-quiet progress signal: in the drain phase the heartbeat nudges the
+    // idle TUI every tick, and each nudge makes the orchestrator emit an empty
+    // background_result, so bgResultCount climbs forever even when nothing new
+    // is being said — which used to keep the drain alive indefinitely.
+    bgResultCount: 0,
+    // Session-cumulative deduped usage (model → breakdown) + its seen-id guard,
+    // injected into each TranscriptWatcher (turn.js spawnOrResumePty's ??= keeps
+    // these instances). Seeded from the digest: the watcher seeks to EOF when
+    // resuming, so its cumulative only covers post-(chat-service-)restart turns —
+    // without this baseline the first applyCumulativeUsage after a restart would
+    // REPLACE the digest-seeded header totals with post-restart-only figures.
+    cumulativeUsage: new Map(
+      (session.stats?.tokensByModel || []).map((row) => [row.model, { ...row.breakdown }]),
+    ),
+    seenMsgIds: new Set(),
+    // Set true whenever a background turn produced NEW assistant text since the
+    // last drain-quiet tick (real recap output, not a nudge echo). Read + reset
+    // each drain-quiet tick: this is the honest "the orchestrator is still
+    // talking" signal that gates whether the drain keeps waiting.
+    sawBgProgressSinceTick: false,
     clients: new Set(),
     // Subagent-transcript tailer state. Lives on the runtime so it survives
     // across turns: a long-running session re-dispatches the same subagent
@@ -103,6 +138,42 @@ export function createRuntime(session) {
       lastInProgressRole: null,
     },
   };
+}
+
+// ── Idle teardown ────────────────────────────────────────────────────────────
+// An interactive claude TUI never exits on its own, so a session whose last
+// tab closed would otherwise keep its PTY process (plus watchers) alive until
+// chat-service restarts. Armed on the last WS disconnect; cancelled by any
+// reconnect or new turn. A COMPLEX wave still running in background turns
+// re-arms instead of killing.
+export const IDLE_TEARDOWN_MS = 10 * 60 * 1000;
+
+export function cancelIdleTeardown(runtime) {
+  if (runtime?.idleTimer) {
+    clearTimeout(runtime.idleTimer);
+    runtime.idleTimer = null;
+  }
+}
+
+export function scheduleIdleTeardown(runtime, { delayMs = IDLE_TEARDOWN_MS } = {}) {
+  if (!runtime?.session) return;
+  cancelIdleTeardown(runtime);
+  runtime.idleTimer = setTimeout(async () => {
+    runtime.idleTimer = null;
+    if (runtime.clients.size > 0 || runtime.busy) return;
+    const { total, pendingCount } = await readTicketStatuses(`${LOG_DIR}/${runtime.session.id}`)
+      .catch(() => ({ total: 0, pendingCount: 0 }));
+    if (total > 0 && pendingCount > 0) {            // wave still running headless
+      scheduleIdleTeardown(runtime, { delayMs });
+      return;
+    }
+    runtime.tearingDown = true;                      // turn.js exit handler: no restart
+    try { runtime.ptySession?.kill(); } catch {}
+    await runtime.subagentTailerStop?.().catch(() => {});
+    await runtime.session.close();
+    runtimes.delete(runtime.session.id);
+  }, delayMs);
+  runtime.idleTimer.unref?.();
 }
 
 // Kill the current claude spawn with SIGTERM, falling back to SIGKILL after 2s

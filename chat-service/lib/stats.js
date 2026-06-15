@@ -10,11 +10,11 @@ import { readFile, readdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { claudeSubagentsDir } from './server/config.js';
 
-import { readJsonl, msBetween, computeSummary } from './stats/io.js';
+import { readJsonl, msBetween, computeSummary, summarizeFromPhases } from './stats/io.js';
 import { extractTeams } from './stats/teams.js';
 import {
   extractPhases, buildOrchestratorPhase, buildTimeBreakdown, computePhaseWorkMs,
-  computeUserWaitMs, accumulatePerPhaseTokens, calibratePhaseCostsToSdk,
+  computeUserWaitMs, accumulatePerPhaseTokens,
 } from './stats/phases.js';
 import { populateChildrenAndCounts } from './stats/children.js';
 import { readHooksLog, aggregateHooks, assignHookExecsToPhases } from './stats/hooks.js';
@@ -94,15 +94,22 @@ export async function aggregateSession({ sessionLogPath, hooksLogPath, sessionId
   // `tokensByModel` + `costUsd` for in_process_teammate phases.
   const { toolCounts, allToolCalls } = await populateChildrenAndCounts(events, phases, orchestrator, subagentsDir);
 
-  // Reconcile per-phase costs with the SDK total. Phase costs are derived
-  // from a local rate table (best-effort) which can over- or under-shoot the
-  // SDK's billed amount. Without this calibration, sum(phase.costUsd) for
-  // the bar tooltip + chronology rows would NOT match summary.costUsd —
-  // observed on the Art Studio session ($164 + $305 = $469 vs $366 SDK).
-  // The calibration preserves per-phase RELATIVE shares (which come from
-  // real per-message usage) and only rescales each model bucket so its
-  // contributions sum to the SDK total for that model.
-  calibratePhaseCostsToSdk(phases, s.tokensByModel);
+  // Build the authoritative summary from the per-phase deduped breakdowns
+  // (orchestrator + local_agent via accumulatePerPhaseTokens, in_process_teammate
+  // via enrichSubagentChildren above). This is the single source of truth: a
+  // per-message-id-deduped transcript sum, priced with MODEL_RATES. summary and
+  // phases are now consistent BY CONSTRUCTION — sum(phase) === summary — so the
+  // old calibratePhaseCostsToSdk rescaling is gone. The log-derived
+  // computeSummary(events) is kept only for opsCount + as a fallback for
+  // sessions with no phase data (e.g. trivial single-turn fixtures).
+  const phaseSummary = summarizeFromPhases(phases);
+  const havePhaseTokens = phaseSummary.tokensByModel.length > 0;
+  if (havePhaseTokens) {
+    s.tokensTotal = phaseSummary.tokensTotal;
+    s.tokensBreakdown = phaseSummary.tokensBreakdown;
+    s.tokensByModel = phaseSummary.tokensByModel;
+    s.costUsd = phaseSummary.costUsd;
+  }
 
   // Derive workMs (active-work time) per phase from the tool_use children.
   // For COMPLEX team members, durationMs includes long idle waits — workMs
@@ -122,20 +129,29 @@ export async function aggregateSession({ sessionLogPath, hooksLogPath, sessionId
 
   const timeBreakdown = agentPhases.length > 0 ? buildTimeBreakdown(orchestrator, agentPhases) : [];
 
-  // summary.tokensTotal already includes sub-agent token consumption: it's
-  // derived from result.modelUsage which is cumulative-within-spawn and
-  // captures all model calls regardless of which agent made them. Do NOT
-  // re-add in_process_teammate phase tokens; that would double-count.
+  // summary tokens/cost already include sub-agent consumption: summarizeFromPhases
+  // sums every phase's deduped breakdown (orchestrator + local_agent +
+  // in_process_teammate), so the in_process_teammate tokens are already in the
+  // total — do NOT re-add them.
   //
-  // opsCount is different: in_process_teammate tool_uses live in their own
-  // subagent JSONL files, not the orchestrator's main stream. computeSummary
-  // sees only orchestrator + local_agent ops, so we add the COMPLEX-team
-  // ops back in here.
+  // opsCount is different: it comes from computeSummary, which walks only the
+  // main stream. Sub-agent tool calls live in their own subagent JSONL files —
+  // in the PTY model that is EVERY Agent dispatch (local_agent), not just
+  // in_process_teammates — so add every agent phase's opsCount back in. Legacy
+  // stream-json sessions also carried sub-agent events in the main stream
+  // (parent_tool_use_id != null), where computeSummary already counted them:
+  // deduct those so phase ops are not added twice.
   let extraOps = 0;
-  for (const p of agentPhases) {
-    if (p.taskType === 'in_process_teammate') extraOps += p.opsCount || 0;
+  for (const p of agentPhases) extraOps += p.opsCount || 0;
+  let parentedOps = 0;
+  for (const rec of events) {
+    if (rec.type !== 'debug_raw' || !rec.event) continue;
+    const ev = rec.event;
+    if (ev.type === 'assistant' && ev.parent_tool_use_id != null) {
+      parentedOps += (ev.message?.content || []).filter((b) => b.type === 'tool_use').length;
+    }
   }
-  s.opsCount += extraOps;
+  s.opsCount += Math.max(0, extraOps - parentedOps);
 
   // Only keep phases if orchestrator has children or if there are agent phases
   const hasOrchestratorWork = orchestrator.children.length > 0;

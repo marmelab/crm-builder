@@ -24,6 +24,12 @@ set -e
 APP_DIR=${APP_DIR:-/app}
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; BOLD='\033[1m'; NC='\033[0m'
 
+MODE=${MODE:-demo}
+if [ "$MODE" = "demo" ]; then
+  echo -e "${YELLOW}Demo mode (FakeRest) — no Supabase instance to migrate. Migration files are committed and will be applied on deploy.${NC}"
+  exit 0
+fi
+
 if [ ! -S /var/run/docker.sock ]; then
   echo -e "${RED}Docker socket not found - Supabase requires the Docker daemon.${NC}" >&2
   exit 1

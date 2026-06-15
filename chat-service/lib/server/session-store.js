@@ -12,9 +12,8 @@ import {
 // dispatch) a team. Resume routing uses this: if a wave was in flight when the
 // process was killed, --resume would reinject the dead "team is running" belief,
 // so the resume must spawn fresh and re-evaluate real state instead. Takes the
-// session dir (not an id) so it's testable without LOG_DIR coupling — mirrors
-// sessionHasMergedTickets in documentator-spawn.js.
-const TASK_FILE_RE = /^TASK-\d+\.json$/i;
+// session dir (not an id) so it's testable without LOG_DIR coupling.
+export const TASK_FILE_RE = /^TASK-\d+\.json$/i;
 
 export async function sessionHasTickets(sessionDir) {
   try {
@@ -73,18 +72,29 @@ export function digestLog(logText) {
   const queuedUserMessageSlots = new Map();
 
   const commitSpawn = () => {
-    costUsd += currentSpawnMax;
     if (currentSpawnSawModelUsage) {
       tokensBreakdown = addBreakdown(tokensBreakdown, currentSpawnBreakdown);
+      // ONE reduction for BOTH the total AND the per-model rows: the spawn's
+      // LAST cumulative modelUsage snapshot (currentSpawnByModel) is the spawn's
+      // true cumulative usage, priced per model. The total is the sum of those
+      // per-model costs, so digest's total == its per-model sum BY CONSTRUCTION.
+      // (The legacy `currentSpawnMax` — max of the cumulative total_cost_usd —
+      // was a different reduction that disagreed with the per-model snapshot,
+      // giving a total that didn't match the rows.)
       for (const [model, mb] of currentSpawnByModel) {
         const prev = tokensByModelMap.get(model) || { breakdown: emptyBreakdown(), costUsd: 0 };
+        const addCost = mb.costUsd != null ? mb.costUsd : costFromBreakdown(model, mb.breakdown);
+        costUsd += addCost;
         tokensByModelMap.set(model, {
           breakdown: addBreakdown(prev.breakdown, mb.breakdown),
-          costUsd: prev.costUsd + (mb.costUsd || 0),
+          costUsd: prev.costUsd + addCost,
         });
       }
     } else {
+      // No modelUsage this spawn: fall back to the per-turn usage breakdown for
+      // tokens and the cumulative-cost max for the (unattributed) total.
       tokensBreakdown = addBreakdown(tokensBreakdown, currentSpawnFallback);
+      costUsd += currentSpawnMax;
     }
     currentSpawnMax = 0;
     currentSpawnBreakdown = emptyBreakdown();
@@ -285,7 +295,9 @@ export async function openSession(requestedId) {
       await saveMeta();
     },
     setClaudeSessionId: async (csid) => {
-      if (!csid || meta.claudeSessionId === csid) return;
+      // csid === null explicitly clears a stale id (e.g. ~/.claude/projects was
+      // wiped and --resume can no longer find the conversation).
+      if (csid === undefined || meta.claudeSessionId === csid) return;
       meta.claudeSessionId = csid;
       await saveMeta();
     },

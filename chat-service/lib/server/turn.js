@@ -1,29 +1,27 @@
-import { createInterface } from 'node:readline';
-import { cp, copyFile, mkdir, chmod, readdir } from 'node:fs/promises';
-import { join } from 'node:path';
-import { LOG_DIR, claudeProjectDir, claudeSessionDir } from './config.js';
+import { on } from 'node:events';
+import { LOG_DIR } from './config.js';
 import { broadcast, sendStats } from './ws-bus.js';
-import { runtimes, transitionState, noteRateLimit } from './runtime.js';
-import { spawnClaude, extractText, extractToolUses, friendlyError, buildRecoveryPrompt } from './claude-spawn.js';
+import { runtimes, transitionState, noteRateLimit, cancelIdleTeardown } from './runtime.js';
+import { rewriteUserMessage, extractText, extractToolUses, friendlyError } from './turn-helpers.js';
+import { PtySession } from './pty-session.js';
 import { endsWithQuestion } from './session-store.js';
-import { decideNextState, turnFailedFrom } from './turn-state.js';
+import { decideNextState, turnFailedFrom, classifyTurn } from './turn-state.js';
 import { startSubagentTailer, stopSubagentTailer } from './subagent-tail.js';
-import {
-  emptyBreakdown, addBreakdown, breakdownFromModelUsage, costFromBreakdown,
-} from '../stats/io.js';
+import { breakdownFromModelUsage } from '../stats/io.js';
 import { updateProgressBar, predictedFlowExpected, flowExpectedForTickets } from './progress-bar.ts';
 import {
-  sessionHasMergedTickets, sessionHasPendingTickets, scheduleDocumentatorRun, clearDocumentatorTimer,
-} from './documentator-spawn.js';
+  readTicketStatuses, AUTO_CONTINUE_NUDGE,
+} from './auto-continue.js';
 import { loadTicketsAndWaves } from '../stats/tickets.js';
+import {
+  driverLog, clearBgDriver, hasBgDriver, startBgDriver,
+  settleBackgroundRateLimit, applyWaveFlagsOnTurnSettle, progressBarLive,
+} from './bg-driver.js';
+import { applyCumulativeUsage, foldSpawnUsageIntoStats } from './turn-usage.js';
+import { snapshotClaudeSession } from './transcript-snapshot.js';
 
 const AGENT_DISPATCH_TOOLS = new Set(['Agent', 'Task']);
 
-// Best-effort parse of the reset time the CLI embeds in a rate-limit message
-// ("...resets 5pm (UTC)" / "...resets 6:10pm (UTC)") into a unix-seconds
-// timestamp for the UI countdown. Assumes the stated hour is UTC and picks the
-// next occurrence. Returns null when no time is found — the message text still
-// tells the user when it resets, and resume just isn't gated on a countdown.
 function parseResetsAtFromText(text) {
   const m = /resets?\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b.*?\butc\b/i.exec(text || '');
   if (!m) return null;
@@ -38,6 +36,57 @@ function parseResetsAtFromText(text) {
   return Math.floor(reset.getTime() / 1000);
 }
 
+// Shared per-event stats accounting, run identically by the active-turn loop and
+// by the background listener so the progress bar advances during background
+// turns. ctx carries the sessionDir; correlation maps live on the runtime.
+async function processStatsEvent(runtime, event, sessionDir) {
+  let dispatchedThisEvent = false;
+  for (const tool of extractToolUses(event)) {
+    const alreadySeen = runtime.toolMap.has(tool.id);
+    runtime.toolMap.set(tool.id, tool);
+    if (alreadySeen) continue;
+    if (AGENT_DISPATCH_TOOLS.has(tool.name) && tool.input?.subagent_type) {
+      if (runtime.stats.dispatchedSubagentTypes.length === 0) {
+        runtime.stats.flowExpected = predictedFlowExpected(tool.input.subagent_type);
+      }
+      runtime.stats.dispatchedSubagentTypes.push(tool.input.subagent_type);
+      dispatchedThisEvent = true;
+      if (event.parent_tool_use_id == null && tool.input?.prompt) {
+        emitDispatchPromptEvent(runtime, tool);
+      }
+    }
+  }
+  if (dispatchedThisEvent && progressBarLive(runtime)) updateProgressBar(runtime);
+
+  if (event.type === 'system') {
+    const isAgentTaskType =
+      event.task_type === 'local_agent' || event.task_type === 'in_process_teammate';
+    if (event.subtype === 'task_started' && isAgentTaskType && event.task_id) {
+      runtime.stats.activeAgentIds.add(event.task_id);
+      runtime.stats.activeAgents = runtime.stats.activeAgentIds.size;
+      const role = runtime.toolMap.get(event.tool_use_id)?.input?.subagent_type;
+      if (role) runtime.taskRole.set(event.task_id, role);
+      sendStats(runtime);
+    } else if (event.subtype === 'task_notification' && event.status === 'completed' && event.task_id && runtime.stats.activeAgentIds.has(event.task_id)) {
+      runtime.stats.activeAgentIds.delete(event.task_id);
+      runtime.stats.activeAgents = runtime.stats.activeAgentIds.size;
+      runtime.stats.agentsCompleted++;
+      const doneRole = runtime.taskRole.get(event.task_id);
+      if (doneRole) runtime.stats.completedByRole[doneRole] = (runtime.stats.completedByRole[doneRole] || 0) + 1;
+      if (runtime.stats.agentsCompleted === 1
+          && runtime.stats.dispatchedSubagentTypes[0] === 'planner') {
+        const result = await loadTicketsAndWaves(sessionDir);
+        if (result && result.tickets.length > 0) {
+          runtime.stats.flowExpected = flowExpectedForTickets(result.tickets.length, result.waves.length);
+          runtime.stats.waveSizes = result.waves.map((w) => w.length);
+        }
+      }
+      sendStats(runtime);
+      if (progressBarLive(runtime)) updateProgressBar(runtime);
+    }
+  }
+}
+
 function emitDispatchPromptEvent(runtime, tool) {
   const target = tool.input.name || tool.input.subagent_type;
   broadcast(runtime, {
@@ -48,420 +97,419 @@ function emitDispatchPromptEvent(runtime, tool) {
   });
 }
 
-// --- Teardown-stall watcher -------------------------------------------------
-// A teardown can stall: a member that went idle never wakes to ack its
-// shutdown_request, the lead waits, the watchdog kills the spawn, and the next
-// wave is never dispatched. This re-spawns the orchestrator (like a manual
-// resume) to finish from disk. Fires ONLY for a stalled teardown — not a normal
-// mid-wave idle, which is neither idle-killed nor past a shutdown_request.
-const AUTO_WAKE_DELAY_MS = 8_000;
-// Consecutive auto-wakes per session before giving up (reset by any real user
-// message). A backstop against an unrecoverable stall looping forever.
-const MAX_AUTO_WAKE = 5;
-const autoWakeTimers = new Map();
-
-export function clearAutoWakeTimer(sessionId) {
-  const t = autoWakeTimers.get(sessionId);
-  if (t) { clearTimeout(t); autoWakeTimers.delete(sessionId); }
+// Yields events from the PtySession until a `result` event arrives or the
+// session exits. Aborted on exit so the for-await loop terminates cleanly.
+async function* ptyEventsUntilResult(session) {
+  const ac = new AbortController();
+  const onExit = () => ac.abort();
+  session.once('exit', onExit);
+  try {
+    for await (const [event] of on(session, 'event', { signal: ac.signal })) {
+      yield event;
+      if (event.type === 'result') { ac.abort(); return; }
+    }
+  } catch (e) {
+    if (e?.name !== 'AbortError') throw e;
+  } finally {
+    session.off('exit', onExit);
+  }
 }
 
-function scheduleAutoWake(sessionId, runtimes) {
-  clearAutoWakeTimer(sessionId);
-  const t = setTimeout(() => {
-    autoWakeTimers.delete(sessionId);
-    const current = runtimes.get(sessionId);
-    if (!current || current.busy) return;
-    current.busy = true;
-    // Recovery (freshSession): the killed spawn's in-process team is gone, so a
-    // plain --resume would re-inject a dead "team is alive" belief. STATE
-    // RECOVERY instead reads the tickets from disk and re-dispatches the
-    // non-merged ones, recreating the team.
-    const nudge = buildRecoveryPrompt(
-      'A team teardown stalled on a member that never acknowledged shutdown and the run was killed mid-wave. Continue: finish any unfinished tickets and complete the request.',
-    );
-    processMessage(current, nudge, { auto: true, freshSession: true })
-      .catch(() => { current.busy = false; });
-  }, AUTO_WAKE_DELAY_MS);
-  autoWakeTimers.set(sessionId, t);
+// In PTY interactive mode, mode and session_dir are injected via
+// --append-system-prompt at PtySession spawn time. We send only the plain
+// message — embedding XML tags in the user message confuses the TUI.
+function buildPrompt(userMessage) {
+  return rewriteUserMessage(userMessage).trim();
+}
+
+// The orchestrator titles the session itself: it prepends a
+// <session-title>…</session-title> tag to its first reply (chat-orchestrator.md).
+// We strip the tag from the user-visible message (always — it must never render)
+// and apply the title once, unless the user has manually renamed (titleLocked).
+// This replaces the separate `claude -p` Haiku retitling spawn.
+const SESSION_TITLE_RE = /<session-title>\s*([\s\S]*?)\s*<\/session-title>/i;
+function applyAndStripSessionTitle(runtime, text) {
+  if (!text || !SESSION_TITLE_RE.test(text)) return text;
+  const m = SESSION_TITLE_RE.exec(text);
+  const stripped = text.replace(SESSION_TITLE_RE, '').trim();
+  const meta = runtime.session?.meta;
+  const title = (m[1] || '')
+    .replace(/\s+/g, ' ')
+    .replace(/^["'`«»]+|["'`«»]+$/g, '')
+    .trim()
+    .slice(0, 100);
+  if (title && meta && !meta.titleLocked) {
+    runtime.session.setTitle(title, { auto: true }).catch(() => {});
+    broadcast(runtime, { type: 'title', title });
+  }
+  return stripped;
+}
+
+// POST-DEV satisfaction widget. The orchestrator embeds a
+// %%ASK_SATISFACTION|<header>|<body>|<yes>|<no>%% marker (all fields optional) in
+// its end-of-flow text; we strip it from the visible message (always) and emit a
+// `satisfaction_ask` widget once per request. In the PTY flow POST-DEV runs as a
+// background turn, so this is applied in BOTH the active loop and the bg listener.
+// Lazy match up to the closing %%: fields may contain single % and any text
+// except newlines; extra '|' beyond the 4th field folds into `no`. Known residual
+// limitation: a literal `%%` inside a field still terminates the match early.
+const SATISFACTION_RE = /\n?%%ASK_SATISFACTION(\|[^\n]*?)?%%\n?/;
+
+// Exported for unit tests.
+export function parseSatisfactionMarker(text) {
+  if (!text) return null;
+  const m = text.match(SATISFACTION_RE);
+  if (!m) return null;
+  const cleanText = (text.slice(0, m.index) + text.slice(m.index + m[0].length)).trim();
+  const fields = m[1] ? m[1].slice(1).split('|') : [];
+  const [header, body, yes, ...rest] = fields;
+  return {
+    cleanText,
+    payload: {
+      header: header?.trim() || undefined,
+      body:   body?.trim() || undefined,
+      yes:    yes?.trim() || 'Yes, save the changes',
+      no:     rest.join('|').trim() || 'No, I want to change something',
+    },
+  };
+}
+
+function applyAndStripSatisfactionAsk(runtime, text) {
+  const parsed = parseSatisfactionMarker(text);
+  if (!parsed) return text;
+  if (!runtime.satisfactionAskSent) {
+    runtime.satisfactionAskSent = true;
+    broadcast(runtime, { type: 'satisfaction_ask', ...parsed.payload });
+    runtime.session?.setSatisfactionAsk(parsed.payload).catch(() => {});
+  }
+  return parsed.cleanText;
+}
+
+// Shared text pipeline for the active-turn loop and the background listener:
+// title strip → satisfaction strip → dedup-vs-last → broadcast + recordMessage.
+// Any future %%…%% marker stripped here lands in both paths by construction.
+// `ctx.lastText` carries each path's own dedup state (mutated in place — keep a
+// separate ctx per path so dedup state is never shared). Returns true whenever a
+// non-empty assistant text was produced (even if it was a duplicate and thus not
+// re-broadcast), matching the active loop's `receivedText` semantics.
+// debug_raw and processStatsEvent stay at the call sites: their order relative to
+// this text step differs between the two paths (active runs stats after text,
+// background before) and must be preserved.
+function handleOrchestratorText(runtime, event, ctx) {
+  let text = applyAndStripSessionTitle(runtime, extractText(event));
+  text = applyAndStripSatisfactionAsk(runtime, text);
+  if (!text) return false;
+  const isDuplicate = text.trim() === ctx.lastText.trim();
+  ctx.lastText = text;
+  if (!isDuplicate) {
+    broadcast(runtime, { type: 'message', role: 'assistant', content: text, ts: new Date().toISOString() });
+    runtime.session?.recordMessage('assistant', text).catch(() => {});
+  }
+  return true;
 }
 
 export async function processMessage(runtime, prompt, opts = {}) {
   if (!runtime) return;
+  const isAutoContinue = opts.auto === true;
 
-  // The user is back — cancel any pending documentator run scheduled at the
-  // tail of the previous turn. Keyed on sessionId (not runtime) so it survives
-  // runtime release/recreate between turns. We'll re-arm it when this turn
-  // completes.
-  if (runtime.session?.id) clearDocumentatorTimer(runtime.session.id);
-
-  // A real user message (not an auto-wake) means a human is steering again:
-  // cancel any pending auto-wake and reset its consecutive-attempt counter so a
-  // later genuine stall gets the full budget again.
-  if (!opts.auto && runtime.session?.id) {
-    clearAutoWakeTimer(runtime.session.id);
-    runtime.autoWakeCount = 0;
+  driverLog(`processMessage enter auto=${isAutoContinue} session=${runtime.session?.id} ptyAlive=${!!runtime.ptySession && !runtime.ptySession.closed}`);
+  runtime.tearingDown = false;
+  runtime.bgRateLimitSettling = false;
+  cancelIdleTeardown(runtime);
+  if (runtime.session?.id) {
+    clearBgDriver(runtime.session.id);
+    if (!isAutoContinue) {
+      // A real user turn takes over the session — any background wave is now moot.
+      runtime.waveActive = false;
+      runtime.bgDriverState = null;   // fresh user turn resets the give-up counters
+      // Fresh user turn — drop stale dispatch/task correlation from a prior request.
+      runtime.toolMap.clear();
+      runtime.taskRole.clear();
+      // Allow one satisfaction widget per request (POST-DEV asks once).
+      runtime.satisfactionAskSent = false;
+    }
   }
 
-  // Reset per-turn agent step counters so the progress bar reflects only
-  // work initiated by *this* prompt. Send the initial 0/1 (orchestrator
-  // alone, not yet done) immediately so the bar mounts with the bubble.
+  if (opts.freshSession) {
+    // Recovery: spawn a brand-new conversation. The live PTY (if any) holds the
+    // dead "wave is running" transcript — kill it and drop the CSID so the next
+    // PtySession spawns WITHOUT --resume. STATE RECOVERY rebuilds from disk.
+    runtime.claudeSessionId = null;
+    runtime.session?.setClaudeSessionId(null).catch(() => {});
+    if (runtime.ptySession && !runtime.ptySession.closed) {
+      runtime.suppressNextPtyRestart = true;
+      runtime.ptySession.kill();
+      runtime.ptySession = null;
+    }
+  }
+
+  // Always reset per-turn live state (active agents, animation anchor).
+  // Cumulative progress state (which agents ran, wave topology) is preserved
+  // across auto-continue turns so the progress bar doesn't reset mid-COMPLEX.
   runtime.stats = {
     ...runtime.stats,
-    agentsCompleted: 0,
-    completedByRole: {},
-    flowExpected: 0,
-    dispatchedSubagentTypes: [],
-    waveSizes: null,
+    ...(isAutoContinue ? {} : {
+      agentsCompleted: 0,
+      completedByRole: {},
+      flowExpected: 0,
+      dispatchedSubagentTypes: [],
+      waveSizes: null,
+    }),
     inProgressSince: Date.now(),
     lastInProgressRole: null,
     activeAgentIds: new Set(),
     activeAgents: 0,
-    // Always 1 for a real turn — reset here so a prior `/fake` (which sets it to
-    // 1/speed and only restores it on natural completion) can't leak its scaled
-    // animation durations into the next real turn.
     durationScale: 1,
   };
   updateProgressBar(runtime);
 
-  // Claude (re)starts → session is active again.
   transitionState(runtime, 'in_progress');
   broadcast(runtime, { type: 'status', working: true });
-  // Clear any rate-limit flagged by a previous turn (or by the subagent tailer
-  // before this spawn started) so it can't leak into this turn's outcome.
   runtime.pendingRateLimit = null;
-  const toolMap = new Map();
-  // task_id → role, resolved at task_started via the spawning Agent tool_use
-  // (task_started carries tool_use_id; toolMap holds its subagent_type). Lets
-  // completions be attributed per-role for the progress frontier.
-  const taskRole = new Map();
+
   let receivedText = false;
   let rateLimit = null;
   let resultError = false;
-  let lastAssistantText = '';
-  let satisfactionAskSent = false;
-  let exitCode = null;
-  // Raw stream facts read again in the finally block (a separate scope), so they
-  // live at function scope alongside the other outcome flags. `sawResult` = the
-  // CLI emitted its terminal `result` event (Claude's loop ran to completion);
-  // `stderrBuf` accumulates the spawn's stderr.
+  const activeCtx = { lastText: '' };
   let sawResult = false;
-  let stderrBuf = '';
-  // Teardown-stall watcher state (see the post-close block). `shutdownRequestsSent`
-  // counts shutdown_request messages the lead emitted this turn; `idleKilled` is
-  // set by the inactivity watchdog. Together they identify a teardown that hung
-  // waiting for a member ack that never came (the agent-team deadlock).
-  let shutdownRequestsSent = 0;
-  let idleKilled = false;
-  try {
-    // A `--resume` whose target conversation no longer exists (e.g. the container
-    // was recreated, wiping ~/.claude/projects) makes claude exit instantly with
-    // `error_during_execution` / "No conversation found". Drop the stale id and
-    // respawn fresh once, rather than surfacing a hard error to the user.
-    for (let attempt = 0; attempt < 2; attempt++) {
-      receivedText = false;
-      rateLimit = null;
-      resultError = false;
-      sawResult = false;
-      satisfactionAskSent = false;
-      toolMap.clear();
-      stderrBuf = '';
-      shutdownRequestsSent = 0;
-      idleKilled = false;
-      // Per-attempt, not just pre-loop: a limit the subagent tailer flagged
-      // during attempt 0 must not leak into attempt 1's outcome (it would fold
-      // into `rateLimit` below and wrongly settle a clean retry as rate_limited).
-      runtime.pendingRateLimit = null;
-      let staleResume = false;
-      // freshSession (set by a recovery resume) starts a brand-new claude session
-      // instead of --resume-ing the killed transcript: that transcript ends
-      // believing a team is still running, and reinjecting it makes the
-      // orchestrator no-op. Null the id NOW (only on attempt 0 — a staleResume
-      // retry already nulled it before `continue`) so a fresh spawn that dies
-      // before its own session_id event doesn't make the finally-block snapshot
-      // copy the dead session's transcript/subagents into this session's dir.
-      if (attempt === 0 && opts.freshSession) runtime.claudeSessionId = null;
-      const proc = spawnClaude(prompt, runtime.claudeSessionId, `${LOG_DIR}/${runtime.session.id}`);
-      runtime.currentProc = proc; // expose for the stop handler
-      // Prevent unhandled 'error' from crashing the process (e.g. claude binary missing).
-      const spawnError = new Promise((resolve) => proc.once('error', resolve));
-      proc.stderr.on('data', (d) => {
-        stderrBuf += d.toString();
-        console.error('[claude]', d.toString().trim());
-      });
+  let resultReason = 'sentinel';
 
-      const rl = createInterface({ input: proc.stdout, crlfDelay: Infinity });
-      // Inactivity watchdog. The COMPLEX flow's autonomous team (devs → reviewers
-      // → merger) keeps working AFTER the orchestrator emits its `result`/end_turn,
-      // and that progress lands on the per-subagent transcripts (the tailer bumps
-      // `lastStreamActivityMs`), NOT the orchestrator's now-idle main stream. So we
-      // wait for the process to close on its own (team done) and only force-kill
-      // after a long stretch of TOTAL silence — main stream AND subagents — i.e. a
-      // genuine hang (e.g. a zombie holding stdout open). A flat 30 s timer after
-      // `result` (added in #54) killed live COMPLEX teams mid-merge; this replaces it.
-      const IDLE_KILL_MS = 180_000;
-      runtime.lastStreamActivityMs = Date.now();
-      const idleTimer = setInterval(() => {
-        if (Date.now() - runtime.lastStreamActivityMs < IDLE_KILL_MS) return;
-        console.error(`[claude] no activity for ${IDLE_KILL_MS}ms — killing spawn`);
-        // Record that THIS close is an inactivity kill (not a clean exit). The
-        // post-close watcher uses it, together with shutdownRequestsSent, to tell
-        // a genuinely-stuck teardown from a normal finish.
-        idleKilled = true;
-        try { proc.kill('SIGTERM'); } catch {}
-        setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 5_000);
-      }, 5_000);
-      for await (const line of rl) {
-      runtime.lastStreamActivityMs = Date.now();
-      if (!line.trim()) continue;
-      try {
-        const event = JSON.parse(line);
-        if (event.session_id) {
-          runtime.claudeSessionId = event.session_id;
-          runtime.session?.setClaudeSessionId(event.session_id).catch(() => {});
-          // Main stream only carries subagent tool_uses — their text and
-          // SendMessage content live in per-subagent transcripts on disk.
-          startSubagentTailer(runtime).catch((e) => console.error('[subagent-tail]', e));
-        }
+  const sessionDir = `${LOG_DIR}/${runtime.session.id}`;
 
-        // Always send raw event to debug
-        broadcast(runtime, { type: 'debug_raw', event });
+  // ── PTY lifecycle ──────────────────────────────────────────────────────────
+  // attachBgListener: forwards background orchestrator turns (fired when a
+  // run_in_background subagent completes) to WS clients while the session is
+  // idle (no active processMessage). No InboxPoller watchdog needed: noAgentTeam
+  // uses Agent({run_in_background:true}) — no team inbox to poll.
+  function attachBgListener(ptyRef) {
+    if (ptyRef._bgAttached) return;
+    ptyRef._bgAttached = true;
+    const bgCtx = { lastText: '' };
 
-        const text = extractText(event);
-        if (text) {
-          receivedText = true;
-          // %%ASK_SATISFACTION|<header>|<body>|<yes>|<no>%% — all fields optional.
-          const satisfactionMatch = text.match(/\n?%%ASK_SATISFACTION(?:\|([^|%\n]*)\|([^|%\n]*)\|([^|%\n]*)\|([^%\n]*))?%%\n?/);
-          const cleanText = satisfactionMatch
-            ? (text.slice(0, satisfactionMatch.index) + text.slice(satisfactionMatch.index + satisfactionMatch[0].length)).trim()
-            : text;
-          // Suppress consecutive duplicates. The COMPLEX flow makes the
-          // orchestrator yield with the same "Working on it..." line on every
-          // STATE C wake-up (which can be 20+ in a 4-ticket run) — those are
-          // pure noise and pollute both the UI and the persisted log. We
-          // still set lastAssistantText so other code that reads it (final
-          // fallback message logic below) sees the last real text.
-          const isDuplicate = cleanText.trim() === lastAssistantText.trim();
-          lastAssistantText = cleanText;
-          if (!isDuplicate && cleanText) {
-            broadcast(runtime, { type: 'message', role: 'assistant', content: cleanText, ts: new Date().toISOString() });
-            runtime.session?.recordMessage('assistant', cleanText).catch(() => {});
-          }
-          if (satisfactionMatch && !satisfactionAskSent) {
-            satisfactionAskSent = true;
-            const payload = {
-              header: satisfactionMatch[1]?.trim() || undefined,
-              body:   satisfactionMatch[2]?.trim() || undefined,
-              yes:    satisfactionMatch[3]?.trim() || 'Yes, save the changes',
-              no:     satisfactionMatch[4]?.trim() || 'No, I want to change something',
-            };
-            broadcast(runtime, { type: 'satisfaction_ask', ...payload });
-            runtime.session?.setSatisfactionAsk(payload).catch(() => {});
-          }
-        }
-
-        let dispatchedThisEvent = false;
-        for (const tool of extractToolUses(event)) {
-          // stream-json can emit the same tool_use across two assistant events
-          // (initial + post-stream). Use toolMap as the dedup gate so we count
-          // and broadcast each dispatch exactly once.
-          const alreadySeen = toolMap.has(tool.id);
-          toolMap.set(tool.id, tool);
-          if (alreadySeen) continue;
-          // Teardown-stall watcher: note each shutdown_request the lead sends to a
-          // team member. A teardown that later hangs (a member that already went
-          // idle never acks) is the agent-team deadlock the post-close block
-          // recovers from.
-          if (tool.name === 'SendMessage') {
-            const m = tool.input?.message;
-            const isShutdown = (m && typeof m === 'object' && m.type === 'shutdown_request')
-              || (typeof m === 'string' && m.includes('shutdown_request'));
-            if (isShutdown) shutdownRequestsSent += 1;
-          }
-          // Count orchestrator Agent/Task dispatches eagerly (the tool_use
-          // event lands before the runtime fires task_started), so the bar
-          // shows "1/3" right away for SIMPLE instead of growing 1/2 → 2/3.
-          if (AGENT_DISPATCH_TOOLS.has(tool.name) && tool.input?.subagent_type) {
-            if (runtime.stats.dispatchedSubagentTypes.length === 0) {
-              runtime.stats.flowExpected = predictedFlowExpected(tool.input.subagent_type);
-            }
-            runtime.stats.dispatchedSubagentTypes.push(tool.input.subagent_type);
-            dispatchedThisEvent = true;
-            // Mirror orchestrator → agent dispatches into the debug pane so
-            // the prompt sits next to the agent's tailed reply. Subagent-
-            // emitted dispatches (rare) are skipped to avoid double-attribution.
-            if (event.parent_tool_use_id == null && tool.input?.prompt) {
-              emitDispatchPromptEvent(runtime, tool);
-            }
-          }
-        }
-        if (dispatchedThisEvent) {
-          updateProgressBar(runtime);
-        }
-
-        if (event.type === 'rate_limit_event' && event.rate_limit_info?.status === 'blocked') {
-          // The CLI doesn't exit on a blocked limit — it hangs indefinitely.
-          // noteRateLimit kills the spawn so the readline loop drains and the
-          // turn ends. (Subagent-triggered limits take the same path from the
-          // subagent tailer, surfacing via runtime.pendingRateLimit below.)
-          rateLimit = event.rate_limit_info;
-          noteRateLimit(runtime, rateLimit);
-        }
-
-        // A token/session rate limit can also surface as a SYNTHETIC assistant
-        // message (top-level `error: "rate_limit"`, `apiErrorStatus: 429`) rather
-        // than a rate_limit_event — newer CLI behaviour. The old detection only
-        // caught rate_limit_event, so this form fell through to a generic
-        // 'error' instead of 'rate_limited' (no countdown, wrong message). Reuse
-        // the CLI's own user-facing text ("You've hit your session limit ·
-        // resets <time>"), derive a reset timestamp from it when possible, mark
-        // the limit and kill the spawn so the turn settles on 'rate_limited'.
-        if (!rateLimit && event.type === 'assistant' && event.error === 'rate_limit') {
-          const txt = event.message?.content?.find?.((b) => b?.type === 'text')?.text || '';
-          rateLimit = { resetsAt: parseResetsAtFromText(txt), message: txt || null };
-          noteRateLimit(runtime, rateLimit);
-        }
-
-        // Track active sub-agents. Claude Code emits task_started events for
-        // many things (Bash calls, MCP tool calls, subagent dispatches, ...).
-        // We count two task_types: 'local_agent' (Agent without team_name —
-        // planner, simple-developer) and 'in_process_teammate' (Agent dispatched
-        // into a team — every COMPLEX member: developer-TASK-XXX, reviewers,
-        // merger). Without 'in_process_teammate', COMPLEX runs only show
-        // orchestrator+planner in the UI. Filtering both still excludes the
-        // Bash/MCP task_started noise that previously drifted the counter to
-        // double-digit values.
-        // Match completion via task_id — task_notification reuses the started
-        // event's task_id.
-        if (event.type === 'system') {
-          const isAgentTaskType =
-            event.task_type === 'local_agent' || event.task_type === 'in_process_teammate';
-          if (event.subtype === 'task_started' && isAgentTaskType && event.task_id) {
-            runtime.stats.activeAgentIds.add(event.task_id);
-            runtime.stats.activeAgents = runtime.stats.activeAgentIds.size;
-            // Remember this task's role so its completion can be attributed.
-            const role = toolMap.get(event.tool_use_id)?.input?.subagent_type;
-            if (role) taskRole.set(event.task_id, role);
-            sendStats(runtime);
-          } else if (event.subtype === 'task_notification' && event.status === 'completed' && event.task_id && runtime.stats.activeAgentIds.has(event.task_id)) {
-            runtime.stats.activeAgentIds.delete(event.task_id);
-            runtime.stats.activeAgents = runtime.stats.activeAgentIds.size;
-            runtime.stats.agentsCompleted++;
-            const doneRole = taskRole.get(event.task_id);
-            if (doneRole) runtime.stats.completedByRole[doneRole] = (runtime.stats.completedByRole[doneRole] || 0) + 1;
-            // When the planner completes (first agent done in a COMPLEX flow),
-            // count the TASK-*.json files it produced and lock flowExpected to
-            // the exact total so the bar never backtracks between waves:
-            //   2 (orchestrator + planner) + N_tickets × 3 (dev+qr+tv) + 1 (merger)
-            if (runtime.stats.agentsCompleted === 1
-                && runtime.stats.dispatchedSubagentTypes[0] === 'planner') {
-              const sessionDir = `${LOG_DIR}/${runtime.session.id}`;
-              const result = await loadTicketsAndWaves(sessionDir);
-              if (result && result.tickets.length > 0) {
-                runtime.stats.flowExpected = flowExpectedForTickets(result.tickets.length, result.waves.length);
-                // Per-wave ticket counts let the bar build the exact final
-                // topology now, so it never restructures wave by wave.
-                runtime.stats.waveSizes = result.waves.map((w) => w.length);
-              }
-            }
-            sendStats(runtime);
-            updateProgressBar(runtime);
-          }
-        }
-
-        if (event.type === 'result') {
-          sawResult = true;
-          if (event.is_error) resultError = true;
-          if (event.subtype === 'error_during_execution'
-            && Array.isArray(event.errors)
-            && event.errors.some((e) => /no conversation found/i.test(String(e)))) {
-            staleResume = true;
-          }
-          // tokens: derived from modelUsage which is cumulative within the spawn
-          // and includes sub-agent token consumption. Replace, don't add — the
-          // value is the running spawn total. (Falling back to result.usage
-          // summing under-counts by 10× because it misses sub-agent messages.)
-          if (event.modelUsage && Object.keys(event.modelUsage).length > 0) {
-            runtime.stats.tokensBreakdownCurrentSpawn = breakdownFromModelUsage(event.modelUsage);
-            // Per-model cumulative snapshot for the current spawn. Cleared on
-            // commit. Cumulative-within-spawn → replace, not add.
-            runtime.stats.tokensByModelCurrentSpawn = new Map();
-            for (const [model, mu] of Object.entries(event.modelUsage)) {
-              runtime.stats.tokensByModelCurrentSpawn.set(model, {
-                breakdown: {
-                  input:       mu?.inputTokens               || 0,
-                  cacheCreate: mu?.cacheCreationInputTokens  || 0,
-                  output:      mu?.outputTokens              || 0,
-                  cacheRead:   mu?.cacheReadInputTokens      || 0,
-                },
-                costUsd: typeof mu?.costUSD === 'number' ? mu.costUSD : null,
-              });
-            }
-          }
-          // cost: total_cost_usd is cumulative within the current spawn — replace,
-          // don't add (summing cumulative values inflates massively).
-          runtime.stats.costUsdCurrentSpawn = event.total_cost_usd || 0;
-          // Do NOT clear activeAgentIds here. In COMPLEX, `result` fires for each
-          // subagent as it finishes (not just once at the end of the turn), so
-          // clearing on every `result` wipes in-process-teammate agents before
-          // their task_notification/completed arrives — agentsCompleted then never
-          // increments past orchestrator+planner and the progress bar stalls at ~15%.
-          // Let completions drain activeAgentIds naturally via task_notification.
-          sendStats(runtime);
-          // Do NOT break here. For SIMPLE the process closes right after `result`
-          // so the loop ends on its own. For COMPLEX the autonomous team keeps
-          // working past the lead's `result`/end_turn — breaking would abandon it
-          // (and the old +30 s kill then murdered it mid-merge). We let the loop
-          // run until the process actually closes (team done), guarded by the
-          // inactivity watchdog above for the genuine-hang case.
-        }
-      } catch {}
-    }
-    clearInterval(idleTimer);
-    // The loop only exits once the process closes on its own (work done) or the
-    // inactivity watchdog above killed a genuinely hung spawn — either way `close`
-    // resolves promptly, so no separate timeout is needed here.
-    exitCode = await Promise.race([
-      new Promise((resolve) => proc.on('close', resolve)),
-      spawnError.then((err) => {
-        stderrBuf += `\n${err?.message || err}`;
-        return -1;
-      }),
-    ]);
-      // Stale --resume target → forget it and respawn fresh once. The new spawn
-      // re-populates runtime.claudeSessionId from its own `session_id` event.
-      if (staleResume && attempt === 0 && !runtime.stopping && runtime.claudeSessionId) {
-        console.error('[claude] resume target missing — respawning without --resume');
-        // Attempt 0 started a tailer bound to the now-dead session's dir. Stop it
-        // here (not just in the post-loop finally) so attempt 1's startSubagentTailer
-        // can claim the slot and bind to the fresh session — otherwise its start
-        // no-ops and the dead-dir interval keeps polling, losing all subagent
-        // narration and never catching a subagent rate-limit on the retry.
-        await stopSubagentTailer(runtime);
-        runtime.claudeSessionId = null;
-        continue;
+    const bgHandler = (event) => {
+      // While an active turn is running, ptyEventsUntilResult owns the events —
+      // skip here to avoid double-processing.
+      if (runtime.busy) return;
+      if (event.type === 'rate_limit_event' && event.rate_limit_info?.status === 'blocked') {
+        noteRateLimit(runtime, event.rate_limit_info);
+        settleBackgroundRateLimit(runtime, event.rate_limit_info).catch(() => {});
+        return;
       }
-      break;
+      if (event.type === 'assistant' && event.error === 'rate_limit') {
+        const txt = event.message?.content?.find?.((b) => b?.type === 'text')?.text || '';
+        const info = { resetsAt: parseResetsAtFromText(txt), message: txt || null };
+        noteRateLimit(runtime, info);
+        settleBackgroundRateLimit(runtime, info).catch(() => {});
+        return;
+      }
+      if (event.type === 'background_result') driverLog(`background_result received (idle) session=${runtime.session?.id}`);
+      broadcast(runtime, { type: 'debug_raw', event });
+      // Advance progress/stats from this background turn's events, identical to
+      // the active-turn loop, so the bar keeps moving between user turns.
+      processStatsEvent(runtime, event, sessionDir).catch(() => {});
+      // Real new assistant text = honest drain-quiet progress. A nudge-induced
+      // empty background_result returns false here, so it never resets the quiet
+      // counter (that was the infinite-drain bug).
+      if (handleOrchestratorText(runtime, event, bgCtx)) runtime.sawBgProgressSinceTick = true;
+      if (event.type === 'background_result') {
+        // Count background turns so the heartbeat treats them as progress and
+        // doesn't escalate to a heavyweight resume while the wave is advancing.
+        runtime.bgResultCount = (runtime.bgResultCount || 0) + 1;
+        if (progressBarLive(runtime)) updateProgressBar(runtime);
+        // Refresh the cumulative deduped total so the header advances during
+        // background turns (most COMPLEX work runs here). Async; sendStats fires
+        // both immediately and after the apply so the header never stalls.
+        sendStats(runtime);
+        runtime.ptySession?.cumulativeUsage?.()
+          .then((cum) => { if (cum && Object.keys(cum).length > 0) { applyCumulativeUsage(runtime, cum); sendStats(runtime); } })
+          .catch(() => {});
+        // Snapshot subagent transcripts now: most COMPLEX work (dev, reviewers,
+        // merger) runs in background turns, and snapshotClaudeSession otherwise
+        // only fires at active-turn end — so without this, /api/stats would miss
+        // every agent that ran since the last user turn.
+        // Throttled: at most one snapshot per 30 s to avoid hammering the FS on
+        // high-frequency waves; the unconditional drain-completed snapshot below
+        // always captures the final state.
+        const _bgNow = Date.now();
+        if (!runtime.lastBgSnapshotAt || _bgNow - runtime.lastBgSnapshotAt > 30_000) {
+          runtime.lastBgSnapshotAt = _bgNow;
+          snapshotClaudeSession(runtime.claudeSessionId, runtime.session?.id).catch(() => {});
+        }
+      }
+    };
+    ptyRef.on('event', bgHandler);
+    ptyRef.once('exit', () => {
+      ptyRef.off('event', bgHandler);
+      ptyRef._bgAttached = false;
+    });
+  }
+
+  function spawnOrResumePty() {
+    runtime.subagentUsageOffsets ??= new Map();   // survives PTY restarts → no double-count
+    // Session-cumulative deduped-by-message.id usage + its seen-id guard. Owned
+    // by the runtime so they survive PTY restarts (a fresh watcher keeps the
+    // running cumulative, never resets it mid-wave). This is the live source of
+    // truth: sendStats reports it so the header matches /api/stats.
+    runtime.cumulativeUsage ??= new Map();
+    runtime.seenMsgIds ??= new Set();
+    runtime.ptySession = new PtySession(runtime.claudeSessionId, sessionDir, {
+      subagentUsageOffsets: runtime.subagentUsageOffsets,
+      cumulativeUsage: runtime.cumulativeUsage,
+      seenMsgIds: runtime.seenMsgIds,
+    });
+    attachBgListener(runtime.ptySession);
+    if (runtime.claudeSessionId) {
+      startSubagentTailer(runtime).catch((e) => console.error('[subagent-tail]', e));
+      // If the PTY was respawned mid-wave (crash/OOM restart-once) while no active
+      // turn is running, the resumed orchestrator TUI is idle and nothing nudges
+      // it — re-arm the heartbeat. Key on durable disk ticket state (total>0 &&
+      // pendingCount>0), NOT the in-memory waveActive flag (a "PTY gone" heartbeat
+      // tick may already have cleared it before this restart fires). Skip when an
+      // active turn is about to run (busy) — its own `finally` arms the driver —
+      // and when the driver is already armed. A brand-new session has no resumed
+      // claudeSessionId yet, so this block never runs on its first spawn; even if
+      // it did, total===0 (no tickets) would fail the guard.
+      if (!runtime.busy && !hasBgDriver(runtime.session?.id)) {
+        readTicketStatuses(`${LOG_DIR}/${runtime.session.id}`)
+          .then(({ total, pendingCount }) => {
+            if (total > 0 && pendingCount > 0 && !runtime.busy && !hasBgDriver(runtime.session?.id)) {
+              runtime.waveActive = true;
+              startBgDriver(runtime, runtimes);
+            }
+          })
+          .catch(() => {});
+      }
     }
-    // A limit hit by a subagent lands in its transcript, not the main stream —
-    // the tailer flags it on runtime.pendingRateLimit and kills the spawn. Fold
-    // it in here so the turn settles on `rate_limited` like a main-stream limit.
+
+    runtime.ptySession.once('exit', () => {
+      if (runtime.tearingDown || runtime.suppressNextPtyRestart) {
+        runtime.suppressNextPtyRestart = false;
+        runtime.ptySession = null;
+        return;
+      }
+      runtime.ptySession = null;
+      const restartCount = runtime.ptyRestartCount || 0;
+      if (!runtime.busy && restartCount < 1) {
+        // Schedule one restart to drain pending background turns (wave
+        // transitions, merge confirmations) that arrived after the active turn.
+        runtime.ptyRestartCount = restartCount + 1;
+        runtime.ptyRestartPending = true;
+        setTimeout(() => {
+          runtime.ptyRestartPending = false;
+          if (!runtime.ptySession && !runtime.busy) {
+            spawnOrResumePty();
+          } else if (runtime.clients.size === 0 && !runtime.busy && (!runtime.ptySession || runtime.ptySession.closed)) {
+            runtime.session?.close();
+            runtimes.delete(runtime.session.id);
+          }
+        }, 5000);
+      } else if (runtime.clients.size === 0 && !runtime.busy) {
+        runtime.session?.close();
+        runtimes.delete(runtime.session.id);
+      }
+    });
+  }
+
+  runtime.ptyRestartCount = 0;
+
+  const spawnedWithResume = !!runtime.claudeSessionId;
+  let staleRetry = false;
+
+  try {
+    // Inside the try: node-pty's spawn can throw synchronously (e.g. ENOMEM,
+    // missing binary) and send() writes to the fresh PTY — an unguarded throw
+    // here would skip the finally and leave runtime.busy=true forever.
+    if (!runtime.ptySession || runtime.ptySession.closed) {
+      spawnOrResumePty();
+    } else {
+      attachBgListener(runtime.ptySession);
+    }
+
+    runtime.ptySession.send(buildPrompt(prompt));
+    // The session_id discovery event only fires once per brand-new conversation;
+    // resumed sessions and turn 2+ must (re)start the tailer themselves. The call
+    // is idempotent, so this is safe when it is already running.
+    if (runtime.claudeSessionId) {
+      startSubagentTailer(runtime).catch((e) => console.error('[subagent-tail]', e));
+    }
+    runtime.currentProc = { kill: () => runtime.ptySession?.kill() };
+
+    for await (const event of ptyEventsUntilResult(runtime.ptySession)) {
+      if (event.session_id) {
+        runtime.claudeSessionId = event.session_id;
+        runtime.session?.setClaudeSessionId(event.session_id).catch(() => {});
+        startSubagentTailer(runtime).catch((e) => console.error('[subagent-tail]', e));
+      }
+
+      broadcast(runtime, { type: 'debug_raw', event });
+
+      receivedText = handleOrchestratorText(runtime, event, activeCtx) || receivedText;
+
+      await processStatsEvent(runtime, event, sessionDir);
+
+      if (!rateLimit && event.type === 'assistant' && event.error === 'rate_limit') {
+        const txt = event.message?.content?.find?.((b) => b?.type === 'text')?.text || '';
+        rateLimit = { resetsAt: parseResetsAtFromText(txt), message: txt || null };
+        noteRateLimit(runtime, rateLimit);
+      }
+
+      if (!rateLimit && event.type === 'rate_limit_event' && event.rate_limit_info?.status === 'blocked') {
+        rateLimit = event.rate_limit_info;
+        noteRateLimit(runtime, rateLimit);
+      }
+
+      if (event.type === 'result') {
+        sawResult = true;
+        resultReason = event.reason || 'sentinel';
+        driverLog(`result seen receivedText=${receivedText} reason=${resultReason} session=${runtime.session?.id}`);
+        if (event.is_error) resultError = true;
+        if (event.modelUsage && Object.keys(event.modelUsage).length > 0) {
+          runtime.stats.tokensBreakdownCurrentSpawn = breakdownFromModelUsage(event.modelUsage);
+          runtime.stats.tokensByModelCurrentSpawn = new Map();
+          for (const [model, mu] of Object.entries(event.modelUsage)) {
+            runtime.stats.tokensByModelCurrentSpawn.set(model, {
+              breakdown: {
+                input:       mu?.inputTokens               || 0,
+                cacheCreate: mu?.cacheCreationInputTokens  || 0,
+                output:      mu?.outputTokens              || 0,
+                cacheRead:   mu?.cacheReadInputTokens      || 0,
+              },
+              costUsd: typeof mu?.costUSD === 'number' ? mu.costUSD : null,
+            });
+          }
+        }
+        runtime.stats.costUsdCurrentSpawn = event.total_cost_usd || 0;
+        runtime.stats.activeAgents = 0;
+        runtime.stats.activeAgentIds.clear();
+        sendStats(runtime);
+      }
+    }
+
     if (!rateLimit && runtime.pendingRateLimit) rateLimit = runtime.pendingRateLimit;
+
+    const exitCode = sawResult ? 0 : 1;
+    const stderr = runtime.ptySession?.stderr ?? '';
+
+    // `claude --resume <missing-id>` exits almost immediately with no transcript
+    // events: no result, no text, PTY dead. Drop the stale id and replay the
+    // turn once on a fresh conversation instead of surfacing a dead-end error.
+    staleRetry = !sawResult && !receivedText && spawnedWithResume
+      && !runtime.stopping && !rateLimit
+      && (!runtime.ptySession || runtime.ptySession.closed)
+      && !opts.staleRetried;
+
     if (runtime.stopping) {
       const stopText = '⏹ Session stopped.';
       broadcast(runtime, { type: 'message', role: 'assistant', content: stopText, ts: new Date().toISOString() });
       await runtime.session?.recordMessage('assistant', stopText).catch(() => {});
-    } else if (turnFailedFrom({ resultError, stderr: stderrBuf, sawResult, exitCode }) || !receivedText || rateLimit) {
-      const errText = friendlyError({ exitCode, stderr: stderrBuf, rateLimit, resultError });
+    // Stays turnFailedFrom (not classifyTurn): the `|| !receivedText` term here
+    // already subsumes classifyTurn's silence-no-text rule, so converting would
+    // be redundant. Only the settle-decision in the `finally` uses classifyTurn.
+    } else if (!staleRetry && (turnFailedFrom({ resultError, sawResult }) || !receivedText || rateLimit)) {
+      const errText = friendlyError({ exitCode, stderr, rateLimit, resultError });
       broadcast(runtime, { type: 'message', role: 'assistant', content: errText, ts: new Date().toISOString() });
-      // Await: the finally block below writes meta.json right after; a
-      // fire-and-forget here would race with that write and corrupt the file.
       await runtime.session?.recordMessage('assistant', errText).catch(() => {});
       if (rateLimit) {
-        // resetsAt may be absent on a blocked event (or a subagent-surfaced
-        // limit). Broadcast/persist null rather than skipping: the state still
-        // settles on 'rate_limited' below, so without this the session would
-        // strand with a badge but no Resume affordance. A null resetsAt just
-        // renders the bubble with an immediately-enabled Resume button.
         const resetsAt = typeof rateLimit.resetsAt === 'number' ? rateLimit.resetsAt : null;
         broadcast(runtime, { type: 'rate_limited', resetsAt });
         await runtime.session?.setRateLimitResetsAt(resetsAt).catch(() => {});
@@ -469,156 +517,98 @@ export async function processMessage(runtime, prompt, opts = {}) {
     }
   } catch (err) {
     if (err?.name !== 'AbortError') {
-      // An internal exception leaves exitCode null and sawResult false, so
-      // turnFailedFrom classifies it as a (resumable) failure on its own — no
-      // flag to set here. A user STOP throws AbortError, handled by wasStopped.
       const errText = "Something went wrong. Want to try again?";
       broadcast(runtime, { type: 'message', role: 'assistant', content: errText, ts: new Date().toISOString() });
       await runtime.session?.recordMessage('assistant', errText).catch(() => {});
     }
   } finally {
-    // Awaited so the trailing scan (which catches subagent writes between the
-    // last poll tick and the CLI exit) finishes before the turn settles.
-    await stopSubagentTailer(runtime).catch(() => {});
-    // Commit this spawn's cumulative cost and tokens into the runtime totals,
-    // reset for next spawn (each new spawn starts fresh at 0).
-    runtime.stats.costUsd += runtime.stats.costUsdCurrentSpawn;
-    runtime.stats.costUsdCurrentSpawn = 0;
-    runtime.stats.tokensBreakdown = addBreakdown(
-      runtime.stats.tokensBreakdown,
-      runtime.stats.tokensBreakdownCurrentSpawn,
-    );
-    // Refresh the legacy headline (input + cache_creation + output, excludes
-    // cache_read) from the breakdown so consumers reading `tokensUsed` directly
-    // still get the historical semantic.
-    const bk = runtime.stats.tokensBreakdown;
-    runtime.stats.tokensUsed = bk.input + bk.cacheCreate + bk.output;
-    runtime.stats.tokensBreakdownCurrentSpawn = emptyBreakdown();
-    // Fold the spawn's per-model snapshot into the committed totals. Prefer
-    // the SDK's per-model `costUSD` (cumulative-within-spawn → just add) and
-    // fall back to deriving from the local rate table when the SDK didn't
-    // populate the field.
-    const byModelIdx = new Map(runtime.stats.tokensByModel.map((r) => [r.model, r]));
-    for (const [model, mb] of runtime.stats.tokensByModelCurrentSpawn) {
-      const prev = byModelIdx.get(model);
-      const mergedBreakdown = prev
-        ? addBreakdown(prev.breakdown, mb.breakdown)
-        : { ...mb.breakdown };
-      const addCost = mb.costUsd != null ? mb.costUsd : costFromBreakdown(model, mb.breakdown);
-      const mergedCost = (prev?.costUsd || 0) + addCost;
-      if (prev) { prev.breakdown = mergedBreakdown; prev.costUsd = mergedCost; }
-      else byModelIdx.set(model, { model, breakdown: mergedBreakdown, costUsd: mergedCost });
-    }
-    runtime.stats.tokensByModel = [...byModelIdx.values()].sort((a, b) => b.costUsd - a.costUsd);
-    runtime.stats.tokensByModelCurrentSpawn = new Map();
+    // NB: the subagent tailer is NOT stopped here. The COMPLEX flow runs as
+    // background turns between active processMessage calls, and the tailer must
+    // keep polling across them so background-turn subagent activity (mergers,
+    // reviewers) still reaches the live feed. It is stopped only when the wave
+    // truly settles (below / in the bg driver) or on teardown.
+
+    // Replace cumulative stats with the watcher's session-cumulative DEDUPED
+    // total (the live source of truth). Falls back to the additive per-spawn
+    // fold if the watcher reported nothing (e.g. a turn with no transcript
+    // usage) so the header never regresses to zero.
+    try {
+      const cum = await runtime.ptySession?.cumulativeUsage?.();
+      if (cum && Object.keys(cum).length > 0) applyCumulativeUsage(runtime, cum);
+      else foldSpawnUsageIntoStats(runtime);
+    } catch { foldSpawnUsageIntoStats(runtime); }
     runtime.currentProc = null;
     sendStats(runtime);
 
-    broadcast(runtime, { type: 'status', working: false });
-    // If the user pressed stop, drop any queued messages (their intent was
-    // "stop everything"), clear the flag, and don't auto-process the queue.
     const wasStopped = !!runtime.stopping;
     runtime.stopping = false;
-    // Don't drain the queue when the limit just hit — every queued message
-    // would re-spawn claude, hit the same window, and re-broadcast another
-    // rate_limited event before ever reaching the 'rate_limited' state.
-    // Drop the queue (symmetric with STOP) so the session settles on the
-    // rate-limited bubble and the user decides what to do.
-    if (!wasStopped && !rateLimit && runtime.queue.length > 0) {
+
+    if (staleRetry) {
+      runtime.claudeSessionId = null;
+      runtime.session?.setClaudeSessionId(null).catch(() => {});
+      runtime.busy = true;
+      processMessage(runtime, prompt, { ...opts, staleRetried: true }).catch(() => { runtime.busy = false; });
+    } else if (!wasStopped && !rateLimit && runtime.queue.length > 0) {
+      broadcast(runtime, { type: 'status', working: false });
       const next = runtime.queue.shift();
-      // The head of the queue is now running, not waiting — tabs need this to
-      // drop the ⏳ badge / × button on the bubble whose data-queue-id matches.
       broadcast(runtime, { type: 'queue_updated', queuedIds: runtime.queue.map((q) => q.id) });
-      processMessage(runtime, next.content);
+      processMessage(runtime, next.content).catch(() => { runtime.busy = false; });
     } else {
       if (wasStopped || rateLimit) runtime.queue = [];
       runtime.busy = false;
-      // Only a genuine Claude failure is a resumable 'error' (see turnFailedFrom):
-      // an API error, or a process that died before Claude finished. A hook or
-      // tool that merely exited non-zero while Claude ran to completion is NOT a
-      // failure — the session settles on 'completed' so the next message
-      // continues instead of stalling on a Resume button. A clean exit with no
-      // assistant text also completes silently; a rate limit settles on its own.
-      const turnFailed = turnFailedFrom({ resultError, stderr: stderrBuf, sawResult, exitCode });
+
+      // classifyTurn = turnFailedFrom + the silence-no-text rule: a result that
+      // arrived via the 120 s fallback (no Stop sentinel) and produced no text
+      // is a failure (the orchestrator died/hung). A silence result WITH text
+      // stays 'completed' (long COMPLEX turns may legitimately miss the sentinel).
+      const turnFailed = classifyTurn({ resultError, sawResult, resultReason, receivedText });
       const turnErrored = turnFailed || !receivedText || !!rateLimit;
-      const asksQuestion = !wasStopped && !turnErrored && endsWithQuestion(lastAssistantText);
-      let nextState = decideNextState({ wasStopped, rateLimit: !!rateLimit, turnFailed, asksQuestion });
+      const asksQuestion = !wasStopped && !turnErrored && endsWithQuestion(activeCtx.lastText);
+      const nextState = decideNextState({ wasStopped, rateLimit: !!rateLimit, turnFailed, asksQuestion });
+
+      // A COMPLEX wave still in flight must NOT settle to `completed` between
+      // background turns — that hides the progress bar in the UI. Stay
+      // in_progress (bar visible, working:true) and hand off to the background
+      // driver; it transitions to `completed` only once every ticket is terminal.
       const sessionId = runtime.session?.id;
-      const sessionDir = sessionId ? `${LOG_DIR}/${sessionId}` : null;
-      // Teardown-stall watcher (see scheduleAutoWake). If the inactivity watchdog
-      // killed the spawn (idleKilled) AFTER a teardown began (shutdownRequestsSent
-      // > 0) and tickets are still unfinished, the wave deadlocked on a member
-      // that never acked its shutdown. Auto-resume the orchestrator (recovery) so
-      // it rebuilds from disk and finishes, instead of settling 'completed' —
-      // which would hide the unfinished work and clear the progress bar. Bounded
-      // by MAX_AUTO_WAKE; on give-up settle the resumable 'error' so the bar
-      // persists and a manual Resume can still finish it. This never fires on a
-      // normal mid-wave idle: that is neither idle-killed (live subagents keep the
-      // stream busy) nor has any shutdown_request been sent.
-      let autoWaking = false;
-      if (nextState === 'completed' && !turnErrored && idleKilled && shutdownRequestsSent > 0
-          && sessionDir && await sessionHasPendingTickets(sessionDir)) {
-        runtime.autoWakeCount = (runtime.autoWakeCount || 0) + 1;
-        if (runtime.autoWakeCount <= MAX_AUTO_WAKE) {
-          console.error(`[watcher] stalled teardown — auto-wake ${runtime.autoWakeCount}/${MAX_AUTO_WAKE}`);
-          nextState = 'in_progress';
-          autoWaking = true;
-        } else {
-          console.error('[watcher] auto-wake budget exhausted — settling error');
-          nextState = 'error';
-        }
+      const sDir = sessionId ? `${LOG_DIR}/${sessionId}` : null;
+      let waveInFlight = false;
+      if (nextState === 'completed' && !turnErrored && sDir) {
+        const { total, pendingCount } = await readTicketStatuses(sDir);
+        driverLog(`turn settled: total=${total} pending=${pendingCount} session=${sessionId}`);
+        waveInFlight = total > 0 && pendingCount > 0;
       }
-      await transitionState(runtime, nextState);
-      if (autoWaking) {
-        scheduleAutoWake(sessionId, runtimes);
-      } else if (nextState === 'completed' && !turnErrored) {
-        // Schedule the documentator (Mode 2) once the turn lands on 'completed'
-        // and at least one ticket has been merged in this session. Debounced so
-        // a follow-up user message within DOCUMENTATOR_DEBOUNCE_MS cancels it
-        // (processMessage clears the timer at the top of the next turn). Timer
-        // state is keyed on sessionId in documentator-spawn.js so it survives
-        // runtime release between turns.
-        if (sessionDir && await sessionHasMergedTickets(sessionDir)) {
-          scheduleDocumentatorRun(sessionId, runtimes);
-        }
+
+      if (waveInFlight) {
+        // Wave continues as background turns — keep the tailer running so their
+        // subagent activity (mergers especially) stays in the live feed.
+        await transitionState(runtime, 'in_progress');
+        broadcast(runtime, { type: 'status', working: true });
+        applyWaveFlagsOnTurnSettle(runtime, true);
+        startBgDriver(runtime, runtimes);
+      } else {
+        // Truly settling — flush and stop the tailer. The wave flags must be
+        // cleared here too: when the wave's last turn was an AUTO_CONTINUE,
+        // processMessage left waveActive=true (only non-auto turns clear it),
+        // and a stale true makes every later user message queue forever
+        // (`r.busy || r.waveActive` guard in server.js).
+        applyWaveFlagsOnTurnSettle(runtime, false);
+        await stopSubagentTailer(runtime).catch(() => {});
+        await transitionState(runtime, nextState);
+        broadcast(runtime, { type: 'status', working: false });
+        // Documentator (Mode 2) is dispatched by the orchestrator at PD-RESPOND,
+        // not spawned by chat-service — nothing to schedule here.
       }
-      // If no client is currently viewing this session, release the runtime now
-      // that the turn is done — UNLESS an auto-wake is pending, in which case the
-      // runtime must stay so the scheduled resume can find it.
-      if (!autoWaking && runtime.clients.size === 0) {
+
+      // Keep runtime alive while PTY is live — background turns may still fire.
+      // The PTY exit handler covers teardown once all background work is done.
+      if (runtime.clients.size === 0 && (!runtime.ptySession || runtime.ptySession.closed) && !runtime.ptyRestartPending) {
+        await stopSubagentTailer(runtime).catch(() => {});
         runtime.session?.close();
         runtimes.delete(runtime.session.id);
       }
     }
 
     snapshotClaudeSession(runtime.claudeSessionId, runtime.session?.id).catch(() => {});
-  }
-}
-
-async function snapshotClaudeSession(claudeSessionId, sessionId) {
-  if (!claudeSessionId || !sessionId) return;
-  const projectDir = claudeProjectDir();
-  const srcDir = claudeSessionDir(claudeSessionId);
-  const destDir = join(LOG_DIR, sessionId, 'claude');
-
-  await mkdir(destDir, { recursive: true });
-  await copyFile(join(projectDir, `${claudeSessionId}.jsonl`), join(destDir, 'transcript.jsonl'))
-    .then(() => chmod(join(destDir, 'transcript.jsonl'), 0o644))
-    .catch(() => {});
-  for (const subdir of ['subagents', 'tool-results']) {
-    const src = join(srcDir, subdir);
-    const dst = join(destDir, subdir);
-    await cp(src, dst, { recursive: true })
-      .then(() => chmodDir(dst, 0o644, 0o755))
-      .catch(() => {});
-  }
-}
-
-async function chmodDir(dir, fileMode, dirMode) {
-  await chmod(dir, dirMode).catch(() => {});
-  for (const entry of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
-    const full = join(dir, entry.name);
-    if (entry.isDirectory()) await chmodDir(full, fileMode, dirMode);
-    else await chmod(full, fileMode).catch(() => {});
   }
 }

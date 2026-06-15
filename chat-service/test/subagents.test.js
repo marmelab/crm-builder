@@ -81,3 +81,24 @@ test('enrichSubagentChildren: a normal (non-compacted) agent is unchanged', asyn
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('enrichSubagentChildren: callsCount counts deduped API calls (one per message.id)', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'subagents-'));
+  try {
+    await writeAgent(dir, 'calls', 'developer-TASK-009', [
+      { type: 'user', uuid: 'u-c', timestamp: '2026-01-01T00:00:00Z', message: { role: 'user', content: 'ROLE: developer\nTASK_ID: TASK-009' } },
+      // Same message id twice (decide + stream duplicate) → ONE API call
+      assistantWithTool('m-dup', 'Bash', '2026-01-01T00:00:01Z'),
+      assistantWithTool('m-dup', 'Bash', '2026-01-01T00:00:02Z'),
+      // A second, distinct call
+      assistantWithTool('m-two', 'Read', '2026-01-01T00:00:03Z'),
+    ], 1000);
+
+    const phase = makePhase('developer-TASK-009', '2026-01-01T00:00:00Z');
+    await enrichSubagentChildren([phase], dir, new Map(), []);
+
+    assert.equal(phase.callsCount, 2, 'duplicate message.id must count as a single API call');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

@@ -12,6 +12,16 @@ import { toolDetail, sendMessageVerdictFromInput } from './tools.js';
 // the planner's reply and the first dev's GO.
 const SKIP_CHILD = new Set();
 
+// Per-file parse cache: path → { size, mtimeMs, events }
+// Keyed on { size, mtimeMs } — subagent transcripts are append-only, so any
+// append changes both fields, guaranteeing a miss on stale entries. We cache
+// the raw events array (not the post-processed result) so that per-call state
+// (phase mutation, toolCounts/allToolCalls accumulators, token dedup Set) is
+// always applied fresh — caching the derived result would incorrectly embed
+// external accumulator state into the cache value.
+// Bound: clear when > 500 entries to prevent unbounded growth over long runs.
+const parseCache = new Map(); // path → { size, mtimeMs, events }
+
 // Enrich COMPLEX team members (task_type='in_process_teammate') with their
 // tool calls — those live in `~/.claude/projects/-app/<claudeSessionId>/subagents/agent-<task_id>.jsonl`,
 // never streamed into the orchestrator's main log. Without this, every
@@ -19,12 +29,13 @@ const SKIP_CHILD = new Set();
 export async function enrichSubagentChildren(phases, subagentsDir, toolCounts, allToolCalls) {
   const baseDir = subagentsDir;
 
-  // Only target COMPLEX team members. Local agents (planner, simple-developer)
-  // already have their tool_uses in the main stream via parent_tool_use_id —
-  // loading their subagent files would double-count.
-  const targets = phases.filter((p) =>
-    p.kind === 'agent' && p.taskType === 'in_process_teammate' && p.agentName
-  );
+  // Target ALL agent phases. With PtySession/TranscriptWatcher (noAgentTeam), the
+  // main stream is the orchestrator's own JSONL only — every subagent (local_agent
+  // sync, run_in_background, in_process_teammate alike) writes its tool_uses to its
+  // own subagents/agent-<id>.jsonl, never to the main stream — so all must be
+  // enriched from there. NB: no agentName requirement — SIMPLE-flow dispatches omit
+  // the `name` field; the transcript↔phase matching below keys on agentType.
+  const targets = phases.filter((p) => p.kind === 'agent');
   if (targets.length === 0) return;
 
   let dirEntries;
@@ -84,14 +95,17 @@ export async function enrichSubagentChildren(phases, subagentsDir, toolCounts, a
     byName.set(f.agentName, slot);
   }
 
-  const phasesByName = new Map();
+  // Key phases by agentType (bare type, e.g. "developer") — NOT agentName. The
+  // file groups (byName) are keyed by meta.agentType, and SIMPLE dispatches have
+  // no agentName at all, so agentType is the only reliable join key.
+  const phasesByType = new Map();
   for (const p of targets) {
-    const list = phasesByName.get(p.agentName) || [];
+    const list = phasesByType.get(p.agentType) || [];
     list.push(p);
-    phasesByName.set(p.agentName, list);
+    phasesByType.set(p.agentType, list);
   }
 
-  for (const [name, phasesForName] of phasesByName) {
+  for (const [name, phasesForName] of phasesByType) {
     const slot = byName.get(name) || { activations: [], continuations: [] };
     const activations = [...slot.activations].sort((a, b) => a.mtimeMs - b.mtimeMs);
     const continuations = [...slot.continuations].sort((a, b) => a.mtimeMs - b.mtimeMs);
@@ -132,6 +146,9 @@ async function appendSubagentToolUses(files, phase, toolCounts, allToolCalls) {
   // unique per conversation, so cross-file token dedup is automatic).
   phase.tokensTotal = 0;
   phase.opsCount = 0;
+  // Deduped API-call count (one per message.id). Unlike opsCount (tool calls),
+  // this is the billing unit: cacheRead/callsCount = effective context size.
+  phase.callsCount = 0;
   phase.tokensBreakdown = emptyBreakdown();
   phase.costUsd = 0;
   const tokensByModelMap = new Map(); // model → breakdown
@@ -142,9 +159,18 @@ async function appendSubagentToolUses(files, phase, toolCounts, allToolCalls) {
   let lastEventTs = null;
 
   for (const file of files) {
-    const events = [];
+    let events;
     try {
-      for await (const ev of readJsonl(file)) events.push(ev);
+      const fileStat = await stat(file);
+      const cached = parseCache.get(file);
+      if (cached && cached.size === fileStat.size && cached.mtimeMs === fileStat.mtimeMs) {
+        events = cached.events;
+      } else {
+        events = [];
+        for await (const ev of readJsonl(file)) events.push(ev);
+        if (parseCache.size > 500) parseCache.clear();
+        parseCache.set(file, { size: fileStat.size, mtimeMs: fileStat.mtimeMs, events });
+      }
     } catch { continue; }
     if (events.length) lastEventTs = events[events.length - 1].timestamp || lastEventTs;
 
@@ -165,6 +191,7 @@ async function appendSubagentToolUses(files, phase, toolCounts, allToolCalls) {
       const msgId = e.message?.id;
       if (u && msgId && !tokensByMessageId.has(msgId)) {
         tokensByMessageId.add(msgId);
+        phase.callsCount += 1;
         // Track the full breakdown (input + cache_creation + output + cache_read)
         // so the per-phase tooltip can show the same 4-way split as the global
         // summary. tokensTotal is the legacy sum (cache_read excluded) kept for

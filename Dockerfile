@@ -4,11 +4,24 @@
 #  MODE=demo  → FakeRest (browser-side), no external dependencies
 #  MODE=full  → Local Supabase, requires host Docker socket
 # ─────────────────────────────────────────────────────────────
+
+# ── Builder: native-module compilation only ───────────────────
+# node-pty (chat-service) needs node-gyp (python3 + g++ + make) to compile.
+# Keep the toolchain here so the runtime image ships without g++.
+FROM node:24-trixie-slim AS chat-builder
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 g++ make \
+    && rm -rf /var/lib/apt/lists/*
+COPY chat-service/package.json chat-service/package-lock.json /chat-service/
+RUN cd /chat-service && npm ci
+
+# ── Runtime image ─────────────────────────────────────────────
 FROM node:24-trixie-slim
 
 # ── Version pins — update when upgrading tools ────────────────
 ARG SUPABASE_CLI_VERSION=v2.98.2
-ARG CLAUDE_CODE_VERSION=2.1.98
+ARG CLAUDE_CODE_VERSION=2.1.169
 ARG WRANGLER_VERSION=4.42.0
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -20,8 +33,11 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 
 # ── System dependencies ───────────────────────────────────────
+# No g++: native compilation happens in the chat-builder stage. python3 stays —
+# the merger agent uses it at runtime (ticket-status update), and node-gyp can
+# fall back on it if an agent-added dependency ever needs a rebuild.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl wget git make zip unzip jq ca-certificates gnupg lsb-release \
+    curl wget git make python3 zip unzip jq ca-certificates gnupg lsb-release \
     supervisor procps tmux \
     chromium chromium-driver \
     libglib2.0-0 libnss3 libatk1.0-0 libatk-bridge2.0-0 \
@@ -121,9 +137,11 @@ RUN chmod +x /usr/local/bin/switch-mode /usr/local/bin/apply-migrations /usr/loc
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
 # ── Chat service ──────────────────────────────────────────────
+# node_modules (incl. the compiled node-pty) comes from the builder stage; the
+# source COPY stays separate so editing chat-service code never re-runs npm ci.
 COPY chat-service/ /chat-service/
-RUN cd /chat-service && npm ci \
-    && chown -R developer:developer /chat-service
+COPY --from=chat-builder /chat-service/node_modules /chat-service/node_modules
+RUN chown -R developer:developer /chat-service
 
 # ── Entrypoint ────────────────────────────────────────────────
 COPY entrypoint.sh /entrypoint.sh
@@ -135,12 +153,10 @@ COPY claudeConfig/.claude/ /root/.claude/
 RUN cp -r /root/.claude /home/developer/.claude \
     && chown -R developer:developer /home/developer/.claude
 
-# ── Stage source for bind-mounted /app ────────────────────────
-# /app is bind-mounted from ./crm-source on the host (see docker-compose.yml)
-# so users can browse and share the CRM source from their machine. The bind
-# mount hides any content baked into the image at /app, so we relocate the
-# build artifacts here. entrypoint.sh restores them into /app on first run
-# when the bind mount is empty.
+# ── Stage source for named volume /app ────────────────────────
+# crm-app:/app is a named volume — the mount hides any content baked at /app,
+# so we relocate build artifacts here. entrypoint.sh copies them into /app on
+# first boot (empty volume) so the volume is bootstrapped from the image.
 RUN mv /app /opt/atomic-crm-source \
     && mkdir -p /app \
     && chown developer:developer /app

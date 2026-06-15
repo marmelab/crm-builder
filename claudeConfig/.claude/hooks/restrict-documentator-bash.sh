@@ -1,19 +1,25 @@
 #!/bin/bash
 # PreToolUse / Bash hook. Restricts the documentator's bash usage to a strict
-# read-only whitelist. Pass-through for any other agent or for non-documentator
-# claude sessions (no DOCUMENTATOR_RUN env var).
+# read-only whitelist. Applies when the actor is the documentator, detected
+# EITHER by DOCUMENTATOR_RUN=1 (legacy standalone `claude -p` — top-level process,
+# no agent_type) OR by agent_type === "documentator" (Agent-dispatched subagent,
+# same signal the other PreToolUse hooks use). Pass-through for any other agent.
 
 set -euo pipefail
 
-if [ "${DOCUMENTATOR_RUN:-}" != "1" ]; then
+# Read the JSON envelope once; extract agent_type first to decide whether to act.
+ENVELOPE=$(cat)
+AGENT=$(node -e '
+try { const p = JSON.parse(process.argv[1]); process.stdout.write(p.agent_type || p.agentType || ""); }
+catch { process.stdout.write(""); }
+' "$ENVELOPE" 2>/dev/null) || AGENT=""
+
+if [ "${DOCUMENTATOR_RUN:-}" != "1" ] && [ "$AGENT" != "documentator" ]; then
   exit 0
 fi
 
-# Read the JSON envelope from stdin and extract tool_input.command. If the
-# payload is malformed, treat as block (safer than passing through with an
-# empty COMMAND that would later match `^ls( |$)` against an empty string).
-# Uses node -e (consistent with the other hooks; node is the image's base runtime).
-ENVELOPE=$(cat)
+# Extract tool_input.command. If the payload is malformed, treat as block (safer
+# than passing through with an empty COMMAND that would later match `^ls( |$)`).
 COMMAND=$(node -e '
 try {
   const p = JSON.parse(process.argv[1]);

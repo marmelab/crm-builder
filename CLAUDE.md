@@ -7,7 +7,7 @@ Dockerised sandbox: non-technical users describe CRM changes in chat → agent t
 ```
 supervisord (pid 1)
   ├─ crm-frontend   :5173  (Vite, /app/src)
-  └─ chat-service   :8080  (WebSocket + spawn claude -p)
+  └─ chat-service   :8080  (WebSocket + persistent PTY orchestrator)
 ```
 
 Two compose profiles: `demo` (FakeRest) and `full` (Supabase, needs Docker socket).
@@ -23,12 +23,11 @@ Node.js server (:8080) — WebSocket + REST. Entry: `server.js`. Split: `lib/ser
 Architecture reference: [docs/chat-service-architecture.md](docs/chat-service-architecture.md)
 
 Key modules:
-- `server/claude-spawn.js` — builds + spawns `claude -p`, injects `<mode>` + `<session_dir>` tags
+- `server/turn-helpers.js` — turn helpers: assistant-message extraction, `FULL_SETUP` intent rewrite, resume planning (fresh vs `--resume`), user-facing error text (formerly `claude-spawn.js`; the PTY model removed headless spawning)
 - `server/turn.js` — streams stdout, writes `log.jsonl`, recovery decision, snapshots transcripts — see [docs/turn.md](docs/turn.md)
 - `server/session-store.js` — chat UUID, `meta.json`, `TASK-*.json` detection
 - `server/subagent-tail.js` — polls subagents/ every 2500ms → WS broadcast
 - `lib/stats/` (8 modules) — read-only aggregation, `GET /api/stats` — see [docs/stats.md](docs/stats.md)
-- `server/documentator-spawn.js` — 30s debounce after turn=completed + merged tickets (Mode 2)
 - `server/deploy-routes.js` — SSE `/api/deploy/events`, 6-phase pipeline (vite build → supabase link → db push → functions → secrets → wrangler), independent of chat WS — see [docs/deploy.md](docs/deploy.md)
 
 Tests: `cd chat-service && npm test` — uses glob `'test/**/*.test.js'` (directory form broken on Node 25).
@@ -42,23 +41,24 @@ Tests: `cd chat-service && npm test` — uses glob `'test/**/*.test.js'` (direct
 | developer | opus | Implements + commits in worktree. Also writes ADRs in `adr/` when the change introduces a structural decision. Never writes SQL migrations — deploy-time only. |
 | simple-developer | sonnet | 1-file cosmetic OR 1 single-field change on an existing entity (schema + view + type + form + show) OR 1 list filter reusing existing components (no new custom React component). No team, no review, never writes ADRs — SubagentStop hooks validate. POST-DEV runs if a migration was written. |
 | quality-reviewer | sonnet | Semantic code + security review only. Never re-runs validation. |
-| test-validator | haiku | Integration wiring + e2e presence. |
+| test-validator | sonnet | Integration wiring + e2e presence. (Deliberately bumped from haiku in #17.) |
 | merger | haiku | `git merge --no-ff` only. **Never `git add`/`git commit`**. |
-| documentator | sonnet | Mode 1 — captures rules/skills to `~/.claude/local/` on explicit user request. Mode 2 — auto-runs at the end of every COMPLEX session, appends business knowledge to `/app/MEMORY.md` from the diff vs `origin/main`. |
+| documentator | sonnet | Mode 1 — captures rules/skills to `~/.claude/local/` on explicit user request. Mode 2 — dispatched by the orchestrator (via `Agent`, run_in_background) at POST-DEV once the user validates the result; appends business knowledge to `/app/MEMORY.md` from the diff vs `origin/main`. Both modes run via the Agent tool (no `claude -p`); confined by `restrict-documentator-{write,bash}` (which trigger on `agent_type=documentator` or the legacy `DOCUMENTATOR_RUN=1`). |
 
-Team layout (`agent-team` skill): one `TeamCreate` per wave, `3×N + 1` members in one dispatch (developer + 2 reviewers per ticket + one shared merger). Constraint: one team per lead, no nested teams. Single merger eliminates `.git/index.lock` contention.
+Dispatch layout (no team): the orchestrator dispatches each wave's agents directly via the `Agent` tool — one developer per ticket, then 2 reviewers per ticket, then the merger. Merges run one at a time into the `_session` worktree, so there is no `.git/index.lock` contention.
 
 ### Hooks (`claudeConfig/.claude/settings.json`)
 
-- `PreToolUse / Bash|Read|Grep|Glob|SendMessage` → member-idle-gate
+No-team flow: the orchestrator dispatches every agent via the `Agent` tool (no `TeamCreate`/`SendMessage`), so the worktree + dispatch guards live on `PreToolUse / Agent`.
+
 - `PreToolUse / Bash` → silent-mode-check, circuit-breaker, block-bash-file-write, block-bash-validation, block-orchestrator-merge, restrict-documentator-bash
-- `PreToolUse / Write|Edit` → restrict-documentator-write
-- `PreToolUse / SendMessage` → block-premature-shutdowns, validate-before-review (typecheck + prettier + unit + e2e — blocks developer→reviewer/merger on failure)
-- `PreToolUse / TeamDelete` → teamdelete-gate (blocks if members not gracefully shut down)
-- `PostToolUse / TeamDelete` → teamdelete-cleanup
-- `SubagentStart / simple-developer|developer` → setup-worktree
+- `PreToolUse / Write|Edit` → restrict-documentator-write, block-migration-writes
+- `PreToolUse / Agent` → block-merger-without-review, **block-promote-unmerged** (refuses `MODE: promote` while any `<id>/*` task branch has commits not on `session/<id>`), enforce-dev-dispatch, **setup-worktree** (creates the worktree from the dispatch prompt's `WORKTREE_PATH`/`BRANCH_NAME`/`TASK_ID` BEFORE the agent starts — replaces the old `SubagentStart` trigger, which couldn't see the TASK id in no-team mode)
 - `SubagentStop / merger` → cleanup-worktree
-- `SubagentStop / simple-developer` → typecheck, prettier, unit-app, unit-functions, e2e
+- `SubagentStop / quality-reviewer|test-validator` → record-review-verdict
+- `SubagentStop / simple-developer|developer` → typecheck, prettier, unit-app, unit-functions, e2e
+
+> Why `setup-worktree` moved off `SubagentStart`: in agent-team mode (main) a team member's `agent_type` carries its name (`developer-TASK-001`), so the `SubagentStart` hook could grep the TASK id. In no-team mode the `Agent` tool sets `agent_type` to just `developer` (the `name` is not surfaced), and a parallel wave gives no way to tell which dev is starting — so identity is read from the dispatch prompt at `PreToolUse / Agent` instead. Same script, same conventions, different trigger.
 
 ### Worktree scope (critical)
 

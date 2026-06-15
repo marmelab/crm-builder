@@ -12,10 +12,8 @@
         "hookify@claude-plugins-official": false,
         "ralph-loop@claude-plugins-official": false
     },
-    "env": {
-        "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
-    },
     "skillListingMaxDescChars": 512,
+    "skipDangerousModePermissionPrompt": true,
     "permissions": {
         "allow": []
     },
@@ -25,15 +23,6 @@
     },
     "hooks": {
         "PreToolUse": [
-            {
-                "matcher": "Bash|Read|Grep|Glob|SendMessage",
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": "/home/developer/.claude/hooks/member-idle-gate.sh"
-                    }
-                ]
-            },
             {
                 "matcher": "Bash",
                 "hooks": [
@@ -77,63 +66,36 @@
                 ]
             },
             {
-                "matcher": "SendMessage",
+                "matcher": "Agent",
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "/home/developer/.claude/hooks/block-premature-shutdowns.sh"
+                        "command": "/home/developer/.claude/hooks/block-merger-without-review.sh"
                     },
                     {
                         "type": "command",
-                        "command": "/home/developer/.claude/hooks/validate-before-review.sh",
-                        "timeout": 180,
-                        "statusMessage": "Validating before review/merge..."
-                    }
-                ]
-            },
-            {
-                "matcher": "TeamDelete",
-                "hooks": [
+                        "command": "/home/developer/.claude/hooks/block-promote-unmerged.sh"
+                    },
                     {
                         "type": "command",
-                        "command": "/home/developer/.claude/hooks/teamdelete-gate.sh",
-                        "timeout": 5,
-                        "statusMessage": "Checking team teardown state..."
-                    }
-                ]
-            },
-            {
-                "matcher": "TeamCreate",
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": "/home/developer/.claude/hooks/teamcreate-wipe-orphan.sh",
-                        "timeout": 5
-                    }
-                ]
-            }
-        ],
-        "PostToolUse": [
-            {
-                "matcher": "TeamDelete",
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": "/home/developer/.claude/hooks/teamdelete-cleanup.sh",
-                        "timeout": 5
-                    }
-                ]
-            }
-        ],
-        "SubagentStart": [
-            {
-                "matcher": "simple-developer|developer",
-                "hooks": [
+                        "command": "/home/developer/.claude/hooks/enforce-dev-dispatch.sh"
+                    },
                     {
                         "type": "command",
                         "command": "/home/developer/.claude/hooks/setup-worktree.sh",
                         "timeout": 60,
                         "statusMessage": "Setting up worktree..."
+                    }
+                ]
+            }
+        ],
+        "Stop": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "/home/developer/.claude/hooks/turn-complete.sh",
+                        "timeout": 5
                     }
                 ]
             }
@@ -151,7 +113,17 @@
                 ]
             },
             {
-                "matcher": "simple-developer",
+                "matcher": "quality-reviewer|test-validator",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "/home/developer/.claude/hooks/record-review-verdict.sh",
+                        "timeout": 15
+                    }
+                ]
+            },
+            {
+                "matcher": "simple-developer|developer",
                 "hooks": [
                     {
                         "type": "command",
@@ -168,7 +140,7 @@
                     {
                         "type": "command",
                         "command": "/home/developer/.claude/hooks/run-unit-tests-app.sh",
-                        "timeout": 180,
+                        "timeout": 600,
                         "statusMessage": "Running unit tests (app)..."
                     },
                     {

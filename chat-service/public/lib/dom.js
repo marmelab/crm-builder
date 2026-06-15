@@ -196,6 +196,7 @@ function fmtN(n) { return Number(n || 0).toLocaleString('en-US'); }
 function fmtUsd(n, p = 2) { return `$${Number(n || 0).toFixed(p)}`; }
 
 const MODEL_RATES = {
+  'claude-opus-4-8':           { input: 5,   cacheCreate: 6.25,  cacheRead: 0.5,  output: 25 },
   'claude-opus-4-7':           { input: 5,   cacheCreate: 6.25,  cacheRead: 0.5,  output: 25 },
   'claude-opus-4-6':           { input: 5,   cacheCreate: 6.25,  cacheRead: 0.5,  output: 25 },
   'claude-opus-4-5':           { input: 5,   cacheCreate: 6.25,  cacheRead: 0.5,  output: 25 },

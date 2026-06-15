@@ -4,16 +4,25 @@
 # All other paths are blocked — the documentator is not allowed to touch
 # application code or to modify the resynced base config under
 # /home/developer/.claude/{agents,skills,hooks,rules,settings.json}.
-# Pass-through for any other agent or for non-documentator claude sessions
-# (no DOCUMENTATOR_RUN env var).
+# Applies when the actor is the documentator, detected EITHER by:
+#   - DOCUMENTATOR_RUN=1 env — the legacy standalone `claude -p` spawn is a
+#     top-level process with no agent_type, so the env is its only tag; OR
+#   - agent_type === "documentator" — an Agent-dispatched documentator subagent,
+#     the same signal the other PreToolUse hooks use (e.g. block-bash-validation).
+# Pass-through for any other agent / claude session.
 
 set -euo pipefail
 
-if [ "${DOCUMENTATOR_RUN:-}" != "1" ]; then
+ENVELOPE=$(cat)
+AGENT=$(node -e '
+try { const p = JSON.parse(process.argv[1]); process.stdout.write(p.agent_type || p.agentType || ""); }
+catch { process.stdout.write(""); }
+' "$ENVELOPE" 2>/dev/null) || AGENT=""
+
+if [ "${DOCUMENTATOR_RUN:-}" != "1" ] && [ "$AGENT" != "documentator" ]; then
   exit 0
 fi
 
-ENVELOPE=$(cat)
 FILE_PATH=$(node -e '
 try {
   const p = JSON.parse(process.argv[1]);

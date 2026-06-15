@@ -36,6 +36,12 @@ while IFS= read -r line; do
   elif [[ "$line" == branch\ * ]]; then
     CURRENT_BRANCH="${line#branch refs/heads/}"
   elif [[ -z "$line" ]]; then
+    # Guard: git's --porcelain output already ends with a blank line, and the
+    # trailing `echo ""` in the process substitution adds a second one. Without
+    # the guard below, the last worktree entry is processed twice (REMOVED then
+    # RM-RF for the same path). Reset state variables after each blank line so
+    # a second consecutive blank line is a no-op.
+    if [[ -z "$CURRENT_PATH" ]]; then continue; fi
     if [[ "$CURRENT_PATH" == "$WORKTREE_BASE"/* ]] || [[ "$CURRENT_PATH" == "$WORKTREE_BASE" ]]; then
       # Never clean the session integration worktree or the SIMPLE worktree;
       # both persist for the whole session (_session for complex merges,
@@ -44,31 +50,55 @@ while IFS= read -r line; do
         */_session|*/simple)
           echo "[$(date -Iseconds)] cleanup-worktree SKIP-SESSION-WORKTREE $CURRENT_PATH" >> "$LOG" 2>/dev/null || true
           SKIPPED=$((SKIPPED + 1))
+          CURRENT_PATH=""
+          CURRENT_BRANCH=""
           continue
           ;;
       esac
-      # Only remove if the branch has developer commits AND is merged into master.
-      # Two separate checks are required:
-      # - A detached HEAD has no branch name to check.
-      # - A freshly created branch (no commits yet) has HEAD == master, so
-      #   git branch --merged master would flag it as merged; check for commits
-      #   first to avoid removing a worktree the developer just started on.
-      # - An unmerged branch with commits must be preserved until the merger runs.
+      # Removal conditions (check order matters):
+      # 1. Detached HEAD — no branch name → skip (mid-rebase guard).
+      # 2. Branch tip == master tip — branch has no commits of its own yet.
+      #    git branch --merged master returns it (trivially an ancestor), but
+      #    the developer just started. Skip to preserve their workspace.
+      # 3. Branch tip != master tip AND git branch --merged master lists it —
+      #    real commits were made and the merger ran git merge --no-ff. After
+      #    --no-ff, master is at a NEW merge commit so BRANCH_SHA != MASTER_SHA,
+      #    but the branch IS in master's history. Safe to remove.
+      # 4. Branch tip != master tip AND NOT merged → work in progress. Preserve.
+      #
+      # Why not "git log master..branch" (old AHEAD check)?
+      #   After git merge --no-ff, all branch commits are reachable from master,
+      #   so git log master..branch is EMPTY even though real work was done.
+      #   Checking AHEAD first caused the SKIP-NO-COMMITS false-positive that
+      #   prevented cleanup after successful merges.
+      #
+      # Why not IS_MERGED first (previous fix attempt)?
+      #   A freshly created branch (tip == master) is trivially "merged" into
+      #   master (same commit), so IS_MERGED returns true immediately, causing
+      #   premature removal before the developer makes any commits.
       if [ -z "$CURRENT_BRANCH" ]; then
         echo "[$(date -Iseconds)] cleanup-worktree SKIP-DETACHED $CURRENT_PATH (detached HEAD)" >> "$LOG" 2>/dev/null || true
         SKIPPED=$((SKIPPED + 1))
+        CURRENT_PATH=""
+        CURRENT_BRANCH=""
         continue
       fi
-      AHEAD=$(git -C /app log --oneline "master..$CURRENT_BRANCH" 2>/dev/null | head -1 || true)
-      if [ -z "$AHEAD" ]; then
+      BRANCH_SHA=$(git -C /app rev-parse "$CURRENT_BRANCH" 2>/dev/null || true)
+      MASTER_SHA=$(git -C /app rev-parse master 2>/dev/null || true)
+      if [ "$BRANCH_SHA" = "$MASTER_SHA" ]; then
+        # Same tip as master → branch created but no commits yet → skip.
         echo "[$(date -Iseconds)] cleanup-worktree SKIP-NO-COMMITS $CURRENT_PATH branch=$CURRENT_BRANCH" >> "$LOG" 2>/dev/null || true
         SKIPPED=$((SKIPPED + 1))
+        CURRENT_PATH=""
+        CURRENT_BRANCH=""
         continue
       fi
       IS_MERGED=$(git -C /app branch --merged master 2>/dev/null | grep -F " $CURRENT_BRANCH" | head -1 || true)
       if [ -z "$IS_MERGED" ]; then
         echo "[$(date -Iseconds)] cleanup-worktree SKIP-UNMERGED $CURRENT_PATH branch=$CURRENT_BRANCH" >> "$LOG" 2>/dev/null || true
         SKIPPED=$((SKIPPED + 1))
+        CURRENT_PATH=""
+        CURRENT_BRANCH=""
         continue
       fi
       [ -n "$CURRENT_BRANCH" ] && BRANCHES_TO_DELETE+=("$CURRENT_BRANCH")
@@ -80,6 +110,9 @@ while IFS= read -r line; do
       fi
       REMOVED=$((REMOVED + 1))
     fi
+    # Reset per-worktree state so a second consecutive blank line is a no-op.
+    CURRENT_PATH=""
+    CURRENT_BRANCH=""
   fi
 done < <(git -C /app worktree list --porcelain 2>/dev/null; echo "")
 

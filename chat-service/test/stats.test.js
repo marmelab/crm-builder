@@ -6,6 +6,7 @@ import { aggregateSession } from '../lib/stats.js';
 import {
   computeSummary, tokensFromModelUsage,
   breakdownFromModelUsage, breakdownFromUsage, sumBreakdown,
+  costFromBreakdown, summarizeFromPhases,
 } from '../lib/stats/io.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -404,7 +405,7 @@ test('breakdownFromModelUsage: sums input/cacheCreate/output/cacheRead across mo
     'claude-sonnet-4-6': { inputTokens: 100, cacheCreationInputTokens: 200, cacheReadInputTokens: 1000, outputTokens: 50 },
     'claude-opus-4-6':   { inputTokens: 10,  cacheCreationInputTokens: 20,  cacheReadInputTokens: 100,  outputTokens: 5 },
   });
-  assert.deepEqual(b, { input: 110, cacheCreate: 220, output: 55, cacheRead: 1100 });
+  assert.deepEqual(b, { input: 110, cacheCreate: 220, cacheCreate1h: 0, output: 55, cacheRead: 1100 });
   assert.equal(sumBreakdown(b), 1485);
 });
 
@@ -412,7 +413,7 @@ test('breakdownFromUsage: maps snake_case fields to breakdown shape', () => {
   const b = breakdownFromUsage({
     input_tokens: 1, cache_creation_input_tokens: 2, cache_read_input_tokens: 3, output_tokens: 4,
   });
-  assert.deepEqual(b, { input: 1, cacheCreate: 2, output: 4, cacheRead: 3 });
+  assert.deepEqual(b, { input: 1, cacheCreate: 2, cacheCreate1h: 0, output: 4, cacheRead: 3 });
 });
 
 test('computeSummary: returns tokensBreakdown alongside tokensTotal', () => {
@@ -430,7 +431,7 @@ test('computeSummary: returns tokensBreakdown alongside tokensTotal', () => {
   const { tokensTotal, tokensBreakdown } = computeSummary(events);
   // Legacy headline excludes cache_read.
   assert.equal(tokensTotal, 350);
-  assert.deepEqual(tokensBreakdown, { input: 100, cacheCreate: 200, output: 50, cacheRead: 9999 });
+  assert.deepEqual(tokensBreakdown, { input: 100, cacheCreate: 200, cacheCreate1h: 0, output: 50, cacheRead: 9999 });
 });
 
 test('computeSummary: user_message events mark spawn boundaries (regression: cost-decrease heuristic absorbed small spawns)', () => {
@@ -516,4 +517,99 @@ test('phases group multiple task_started for the same task_id (SendMessage resum
   const unknown = agentPhases.filter((p) => p.agentType === 'unknown');
   assert.equal(unknown.length, 0, 'no unknown phases');
   assert.ok((devPhases[0].activations || []).length >= 2, 'developer should have >=2 activations');
+});
+
+// ----- summarizeFromPhases: deduped single-source-of-truth summary -----
+
+test('summarizeFromPhases: sums per-model deduped breakdowns; cost = Σ costFromBreakdown', () => {
+  // Two phases, same model. The summary breakdown is the per-component sum and
+  // the summary cost equals costFromBreakdown applied to that summed breakdown
+  // (linear), which also equals the sum of the per-phase costs.
+  const phases = [
+    { tokensByModel: [{ model: 'claude-opus-4-8', breakdown: { input: 1_000_000, cacheCreate: 0, cacheRead: 0, output: 0 } }] },
+    { tokensByModel: [{ model: 'claude-opus-4-8', breakdown: { input: 0, cacheCreate: 0, cacheRead: 0, output: 1_000_000 } }] },
+  ];
+  const s = summarizeFromPhases(phases);
+  assert.deepEqual(s.tokensBreakdown, { input: 1_000_000, cacheCreate: 0, cacheCreate1h: 0, output: 1_000_000, cacheRead: 0 });
+  // Opus: $5/M input + $25/M output = $30.
+  assert.equal(s.costUsd, 30);
+  assert.equal(s.tokensByModel.length, 1);
+  assert.equal(s.tokensByModel[0].costUsd, 30);
+});
+
+test('summarizeFromPhases: a message.id counted once per phase is counted once in the summary', () => {
+  // The per-phase enrichment already dedups by message.id, so each phase
+  // breakdown reflects unique messages. A repeated message.id across the
+  // synthetic transcript would have been folded into ONE phase contribution;
+  // summarizeFromPhases must not re-inflate it. Model the deduped result of two
+  // phases — the second carries the SAME tokens a naive (non-deduped) summer
+  // would have double-counted, but here it appears exactly once.
+  const dedupedPerPhase = { input: 100, cacheCreate: 50, cacheRead: 200, output: 25 };
+  const phases = [
+    { tokensByModel: [{ model: 'claude-sonnet-4-6', breakdown: dedupedPerPhase }] },
+  ];
+  const once = summarizeFromPhases(phases);
+  // Counting the same phase twice (the bug) would double every component.
+  const twice = summarizeFromPhases([phases[0], phases[0]]);
+  assert.deepEqual(once.tokensBreakdown, { input: 100, cacheCreate: 50, cacheCreate1h: 0, output: 25, cacheRead: 200 });
+  assert.equal(twice.tokensBreakdown.input, 200);
+  assert.ok(Math.abs(twice.costUsd - 2 * once.costUsd) < 1e-9);
+});
+
+test('aggregateSession: summary equals Σ phases (orchestrator + subagents) — no calibrate rescale', async () => {
+  // After removing calibratePhaseCostsToSdk, the summary IS the sum of the
+  // per-phase deduped breakdowns, so summary.costUsd === Σ phase.costUsd and
+  // summary.tokensByModel === the per-model sum across phases, by construction.
+  const out = await aggregateSession({
+    sessionLogPath: fx('parallel-two-teams.jsonl'),
+    hooksLogPath: null,
+    sessionId: 'sess-parallel',
+  });
+  const phaseCost = out.phases.reduce((s, p) => s + (p.costUsd || 0), 0);
+  assert.ok(Math.abs(out.summary.costUsd - phaseCost) < 1e-9,
+    `summary $${out.summary.costUsd} should equal Σ phases $${phaseCost}`);
+  // Per-model: summing each phase's per-model cost must match summary per model.
+  const byModel = new Map();
+  for (const p of out.phases) for (const r of p.tokensByModel || []) {
+    byModel.set(r.model, (byModel.get(r.model) || 0) + (r.costUsd || 0));
+  }
+  for (const r of out.summary.tokensByModel) {
+    assert.ok(Math.abs(r.costUsd - (byModel.get(r.model) || 0)) < 1e-9,
+      `summary model ${r.model} $${r.costUsd} should equal Σ phases $${byModel.get(r.model)}`);
+  }
+});
+
+test('costFromBreakdown: claude-opus-4-8 is priced at the Opus tier, not sonnet', () => {
+  const b = { input: 1_000_000, cacheCreate: 0, cacheRead: 0, output: 1_000_000 };
+  const opus48 = costFromBreakdown('claude-opus-4-8', b);
+  const opus47 = costFromBreakdown('claude-opus-4-7', b);
+  const sonnet = costFromBreakdown('claude-sonnet-4-6', b);
+  // Opus 4.8 must match the existing Opus tier (4.7) exactly...
+  assert.equal(opus48, opus47, 'opus-4-8 should equal opus-4-7 cost');
+  // ...and must NOT silently fall back to the cheaper sonnet rate.
+  assert.notEqual(opus48, sonnet, 'opus-4-8 must not be priced as sonnet');
+  // Opus tier: $5/M input + $25/M output = $30 for this breakdown.
+  assert.equal(opus48, 30);
+});
+
+test('breakdownFromUsage: captures 1h cache writes from cache_creation TTL split', () => {
+  const b = breakdownFromUsage({
+    input_tokens: 10, cache_creation_input_tokens: 100,
+    cache_read_input_tokens: 0, output_tokens: 5,
+    cache_creation: { ephemeral_5m_input_tokens: 60, ephemeral_1h_input_tokens: 40 },
+  });
+  // cacheCreate stays the TOTAL of all writes; cacheCreate1h is the 1h sub-portion
+  assert.deepEqual(b, { input: 10, cacheCreate: 100, cacheCreate1h: 40, output: 5, cacheRead: 0 });
+});
+
+test('costFromBreakdown: 1h cache writes are billed at 2x input, not 1.25x', () => {
+  // 1M tokens written to the 1h cache on sonnet: $6/MTok, not $3.75/MTok
+  const all1h = { input: 0, cacheCreate: 1_000_000, cacheCreate1h: 1_000_000, cacheRead: 0, output: 0 };
+  assert.equal(costFromBreakdown('claude-sonnet-4-6', all1h), 6);
+  // Mixed: 600k at 5m (1.25x) + 400k at 1h (2x) on sonnet = 0.6*3.75 + 0.4*6 = $4.65
+  const mixed = { input: 0, cacheCreate: 1_000_000, cacheCreate1h: 400_000, cacheRead: 0, output: 0 };
+  assert.ok(Math.abs(costFromBreakdown('claude-sonnet-4-6', mixed) - 4.65) < 1e-9);
+  // Breakdowns without the field (legacy) keep the flat 1.25x pricing
+  const legacy = { input: 0, cacheCreate: 1_000_000, cacheRead: 0, output: 0 };
+  assert.equal(costFromBreakdown('claude-sonnet-4-6', legacy), 3.75);
 });
