@@ -50,7 +50,12 @@ The orchestrator parses this line by regex. Any other format is treated as `FAIL
    ```
    Resolve any conflicts, then `git add` + `git rebase --continue`. Commit the result if needed.
    Only proceed once `git status` shows a clean tree on top of the latest `session/<SESSION_SHORT_ID>`.
-5. **Emit OUTPUT CONTRACT** — your very last line of output:
+5. **Self-check before stopping (MANDATORY)** — quality-reviewer and test-validator are dispatched after you stop; a BLOCKED or REJECTED verdict triggers a full retry cycle (an order of magnitude more expensive than this check). Walk this list and fix anything missing BEFORE you emit the OUTPUT CONTRACT; these are the historically most common blocking causes:
+   - **Acceptance criteria**: re-read every item in the ticket JSON; mark each `[PASS]` mentally against your diff. Any not covered → implement it now.
+   - **e2e spec**: ticket touches UI / filter / form / interaction → an `e2e/*.spec.ts` file MUST exist in your diff (unless acceptance criteria explicitly waive it). Missing spec is the #1 REJECTED verdict.
+   - **i18n**: every new user-facing label/string has keys in BOTH `src/components/atomic-crm/providers/commons/englishCrmMessages.ts` AND `frenchCrmMessages.ts`. Missing keys are the #1 BLOCKED verdict. Verify with one Grep per new key.
+   - **Schema**: if the diff touches `supabase/schemas/01_tables.sql`, the matching view in `03_views.sql` is updated with the new column appended LAST (never reordered).
+6. **Emit OUTPUT CONTRACT** — your very last line of output:
    ```
    DONE: branch=<BRANCH_NAME> commit=<short_sha> files=[<comma-separated modified paths, relative to repo root>]
    ```

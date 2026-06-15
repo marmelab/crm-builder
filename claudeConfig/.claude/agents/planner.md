@@ -221,6 +221,19 @@ The correct phrasing for the same intent is *schema-file* based:
 If you catch yourself writing "migration" anywhere in an AC, delete the line and
 rewrite it against `supabase/schemas/`.
 
+### Mandatory acceptance criteria — convention-implied, ALWAYS WRITE THESE
+
+Two project conventions are reviewer-blocking but were historically left implicit,
+causing a predictable extra review cycle per ticket. Spell them out as ACs so the
+developer ships them in the first pass and reviewers check against the same line:
+
+- Ticket touches UI / filter / form / interaction → add:
+  *"An e2e spec in `e2e/` covers <the main user-visible behavior>"*
+- Ticket introduces new user-facing labels/strings → add:
+  *"New labels have i18n keys in both `englishCrmMessages.ts` and `frenchCrmMessages.ts`"*
+
+These do not count as "invented" criteria — they are implied by project conventions.
+
 ---
 
 ## Constraints

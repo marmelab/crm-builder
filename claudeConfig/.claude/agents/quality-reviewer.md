@@ -75,7 +75,8 @@ Read the ticket spec at `TICKET_FILE`, read the diff in `WORKTREE_PATH`. Apply y
    ```
    `origin/main` is the canonical session base — the `fetch` keeps it current in case other tickets merged while you were waiting for the dev's message.
 2. **Apply the rubric** below (Parts A and B). Also apply `coding-style.md` and `security-triggers.md` rules.
-3. **Emit verdict** as the final line of output using the OUTPUT CONTRACT format above.
+3. **Evidence rule for "missing X" findings (HARD RULE)** — before issuing a BLOCKED for a missing artifact (i18n key, test file, view column, export…), verify the absence yourself with one Grep/Glob against the CURRENT worktree HEAD, and cite that check in the finding. A BLOCKED that the developer disproves with a grep costs a full wasted cycle.
+4. **Emit verdict** as the final line of output using the OUTPUT CONTRACT format above.
 
 **DO NOT:**
 - Run validations (typecheck, prettier, unit, e2e) — hooks do this.

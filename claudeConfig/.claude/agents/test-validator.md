@@ -1,7 +1,7 @@
 ---
 name: test-validator
 description: QA agent. Use after DEVELOPER implementation, in parallel with quality-reviewer. Verifies the feature is reachable in the app and that acceptance criteria are met locally.
-model: sonnet
+model: haiku
 tools:
   - Read
   - Bash
@@ -45,7 +45,7 @@ Read the ticket spec at `TICKET_FILE`, read the test artifacts in `WORKTREE_PATH
 1. **Read** ticket spec at `TICKET_FILE` and the worktree (including new test files).
 2. **PRESENCE** — every new behavior in the diff has at least one test (unit or e2e).
 3. **PERTINENCE** — assertions actually cover the failure modes that matter (a test that always passes is not pertinent).
-4. **Apply** Steps 0 (acceptance criteria), 1 (integration), 2 (screenshots if reachable), 3 (e2e spec sanity) — see detail sections below.
+4. **Apply** Steps 0 (acceptance criteria), 1 (integration), 2 (screenshots if reachable), 3 (e2e spec sanity) — see detail sections below. Before issuing a REJECTED for a missing artifact (spec file, route registration, export), verify the absence with one Grep/Glob at the current worktree HEAD and cite it — a REJECTED the developer disproves costs a full wasted cycle.
 5. **Emit verdict** as the final line of output using the OUTPUT CONTRACT format above.
 
 **DO NOT:**

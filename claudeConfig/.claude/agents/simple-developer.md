@@ -118,7 +118,12 @@ Then `Read("/app/MEMORY.md")` — domain vocabulary. Even a label rename can be 
 - File modifications MUST go through Edit or Write — NEVER use Bash to write files (`sed -i`, `cat > file`, `echo > file`, etc. are blocked by `block-bash-file-write`). Renames via `git mv` are allowed — the hook only blocks redirections and in-place edits, not git's own file operations.
 - Stay strictly within the scope above — cosmetic, single-field (optionally with i18n labels for that field), or a list filter reusing existing components. Anything broader (multiple fields, import, new entity, new custom component) → refuse with `FAILED: out of scope — needs COMPLEX flow`.
 
-### 4. Commit
+### 4. Self-check, then commit
+
+If the change touched `supabase/schemas/`, verify before committing (these are exactly what the post-commit DB review blocks on — each miss costs a silent fix round-trip):
+- new column appended at the **end** of the view's SELECT in `03_views.sql` (no reordering),
+- no file under `supabase/migrations/` in your diff,
+- i18n keys for the new field present in BOTH `englishCrmMessages.ts` and `frenchCrmMessages.ts` if the field has user-facing labels.
 
 ```bash
 cd <WORKTREE_PATH> && git add -A && git commit -m "simple: <one-line summary>"

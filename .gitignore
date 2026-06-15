@@ -17,3 +17,6 @@ chat-service/tests/results/run-*.json
 # Host-side git worktrees (separate from /worktrees inside docker)
 /.worktrees/
 /.claude/commands*/
+
+# Local clone of the CRM source (synced into the image, never committed here)
+/crm-source/

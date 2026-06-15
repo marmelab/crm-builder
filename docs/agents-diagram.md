@@ -56,7 +56,7 @@ flowchart TD
  CASE -->|"no tickets\nno worktrees"| RETRY["Re-enter #1 classification\nwith original request"]
 
  CASE -->|">=1 ticket status != merged"| H_WIPE{{Pre/TeamCreate\nteamcreate-wipe-orphan.sh}}:::hook --> RC_TEAM["TeamCreate tickets-SID"]
- RC_TEAM --> RC_DISP["Re-dispatch for each non-merged ticket:\n- developer-TASK-XXX\n- quality-reviewer-TASK-XXX\n- test-validator-TASK-XXX\n+ merger (shared)\nGO prompt includes RESUME flag"]
+ RC_TEAM --> RC_DISP["Re-dispatch for each non-merged ticket:\n- developer-TASK-XXX\n- quality-reviewer-TASK-XXX\n- test-validator-TASK-XXX\n+ merger (shared)\nspawn prompt includes RESUME flag"]
  RC_DISP --> RC_WAIT["STATE C - passive wait\n(same as normal COMPLEX wave)\n-> #8 COMPLEX path from STATE C"]
 
  CASE -->|"all merged\nnot yet promoted"| RC_PROMOTE["Skip to Stage B\n-> #8 COMPLEX path from STATE D"]:::promote
@@ -254,7 +254,7 @@ flowchart TD
         TEAM["TeamCreate  tickets-SID\n3N+1 members total"]
         H_WS{{SubagentStart x N\nsetup-worktree.sh\ncreates worktrees/SID/TASK-XXX + hard-links node_modules}}:::hook
         DISPATCH["Dispatch per ticket (xN) + 1 shared merger\n---\n  developer-TASK-XXX        (Opus)   <- implements\n  quality-reviewer-TASK-XXX (Sonnet) <- code + security review\n  test-validator-TASK-XXX   (Haiku)  <- wiring + Playwright\n---\n  merger  (Haiku, shared singleton)   <- merges serially"]
-        GO["SendMessage GO -> each developer\n(worktree path . branch . counterpart names)\nreviewer + test-validator idle until contacted"]
+        GO["Spawn prompt = GO\n(worktree path . branch . counterpart names in each dispatch)\nreviewer + test-validator idle until contacted"]
         STATE_C["STATE C - orchestrator passive\nmonitors SendMessage from merger:\n'merged TASK-XXX, commit=sha'\ncounts confirmations"]
         DONE_Q{All N merges\nconfirmed?}:::decision
         SHUTDOWN["STATE D  -  wave teardown\nSendMessage shutdown_request -> all 3N+1 members\nwait for shutdown_approved (or 60s timeout)"]
@@ -286,12 +286,12 @@ sequenceDiagram
     participant TV as test-validator-TASK-XXX
     participant MG as merger (shared)
 
-    Note over O: TeamCreate done - all agents idle
+    Note over O: TeamCreate + dispatch - spawn prompts carry the GO
 
-    O->>D:  GO (worktree path, branch, reviewer+validator names)
-    O->>QR: GO (idle - wait for "ready, please review")
-    O->>TV: GO (idle - wait for "ready, please validate")
-    O->>MG: GO (idle - wait for "ready: TASK-XXX")
+    O->>D:  spawn prompt (worktree path, branch, reviewer+validator names) - starts immediately
+    O->>QR: spawn prompt (idle - wait for "ready, please review")
+    O->>TV: spawn prompt (idle - wait for "ready, please validate")
+    O->>MG: spawn prompt (idle - wait for "ready: TASK-XXX")
 
     Note over D: SubagentStart fires -> setup-worktree.sh<br/>creates worktrees/SID/TASK-XXX + hard-links node_modules
 
