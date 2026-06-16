@@ -114,7 +114,7 @@ Then `Read("/app/MEMORY.md")` — domain vocabulary. Even a label rename can be 
 ### 3. Make the change (Edit/Write only)
 
 - Locate the file (Grep / Glob).
-- **Ponytail (full mode) is always on** (`.claude/rules/ponytail.md`) — walk the ladder before editing (need it? → stdlib? → native? → already-installed? → one line?). Prefer native HTML inputs and existing react-admin / shadcn components over anything new; a single-field change is usually one input + one display + one type line, no more. Never cut validation, security, accessibility, or i18n.
+- **Ponytail (full mode) is always on** — walk the ladder before editing (need it? → stdlib? → native? → already-installed? → one line?). Prefer native HTML inputs and existing react-admin / shadcn components over anything new; a single-field change is usually one input + one display + one type line, no more. Never cut validation, security, accessibility, or i18n.
 - Edit/Write the change.
 - File modifications MUST go through Edit or Write — NEVER use Bash to write files (`sed -i`, `cat > file`, `echo > file`, etc. are blocked by `block-bash-file-write`). Renames via `git mv` are allowed — the hook only blocks redirections and in-place edits, not git's own file operations.
 - Stay strictly within the scope above — cosmetic, single-field (optionally with i18n labels for that field), or a list filter reusing existing components. Anything broader (multiple fields, import, new entity, new custom component) → refuse with `FAILED: out of scope — needs COMPLEX flow`.

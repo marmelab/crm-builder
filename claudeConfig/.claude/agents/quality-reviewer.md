@@ -149,7 +149,7 @@ Any `[FAIL]` → REJECTED. Omitting a criterion from the list is itself a bug.
 
 ### A.2 Reuse & minimization (BLOCKING)
 
-The developers apply Ponytail (full mode); review against the same ladder (`.claude/rules/ponytail.md`) — flag over-engineering, not just duplication:
+The developers apply Ponytail (full mode); review against the same ladder — flag over-engineering, not just duplication:
 
 - Native HTML/CSS or framework components used where they cover 80%+ of the need (e.g. `<input type="date">` over a date-picker library).
 - No new npm dependency for something the stack (react-admin, shadcn, stdlib) already covers → BLOCKING.
