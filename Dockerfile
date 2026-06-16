@@ -165,6 +165,24 @@ RUN cp -r /root/.claude /home/developer/.claude \
 RUN su developer -c 'HOME=/home/developer claude plugin marketplace add DietrichGebert/ponytail \
     && HOME=/home/developer claude plugin install ponytail@ponytail'
 
+# ── Caveman plugin — bake the cache into the image ────────────
+# Output-compression plugin (caveman@caveman, JuliusBrussee/caveman): trims
+# prose tokens (~filler/hedging) while keeping code, CLI commands and error
+# strings verbatim. Declared in settings.json (extraKnownMarketplaces +
+# enabledPlugins) and baked here for the same reason as Ponytail above — the
+# runtime PTY orchestrator must never clone from GitHub nor stall on an install
+# prompt. Like Ponytail, its SessionStart/UserPromptSubmit hooks reach ONLY the
+# main session (chat-orchestrator), NOT the Agent-dispatched dev/reviewer
+# subagents — and that gap is desirable here: those subagents emit regex-parsed
+# contract lines (DONE:/APPROVED/REJECTED:), so caveman is deliberately NOT
+# inlined into them (the opposite of Ponytail, which governs code not output).
+# CAVEMAN_DEFAULT_MODE=lite keeps the orchestrator's user-facing French chat
+# readable (drops filler/hedging, keeps full sentences + structural <…> tags);
+# bump to `full` for more aggressive compression at the cost of terser prose.
+ENV CAVEMAN_DEFAULT_MODE=lite
+RUN su developer -c 'HOME=/home/developer claude plugin marketplace add JuliusBrussee/caveman \
+    && HOME=/home/developer claude plugin install caveman@caveman'
+
 # ── Stage source for named volume /app ────────────────────────
 # crm-app:/app is a named volume — the mount hides any content baked at /app,
 # so we relocate build artifacts here. entrypoint.sh copies them into /app on
