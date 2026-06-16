@@ -1,0 +1,32 @@
+# ─────────────────────────────────────────────────────────────
+#  Headroom experiment override (throwaway — branch feat/headroom).
+#
+#  Routes the instance's `claude` spawns through a Headroom
+#  context-compression proxy to measure the token gain.
+#
+#  The proxy runs as a standalone container published on the host
+#  (docker run -p 8787:8787 ...), NOT as a compose service: the
+#  multi-instance override forces `network_mode: bridge`, which has
+#  no service-name DNS, so we reach the host via host-gateway.
+#
+#  Usage (layer on top of the multi override):
+#    INSTANCE=headroom PORT_CRM=5177 PORT_CHAT=8087 \
+#      IMAGE=atomic-crm-dev:headroom \
+#      docker compose -p headroom \
+#        -f docker-compose.yml \
+#        -f docker-compose.multi.yml \
+#        -f docker-compose.headroom.yml up -d
+#
+#  Toggle off by simply dropping this -f file (or unsetting the env).
+# ─────────────────────────────────────────────────────────────
+
+services:
+
+  crm-app:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      # chat-service spreads process.env into every `claude` spawn
+      # (pty-session.js), so this transparently routes all agent
+      # traffic — orchestrator + subagents — through the proxy.
+      - ANTHROPIC_BASE_URL=http://host.docker.internal:8787

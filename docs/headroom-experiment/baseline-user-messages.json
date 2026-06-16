@@ -1,0 +1,54 @@
+[
+  {
+    "content": "FULL_SETUP",
+    "display": "🗺️  Set up my CRM from scratch"
+  },
+  {
+    "content": "I run LocaForce, a small equipment rental company. Our brand uses bold orange (#F97316) and dark charcoal (#1C1C1E) with a Montserrat font — sturdy and industrial. \n\nMy fleet includes tools and machinery I rent to individuals and construction companies (scaffolding, compressors, concrete mixers, aerial lifts, etc.). Each piece of equipment has its own record: category, model, serial number, current status (available, rented, under maintenance, decommissioned), total usage hours, and purchase date. \n\nRentals are the core of my business: a rental links a client to one or more pieces of equipment, with a start date, expected return date, actual return date, daily/weekly rate, deposit amount, and return condition. \nWhen equipment comes back damaged or reaches a maintenance threshold (by usage hours or scheduled interval), I create a maintenance job: description of work needed, parts replaced, cost, and a status (pending → in progress → done). \n\nOn the dashboard I need equipment availability by category, active rentals overdue for return, and equipment currently blocked for maintenance. A client's profile should show their full rental history and any damage incidents they caused — I also want to flag clients who have caused damage before.",
+    "display": "I run LocaForce, a small equipment rental company. Our brand uses bold orange (#F97316) and dark charcoal (#1C1C1E) with a Montserrat font — sturdy and industrial. \n\nMy fleet includes tools and machinery I rent to individuals and construction companies (scaffolding, compressors, concrete mixers, aerial lifts, etc.). Each piece of equipment has its own record: category, model, serial number, current status (available, rented, under maintenance, decommissioned), total usage hours, and purchase date. \n\nRentals are the core of my business: a rental links a client to one or more pieces of equipment, with a start date, expected return date, actual return date, daily/weekly rate, deposit amount, and return condition. \nWhen equipment comes back damaged or reaches a maintenance threshold (by usage hours or scheduled interval), I create a maintenance job: description of work needed, parts replaced, cost, and a status (pending → in progress → done). \n\nOn the dashboard I need equipment availability by category, active rentals overdue for return, and equipment currently blocked for maintenance. A client's profile should show their full rental history and any damage incidents they caused — I also want to flag clients who have caused damage before."
+  },
+  {
+    "content": "3 people",
+    "display": "3 people"
+  },
+  {
+    "content": "one per piece",
+    "display": "one per piece"
+  },
+  {
+    "content": "all yes",
+    "display": "all yes"
+  },
+  {
+    "content": "plain filterable list",
+    "display": "plain filterable list"
+  },
+  {
+    "content": "i'm admin, other limited access",
+    "display": "i'm admin, other limited access"
+  },
+  {
+    "content": "no deletion",
+    "display": "no deletion"
+  },
+  {
+    "content": "no integrations",
+    "display": "no integrations"
+  },
+  {
+    "content": "automatic",
+    "display": "automatic"
+  },
+  {
+    "content": "ok",
+    "display": "ok"
+  },
+  {
+    "content": "yes",
+    "display": "yes"
+  },
+  {
+    "content": "Yes, save the changes",
+    "display": "Yes, save the changes"
+  }
+]
