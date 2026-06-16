@@ -65,11 +65,16 @@ No host port mapping, no Dockerfile change, removed at the end.
 - **Only code change:** in `pty-session.js` where the spawn env is built (~line 74), if
   `process.env.HEADROOM_PROXY_URL` is set, add `ANTHROPIC_BASE_URL: process.env.HEADROOM_PROXY_URL`
   to the spawn env. Opt-in, reversible, one branch.
-- **Workload — replay an existing session.** Pick a representative recorded session (COMPLEX,
-  large multi-turn context) as the fixed base. Replay its initial user prompt(s) through a
-  **fresh session** on each arm (direct vs proxied). True deterministic replay of an interactive
-  agent is impossible (LLM nondeterminism), so run **N runs per arm** and compare aggregates.
-  Fresh sessions each time keep cache state comparable across arms.
+- **Workload — replay existing sessions.** Two fixed bases, both from `crm-builder/sessions/`:
+  - **FULL_SETUP:** `1fd0124b-68ec-41a7-b244-481e0bd8d6ff` — "Business setup interview", 76 messages,
+    8 tickets, 1.28 MB `log.jsonl`. Large from-scratch interview context.
+  - **COMPLEX:** `b96229ae-2713-47db-b345-f2f9731a8991` — "Add task priority and sorting", 53 messages,
+    3 tickets. A feature-add change request on an existing CRM.
+
+  Replay each base's initial user prompt(s) through a **fresh session** on each arm (direct vs
+  proxied). True deterministic replay of an interactive agent is impossible (LLM nondeterminism),
+  so run **N runs per arm** (e.g. 3) and compare aggregates. Fresh sessions each time keep cache
+  state comparable across arms.
 - **Compare** via `GET /api/stats`: input tokens, **cache_read**, **cache_creation**, output,
   synthetic USD, wall-clock. Key signal: does `cache_creation` balloon (cache broken)?
 
@@ -82,14 +87,13 @@ No host port mapping, no Dockerfile change, removed at the end.
   ratio**; it ignores the cache interaction, so it is an **upper bound** on the real gain under
   caching, which is likely lower.
 
-## Where to get the session to replay
+## Where to get the sessions to replay
 
-The worktree's host `sessions/` is **empty** — recorded transcripts live in the container's volume
-(`~/.claude/projects/…`), only present if the stack has been run. So either:
-- pick an existing session from a previously-run container, or
-- generate one COMPLEX session once to serve as the replay base.
-
-This selection is the first concrete step of whichever phase we land in.
+Both chosen sessions exist under `crm-builder/sessions/` (the main checkout, not the empty
+`feat-headroom` worktree). Each carries its CLI transcript at `claude/transcript.jsonl` plus
+`claude/tool-results/*.txt` — this is the captured real context that **Phase C** feeds to
+Headroom's `/v1/compress`. For **Phase A**, the initial user prompt(s) are extracted from the
+session's `log.jsonl` and replayed in fresh sessions.
 
 ## Deliverable & metrics
 
