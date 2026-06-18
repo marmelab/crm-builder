@@ -66,23 +66,29 @@ chown -R developer:developer "${CLAUDE_DIR}" "${AUTH_DIR}" 2>/dev/null || true
 # environment (a brand-new auth volume or a re-login), and the PTY send path
 # can't navigate their menus — it types the user's message into the dialog
 # instead of choosing an option, so the turn hangs with no transcript:
-#   1. "Do you trust the files in this folder?" → projects["/app"].hasTrustDialogAccepted
-#   2. "Bypass Permissions mode … Yes, I accept" → bypassPermissionsModeAccepted
-# (1) is per-project keyed on CWD (/app); (2) is global. --dangerously-skip-permissions
-# triggers (2) but does NOT pre-accept it.
+#   1. "Do you trust the files in this folder?"  → .claude.json projects["/app"].hasTrustDialogAccepted
+#   2. "Bypass Permissions mode … Yes, I accept" → settings.json skipDangerousModePermissionPrompt
+# (1) is per-project keyed on CWD (/app), stored in .claude.json. (2) is global
 CLAUDE_DIR="${CLAUDE_DIR}" node -e '
   const fs = require("fs"); const p = process.env.CLAUDE_DIR + "/.claude.json";
   let c = {}; try { c = JSON.parse(fs.readFileSync(p, "utf8")); } catch {}
   let changed = false;
   if (c.hasCompletedOnboarding !== true) { c.hasCompletedOnboarding = true; changed = true; }
   if (!c.theme) { c.theme = "dark"; changed = true; }
-  if (c.bypassPermissionsModeAccepted !== true) { c.bypassPermissionsModeAccepted = true; changed = true; }
   c.projects = c.projects || {};
   c.projects["/app"] = c.projects["/app"] || {};
   if (c.projects["/app"].hasTrustDialogAccepted !== true) { c.projects["/app"].hasTrustDialogAccepted = true; changed = true; }
   if (changed) fs.writeFileSync(p, JSON.stringify(c));
 ' 2>/dev/null || true
-chown developer:developer "${CLAUDE_DIR}/.claude.json" 2>/dev/null || true
+CLAUDE_DIR="${CLAUDE_DIR}" node -e '
+  const fs = require("fs"); const p = process.env.CLAUDE_DIR + "/settings.json";
+  let s = {}; try { s = JSON.parse(fs.readFileSync(p, "utf8")); } catch {}
+  if (s.skipDangerousModePermissionPrompt !== true) {
+    s.skipDangerousModePermissionPrompt = true;
+    fs.writeFileSync(p, JSON.stringify(s, null, 2));
+  }
+' 2>/dev/null || true
+chown developer:developer "${CLAUDE_DIR}/.claude.json" "${CLAUDE_DIR}/settings.json" 2>/dev/null || true
 
 # Persist: mirror login files CLAUDE_DIR → AUTH_DIR whenever they change (token
 # refresh or fresh `make claude` login). Survives `exec` below as an orphan under
