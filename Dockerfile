@@ -76,7 +76,16 @@ RUN npm install -g wrangler@${WRANGLER_VERSION}
 # GitHub serves a zip for any ref at /archive/<REF>.zip. It extracts into
 # a single folder atomic-crm-<ref>; we move that one folder rather than
 # hardcoding its name, so the same step works for any ref.
+#
+# CACHEBUST: Docker can't see that the URL's content changed, so a plain rebuild
+# reuses the cached zip even when `main` moved. Pass a changing value to force a
+# re-download WITHOUT --no-cache (which would also redo apt/npm above):
+#   docker build --build-arg CACHEBUST=$(date +%s) .   (see `make build-latest`)
+# It only invalidates this layer onward — npm install etc. below must re-run
+# anyway since the sources changed. A SHA in ATOMIC_CRM_REF busts the cache on
+# its own, so CACHEBUST is only needed for the moving `main` default.
 ARG ATOMIC_CRM_REF=main
+ARG CACHEBUST=0
 RUN wget -q "https://github.com/marmelab/atomic-crm/archive/${ATOMIC_CRM_REF}.zip" \
     -O /tmp/atomic-crm.zip \
     && unzip -q /tmp/atomic-crm.zip -d /tmp \

@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help build build-instance up up-full up-instance down down-instance wipe-instance wipe wipe-supabase restart restart-full logs chat-logs chat-errors shell claude test test-unit test-smoke bench bench-update clean-sessions reset \
+.PHONY: help build build-latest build-instance up up-full up-instance down down-instance wipe-instance wipe wipe-supabase restart restart-full logs chat-logs chat-errors shell claude test test-unit test-smoke bench bench-update clean-sessions reset \
         start demo full stop kill image log tail bash exec tests smoke clean archive reload
 
 # Resolve the target container for claude/shell. Prefer INSTANCE=<name>;
@@ -30,8 +30,11 @@ endef
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*##"; printf "Usage: make <target>\n\nTargets:\n"} /^[a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
 
-build: ## Build the atomic-crm-dev Docker image
+build: ## Build the atomic-crm-dev Docker image (uses cache — keeps the last fetched atomic-crm)
 	docker build -t atomic-crm-dev .
+
+build-latest: ## Build, forcing a re-fetch of the latest atomic-crm main (busts only the download layer onward)
+	docker build --build-arg CACHEBUST=$$(date +%s) -t atomic-crm-dev .
 
 build-instance: ## Build a uniquely-tagged image for an instance: make build-instance INSTANCE=wt1
 	@if [ -z "$(INSTANCE)" ]; then \
