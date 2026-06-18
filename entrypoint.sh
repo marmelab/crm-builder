@@ -61,12 +61,25 @@ chown -R developer:developer "${CLAUDE_DIR}" "${AUTH_DIR}" 2>/dev/null || true
 # leaves the orchestrator stuck on the login-method/theme picker — no transcript,
 # no Stop sentinel, every session hangs to the 120 s silence timeout. Idempotent;
 # the mirror loop below propagates the change back to AUTH_DIR.
+#
+# Two more interactive gates would ALSO trap the orchestrator PTY on a fresh
+# environment (a brand-new auth volume or a re-login), and the PTY send path
+# can't navigate their menus — it types the user's message into the dialog
+# instead of choosing an option, so the turn hangs with no transcript:
+#   1. "Do you trust the files in this folder?" → projects["/app"].hasTrustDialogAccepted
+#   2. "Bypass Permissions mode … Yes, I accept" → bypassPermissionsModeAccepted
+# (1) is per-project keyed on CWD (/app); (2) is global. --dangerously-skip-permissions
+# triggers (2) but does NOT pre-accept it.
 CLAUDE_DIR="${CLAUDE_DIR}" node -e '
   const fs = require("fs"); const p = process.env.CLAUDE_DIR + "/.claude.json";
   let c = {}; try { c = JSON.parse(fs.readFileSync(p, "utf8")); } catch {}
   let changed = false;
   if (c.hasCompletedOnboarding !== true) { c.hasCompletedOnboarding = true; changed = true; }
   if (!c.theme) { c.theme = "dark"; changed = true; }
+  if (c.bypassPermissionsModeAccepted !== true) { c.bypassPermissionsModeAccepted = true; changed = true; }
+  c.projects = c.projects || {};
+  c.projects["/app"] = c.projects["/app"] || {};
+  if (c.projects["/app"].hasTrustDialogAccepted !== true) { c.projects["/app"].hasTrustDialogAccepted = true; changed = true; }
   if (changed) fs.writeFileSync(p, JSON.stringify(c));
 ' 2>/dev/null || true
 chown developer:developer "${CLAUDE_DIR}/.claude.json" 2>/dev/null || true
@@ -306,15 +319,6 @@ if [ -d /app/.git ]; then
   ' || echo -e "${YELLOW}Could not commit MEMORY.md (non-fatal)${NC}"
 fi
 
-# Disable atomic-crm project's PostToolUse format-file.sh hook — replaced by a
-# SubagentStop prettier hook in our crm-builder config. The PostToolUse variant
-# caused an edit/prettier loop (developer edits → hook reformats → developer
-# re-reads different bytes → confusion). The Stop-time hook checks cleanly
-# once, fails loudly if not clean, and lets the developer batch-fix with
-# `npm run prettier:apply` if needed.
-if [ -f /app/.claude/settings.json ]; then
-  printf '{\n  "hooks": {}\n}\n' > /app/.claude/settings.json
-fi
 
 cd ${APP_DIR}
 
