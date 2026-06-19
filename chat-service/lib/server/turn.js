@@ -1,4 +1,5 @@
 import { on } from 'node:events';
+import { readFile, unlink } from 'node:fs/promises';
 import { LOG_DIR } from './config.js';
 import { broadcast, sendStats } from './ws-bus.js';
 import { runtimes, transitionState, noteRateLimit, cancelIdleTeardown } from './runtime.js';
@@ -145,49 +146,56 @@ function applyAndStripSessionTitle(runtime, text) {
   return stripped;
 }
 
-// POST-DEV satisfaction widget. The orchestrator embeds a
-// %%ASK_SATISFACTION|<header>|<body>|<yes>|<no>%% marker (all fields optional) in
-// its end-of-flow text; we strip it from the visible message (always) and emit a
-// `satisfaction_ask` widget once per request. In the PTY flow POST-DEV runs as a
-// background turn, so this is applied in BOTH the active loop and the bg listener.
-// Lazy match up to the closing %%: fields may contain single % and any text
-// except newlines; extra '|' beyond the 4th field folds into `no`. Known residual
-// limitation: a literal `%%` inside a field still terminates the match early.
-const SATISFACTION_RE = /\n?%%ASK_SATISFACTION(\|[^\n]*?)?%%\n?/;
+// POST-DEV interactive cartouches (satisfaction question + offer to switch to
+// real data). The orchestrator (AtomicCRM) no longer embeds %%markers%% in its
+// visible text — it replies in the user's language, plain words — and instead
+// drops a one-shot signal file `<session_dir>/ask-state.json` when it enters
+// STATE PD-ASK or STATE PD-LIVE-ASK. We read+delete it at turn settle (mailbox
+// pattern) and emit a `satisfaction_ask` widget. POST-DEV can run as a
+// background turn, so this is consumed in BOTH the active loop and the bg listener.
+const ASK_STATE_FILE = 'ask-state.json';
+const ASK_KINDS = new Set(['satisfaction', 'live-switch']);
 
-// Exported for unit tests.
-export function parseSatisfactionMarker(text) {
-  if (!text) return null;
-  const m = text.match(SATISFACTION_RE);
-  if (!m) return null;
-  const cleanText = (text.slice(0, m.index) + text.slice(m.index + m[0].length)).trim();
-  const fields = m[1] ? m[1].slice(1).split('|') : [];
-  const [header, body, yes, ...rest] = fields;
+// Validate + normalize the orchestrator's ask-state payload. Pure (no fs) so it
+// can be unit-tested. Returns null for anything that isn't a known cartouche.
+export function parseAskState(text) {
+  let raw;
+  try { raw = JSON.parse(text); } catch { return null; }
+  if (!raw || typeof raw !== 'object') return null;
+  const kind = typeof raw.kind === 'string' ? raw.kind.trim() : '';
+  if (!ASK_KINDS.has(kind)) return null;
+  const str = (v) => (typeof v === 'string' && v.trim()) ? v.trim() : undefined;
   return {
-    cleanText,
-    payload: {
-      header: header?.trim() || undefined,
-      body:   body?.trim() || undefined,
-      yes:    yes?.trim() || 'Yes, save the changes',
-      no:     rest.join('|').trim() || 'No, I want to change something',
-    },
+    kind,
+    header: str(raw.header),
+    body:   str(raw.body),
+    yes:    str(raw.yes),
+    no:     str(raw.no),
   };
 }
 
-function applyAndStripSatisfactionAsk(runtime, text) {
-  const parsed = parseSatisfactionMarker(text);
-  if (!parsed) return text;
-  if (!runtime.satisfactionAskSent) {
-    runtime.satisfactionAskSent = true;
-    broadcast(runtime, { type: 'satisfaction_ask', ...parsed.payload });
-    runtime.session?.setSatisfactionAsk(parsed.payload).catch(() => {});
-  }
-  return parsed.cleanText;
+// Read the orchestrator's signal file once and consume it (delete). Broadcasts
+// the cartouche and persists it on meta so a reconnecting client restores it.
+// Returns true when a cartouche was emitted — the caller counts it as turn
+// output, since the cartouche IS the orchestrator's reply (it ends the turn
+// with no plain-text message so the question isn't duplicated).
+// Exported for integration tests.
+export async function applyPendingAsk(runtime, sessionDir) {
+  runtime.askWriteSeen = false; // turn settled — release the text-suppression latch
+  const path = `${sessionDir}/${ASK_STATE_FILE}`;
+  let text;
+  try { text = await readFile(path, 'utf8'); }
+  catch { return false; } // no pending ask
+  await unlink(path).catch(() => {}); // one-shot: consume even if it doesn't parse
+  const payload = parseAskState(text);
+  if (!payload) return false;
+  broadcast(runtime, { type: 'satisfaction_ask', ...payload });
+  runtime.session?.setAsk(payload).catch(() => {});
+  return true;
 }
 
 // Shared text pipeline for the active-turn loop and the background listener:
-// title strip → satisfaction strip → dedup-vs-last → broadcast + recordMessage.
-// Any future %%…%% marker stripped here lands in both paths by construction.
+// title strip → dedup-vs-last → broadcast + recordMessage.
 // `ctx.lastText` carries each path's own dedup state (mutated in place — keep a
 // separate ctx per path so dedup state is never shared). Returns true whenever a
 // non-empty assistant text was produced (even if it was a duplicate and thus not
@@ -195,10 +203,28 @@ function applyAndStripSatisfactionAsk(runtime, text) {
 // debug_raw and processStatsEvent stay at the call sites: their order relative to
 // this text step differs between the two paths (active runs stats after text,
 // background before) and must be preserved.
-function handleOrchestratorText(runtime, event, ctx) {
+// True when this event writes the ask-state cartouche file. The same harness runs
+// standalone in AtomicCRM (no chat-service → the question must be a plain text
+// message) and under chat-service (cartouche). So the orchestrator ALWAYS prints
+// the question as text AND writes ask-state.json; only here do we suppress the
+// now-redundant text so the cartouche (which carries the question) isn't doubled.
+function eventWritesAskState(event) {
+  for (const t of extractToolUses(event)) {
+    if (t.name === 'Write' && /(^|\/)ask-state\.json$/.test(t.input?.file_path || '')) return true;
+  }
+  return false;
+}
+
+export function handleOrchestratorText(runtime, event, ctx) {
   let text = applyAndStripSessionTitle(runtime, extractText(event));
-  text = applyAndStripSatisfactionAsk(runtime, text);
   if (!text) return false;
+  // A turn that writes ask-state.json is a POST-DEV cartouche turn: swallow its
+  // text (the cartouche carries the question). `askWriteSeen` latches for the
+  // rest of the turn — the write may arrive in the same event as the text or a
+  // later one — and is cleared at settle by applyPendingAsk. Counted as output
+  // (return true) so the turn-failed guard doesn't fire on the text-less turn.
+  if (eventWritesAskState(event)) runtime.askWriteSeen = true;
+  if (runtime.askWriteSeen) return true;
   const isDuplicate = text.trim() === ctx.lastText.trim();
   ctx.lastText = text;
   if (!isDuplicate) {
@@ -225,8 +251,7 @@ export async function processMessage(runtime, prompt, opts = {}) {
       // Fresh user turn — drop stale dispatch/task correlation from a prior request.
       runtime.toolMap.clear();
       runtime.taskRole.clear();
-      // Allow one satisfaction widget per request (POST-DEV asks once).
-      runtime.satisfactionAskSent = false;
+      runtime.askWriteSeen = false; // no cartouche carried over from a prior turn
     }
   }
 
@@ -315,6 +340,11 @@ export async function processMessage(runtime, prompt, opts = {}) {
         // Count background turns so the heartbeat treats them as progress and
         // doesn't escalate to a heavyweight resume while the wave is advancing.
         runtime.bgResultCount = (runtime.bgResultCount || 0) + 1;
+        // POST-DEV (satisfaction / live-switch ask) usually settles in a bg turn;
+        // the cartouche is real output even when the turn carries no text.
+        applyPendingAsk(runtime, sessionDir)
+          .then((emitted) => { if (emitted) runtime.sawBgProgressSinceTick = true; })
+          .catch(() => {});
         if (progressBarLive(runtime)) updateProgressBar(runtime);
         // Refresh the cumulative deduped total so the header advances during
         // background turns (most COMPLEX work runs here). Async; sendStats fires
@@ -482,6 +512,10 @@ export async function processMessage(runtime, prompt, opts = {}) {
         runtime.stats.activeAgents = 0;
         runtime.stats.activeAgentIds.clear();
         sendStats(runtime);
+        // A POST-DEV ask ends the turn with no plain-text message (the cartouche
+        // is the reply), so count it as output — otherwise the turn-failed guard
+        // below ("|| !receivedText") would surface a spurious error.
+        if (await applyPendingAsk(runtime, sessionDir)) receivedText = true;
       }
     }
 
