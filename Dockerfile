@@ -70,16 +70,26 @@ RUN npm install -g typescript-language-server typescript
 # ── Wrangler (Cloudflare Workers deploy — used by the frontend deploy phase) ──
 RUN npm install -g wrangler@${WRANGLER_VERSION}
 
-# ── Download project (zip from main branch or SHA) ────────────
-# GitHub automatically generates a zip for any branch at:
-# /archive/refs/heads/BRANCH_NAME.zip
-# The zip extracts into a folder named atomic-crm-main/
-ARG ATOMIC_CRM_REF=95948381e3074f3bdb0ed388a58335c14ac74d26
-ARG ATOMIC_CRM_DIR=atomic-crm-95948381e3074f3bdb0ed388a58335c14ac74d26
+# ── Download project (zip from a branch, tag or SHA) ──────────
+# Defaults to the latest commit on main. Pin a revision at build time:
+#   docker build --build-arg ATOMIC_CRM_REF=<sha|branch|tag> .
+# GitHub serves a zip for any ref at /archive/<REF>.zip. It extracts into
+# a single folder atomic-crm-<ref>; we move that one folder rather than
+# hardcoding its name, so the same step works for any ref.
+#
+# CACHEBUST: Docker can't see that the URL's content changed, so a plain rebuild
+# reuses the cached zip even when `main` moved. Pass a changing value to force a
+# re-download WITHOUT --no-cache (which would also redo apt/npm above):
+#   docker build --build-arg CACHEBUST=$(date +%s) .   (see `make build-latest`)
+# It only invalidates this layer onward — npm install etc. below must re-run
+# anyway since the sources changed. A SHA in ATOMIC_CRM_REF busts the cache on
+# its own, so CACHEBUST is only needed for the moving `main` default.
+ARG ATOMIC_CRM_REF=main
+ARG CACHEBUST=0
 RUN wget -q "https://github.com/marmelab/atomic-crm/archive/${ATOMIC_CRM_REF}.zip" \
     -O /tmp/atomic-crm.zip \
     && unzip -q /tmp/atomic-crm.zip -d /tmp \
-    && mv /tmp/${ATOMIC_CRM_DIR} ${APP_DIR} \
+    && mv /tmp/atomic-crm-* ${APP_DIR} \
     && rm /tmp/atomic-crm.zip
 
 WORKDIR ${APP_DIR}
@@ -146,12 +156,6 @@ RUN chown -R developer:developer /chat-service
 # ── Entrypoint ────────────────────────────────────────────────
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
-
-# ── Agent config — most volatile, kept last ───────────────────
-# Changing agents/skills/hooks only invalidates these two steps.
-COPY claudeConfig/.claude/ /root/.claude/
-RUN cp -r /root/.claude /home/developer/.claude \
-    && chown -R developer:developer /home/developer/.claude
 
 # ── Stage source for named volume /app ────────────────────────
 # crm-app:/app is a named volume — the mount hides any content baked at /app,
