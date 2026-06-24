@@ -1,0 +1,16 @@
+# RTK benchmark override (feat/headroom, arm 4).
+# Activates the RTK wrapper in pty-session.js via RTK_ENABLED=1.
+# No proxy — RTK is a local CLI wrapper installed in the image.
+#
+# Usage:
+#   INSTANCE=rtk PORT_CRM=5179 PORT_CHAT=8089 \
+#     IMAGE=atomic-crm-dev:headroom \
+#     docker compose -p rtk \
+#       -f docker-compose.yml \
+#       -f docker-compose.multi.yml \
+#       -f docker-compose.rtk.yml up -d
+
+services:
+  crm-app:
+    environment:
+      - RTK_ENABLED=1
