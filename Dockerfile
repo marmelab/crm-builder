@@ -78,7 +78,8 @@ RUN RTK_VERSION=$(curl -fsSL https://api.github.com/repos/rtk-ai/rtk/releases/la
     && curl -fsSL "https://github.com/rtk-ai/rtk/releases/download/v${RTK_VERSION}/rtk_${RTK_VERSION}-1_amd64.deb" \
         -o /tmp/rtk.deb \
     && dpkg -i /tmp/rtk.deb \
-    && rm /tmp/rtk.deb
+    && rm /tmp/rtk.deb \
+    || true
 
 # ── Download project (zip from a branch, tag or SHA) ──────────
 # Defaults to the latest commit on main. Pin a revision at build time:
