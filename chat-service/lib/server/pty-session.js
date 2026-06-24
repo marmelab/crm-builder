@@ -72,7 +72,9 @@ export class PtySession extends EventEmitter {
     if (model) args.push('--model', model);
     args.push('--append-system-prompt', appendedPrompt);
 
-    this.#pty = pty.spawn('claude', args, {
+    const spawnCmd = process.env.RTK_ENABLED === '1' ? 'rtk' : 'claude';
+    const spawnArgs = process.env.RTK_ENABLED === '1' ? ['claude', ...args] : args;
+    this.#pty = pty.spawn(spawnCmd, spawnArgs, {
       name: 'xterm-256color',
       cols: 220,
       rows: 50,
