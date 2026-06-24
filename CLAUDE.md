@@ -12,7 +12,7 @@ supervisord (pid 1)
 
 Two compose profiles: `demo` (FakeRest) and `full` (Supabase, needs Docker socket).
 
-`entrypoint.sh`: syncs `claudeConfig/.claude/` → `/home/developer/.claude`, applies App.tsx variant, overwrites `/app/.claude/settings.json` with `{"hooks":{}}` (prevents upstream format-file.sh fight with our hooks).
+`entrypoint.sh`: on first boot populates `/app` from the image-staged AtomicCRM source (`/opt/atomic-crm-source`); on **every** boot resyncs `/app/.claude` (agents/skills/hooks/commands/rules/settings.json) from that source and commits it — the persistent `crm-app` volume would otherwise keep a stale harness across rebuilds, and the merger's `git reset --hard HEAD` would revert an uncommitted resync. Also applies the App.tsx variant and seeds the interactive-gate flags (onboarding, trust dialog, `skipDangerousModePermissionPrompt`) in `/home/developer/.claude` so the non-interactive PTY orchestrator never hangs on a first-run dialog. (The harness config now lives in the AtomicCRM repo, not the old `claudeConfig/`.)
 
 Single `crm-app` volume for `/app` — keeps `node_modules` and `worktrees/` on the same device so `cp -al` hard-links node_modules into each worktree (zero disk cost).
 

@@ -638,7 +638,7 @@ function handleWsMessage(event) {
       // a reload or when switching back to the session.
       renderErrorUi();
     }
-    if (msg.satisfactionAsk) renderSatisfactionAskUi(typeof msg.satisfactionAsk === 'object' ? msg.satisfactionAsk : {});
+    if (msg.ask) renderSatisfactionAskUi(typeof msg.ask === 'object' ? msg.ask : {});
     historyApi.refreshHistory();
     return;
   }
@@ -706,7 +706,7 @@ function handleWsMessage(event) {
   }
 
   if (msg.type === 'satisfaction_ask') {
-    renderSatisfactionAskUi({ header: msg.header, body: msg.body, yes: msg.yes, no: msg.no });
+    renderSatisfactionAskUi({ kind: msg.kind, header: msg.header, body: msg.body, yes: msg.yes, no: msg.no });
     return;
   }
 
@@ -845,12 +845,35 @@ function removeSatisfactionAskUi() {
   messages.querySelector('.msg-satisfaction-ask')?.remove();
 }
 
-function renderSatisfactionAskUi({
-  header: headerText = 'Preview ready',
-  body = 'Your changes are visible in the preview but they haven\'t been saved to your data yet. Are you happy with the result?',
-  yes = 'Yes, save the changes',
-  no = 'No, I want to change something',
-} = {}) {
+// Two cartouche flavours share this widget: `satisfaction` (are you happy with
+// the preview?) and `live-switch` (switch the app to your real data?). The
+// cartouche carries the full question (header + body) so it reads as a clean
+// card — the orchestrator does NOT also print the question as a plain message
+// (it would duplicate). It supplies localized header/body/yes/no; the defaults
+// below are an English fallback. `kind` drives the icon + fallback copy.
+const ASK_DEFAULTS = {
+  satisfaction: {
+    icon: '👁️',
+    header: 'Preview ready',
+    body: 'Your changes are visible in the preview but they haven\'t been saved to your data yet. Are you happy with the result?',
+    yes: 'Yes, save the changes',
+    no: 'No, I want to change something',
+  },
+  'live-switch': {
+    icon: '🗄️',
+    header: 'Data saved',
+    body: 'Your data is saved. Want to switch the app over to your real data now? You can keep using sample data otherwise.',
+    yes: 'Yes, switch to my real data',
+    no: 'No, keep sample data',
+  },
+};
+
+function renderSatisfactionAskUi({ kind, header: headerText, body, yes, no } = {}) {
+  const d = ASK_DEFAULTS[kind] || ASK_DEFAULTS.satisfaction;
+  headerText = headerText || d.header;
+  body = body || d.body;
+  yes = yes || d.yes;
+  no = no || d.no;
   removeSatisfactionAskUi();
 
   const bubble = document.createElement('div');
@@ -861,7 +884,7 @@ function renderSatisfactionAskUi({
   const icon = document.createElement('span');
   icon.className = 'satisfaction-ask-icon';
   icon.setAttribute('aria-hidden', 'true');
-  icon.textContent = '👁️';
+  icon.textContent = d.icon;
   const headerLabel = document.createElement('span');
   headerLabel.textContent = headerText;
   header.append(icon, headerLabel);

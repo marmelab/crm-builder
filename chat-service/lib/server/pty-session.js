@@ -9,7 +9,7 @@ import { buildSpawnEnv } from '../spawn-env.js';
 import { TranscriptWatcher } from './transcript-watcher.js';
 import { costFromBreakdown } from '../stats/io.js';
 import { isApiErrorStderr } from './turn-state.js';
-import { join } from 'node:path';
+import { join, basename } from 'node:path';
 
 // Exported for unit testing.
 export function detectPrompt(text) {
@@ -20,9 +20,9 @@ export function detectPrompt(text) {
 }
 
 const TURN_TIMEOUT_MS = 120_000;  // fallback: silence after last PTY chunk → turn done (Stop hook is primary).
-                                  // 120 s: COMPLEX turns can be silent for >15 s while the orchestrator waits
-                                  // for subagent responses (planner, developer team). The Stop hook sentinel
-                                  // is the primary "turn done" signal; this timer is only the safety net.
+// 120 s: COMPLEX turns can be silent for >15 s while the orchestrator waits
+// for subagent responses (planner, developer team). The Stop hook sentinel
+// is the primary "turn done" signal; this timer is only the safety net.
 const STARTUP_TIMEOUT_MS = 12_000; // safety: Claude TUI initializes in ~1.5s; 12s is reliably safe
 
 const OUTPUT_BUFFER_LIMIT = 2048;
@@ -59,6 +59,12 @@ export class PtySession extends EventEmitter {
     // orchestrator must never call directly (everything routes via Agent).
     args.push('--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}');
     if (claudeSessionId) args.push('--resume', claudeSessionId);
+    // First spawn: pin Claude's session id to the chat-service session dir UUID
+    // (a valid randomUUID()). Otherwise Claude mints its own id, which diverges
+    // from the chat-dir UUID — and the orchestrator derives SESSION_SHORT_ID from
+    // the chat dir while the hooks (context.mjs) derive it from Claude's session
+    // id.
+    else args.push('--session-id', basename(sessionDir));
     // Load the orchestrator agent file so the state machine, CLASSIFICATION,
     // and LANGUAGE RULES are active. Without --agent, the TUI starts with the
     // generic Claude Code system prompt and routes requests itself (wrong).
@@ -102,7 +108,7 @@ export class PtySession extends EventEmitter {
       }
       this.emit('event', e);
     });
-    this.#watcher.start().catch(() => {});
+    this.#watcher.start().catch(() => { });
 
     // Resumed sessions already know the session_id — set up the stop watcher now.
     if (claudeSessionId) this.#watchForStop();
@@ -245,7 +251,7 @@ export class PtySession extends EventEmitter {
         if (!this.#resultEmitted) this.#handleStopSentinel(sentinelPath);
         else this.#handleBackgroundSentinel(sentinelPath);
       })
-      .catch(() => {});
+      .catch(() => { });
   }
 
   // Handle a Stop-hook sentinel that arrived while the session was idle
@@ -255,17 +261,17 @@ export class PtySession extends EventEmitter {
   // Does NOT call consumeTurnUsage() — token accounting stays cumulative and
   // is collected in full by the next active-turn #emitResult() call.
   #handleBackgroundSentinel(sentinelPath) {
-    unlink(sentinelPath).catch(() => {});
+    unlink(sentinelPath).catch(() => { });
     setTimeout(async () => {
-      await this.#watcher?.flush().catch(() => {});
+      await this.#watcher?.flush().catch(() => { });
       await new Promise(r => setTimeout(r, 100));
-      await this.#watcher?.flush().catch(() => {});
+      await this.#watcher?.flush().catch(() => { });
       this.emit('event', { type: 'background_result' });
     }, 150);
   }
 
   #handleStopSentinel(sentinelPath) {
-    unlink(sentinelPath).catch(() => {});
+    unlink(sentinelPath).catch(() => { });
     // 150 ms: the file-watcher debounce is 50 ms, so by 150 ms the debounced
     // #poll() will have run and emitted the assistant event. Without this margin
     // the 50 ms sentinel delay raced the 50 ms file-watcher debounce.
@@ -276,7 +282,7 @@ export class PtySession extends EventEmitter {
     // Respond to terminal capability queries so Claude's Ink TUI can initialize.
     // Without these, Ink blocks waiting for terminal responses and ❯ never appears.
     if (chunk.includes('\x1b[>0q')) this.#pty.write('\x1bP>|xterm(314)\x1b\\'); // XTVERSION
-    if (chunk.includes('\x1b[c'))   this.#pty.write('\x1b[?1;2c');   // DA1
+    if (chunk.includes('\x1b[c')) this.#pty.write('\x1b[?1;2c');   // DA1
     if (chunk.includes('\x1b[?2026$p')) this.#pty.write('\x1b[?2026;1$y');      // DECRQM mode 2026
 
     const text = stripAnsi(chunk);
@@ -311,7 +317,7 @@ export class PtySession extends EventEmitter {
   // chat header converges to the same deduped figure /api/stats reports. Pure
   // read (no reset). flush() first so the latest main-transcript lines are in.
   async cumulativeUsage() {
-    await this.#watcher?.flush().catch(() => {});
+    await this.#watcher?.flush().catch(() => { });
     return this.#watcher?.cumulativeUsage() ?? {};
   }
 
@@ -320,11 +326,11 @@ export class PtySession extends EventEmitter {
     let total_cost_usd = 0;
     for (const [model, mu] of Object.entries(modelUsage)) {
       const perModelCost = costFromBreakdown(model, {
-        input:         mu.inputTokens                || 0,
-        cacheCreate:   mu.cacheCreationInputTokens   || 0,
+        input: mu.inputTokens || 0,
+        cacheCreate: mu.cacheCreationInputTokens || 0,
         cacheCreate1h: mu.cacheCreation1hInputTokens || 0,
-        output:        mu.outputTokens               || 0,
-        cacheRead:     mu.cacheReadInputTokens       || 0,
+        output: mu.outputTokens || 0,
+        cacheRead: mu.cacheReadInputTokens || 0,
       });
       mu.costUSD = perModelCost;
       total_cost_usd += perModelCost;
@@ -336,12 +342,12 @@ export class PtySession extends EventEmitter {
     if (this.#resultEmitted) return; // idempotent
     this.#resultEmitted = true;
     clearTimeout(this.#silenceTimer);
-    await this.#watcher?.flush().catch(() => {});
+    await this.#watcher?.flush().catch(() => { });
     // Second flush after a brief pause: catches assistant events that weren't
     // on disk yet when the first flush ran (OS write buffering, or new-session
     // JSONL discovery still in flight when the sentinel arrived).
     await new Promise(r => setTimeout(r, 100));
-    await this.#watcher?.flush().catch(() => {});
+    await this.#watcher?.flush().catch(() => { });
 
     // Collect token usage from JSONL (main session + subagents). This gives
     // accurate per-model token counts and cost even without stream-json events.

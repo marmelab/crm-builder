@@ -139,9 +139,7 @@ COPY app-variants/App.supabase.tsx /app-variants/App.supabase.tsx
 
 # ── Utility scripts ───────────────────────────────────────────
 COPY scripts/switch-mode.sh /usr/local/bin/switch-mode
-COPY scripts/apply-migrations.sh /usr/local/bin/apply-migrations
-COPY scripts/pending-deploys.mjs /usr/local/bin/pending-deploys
-RUN chmod +x /usr/local/bin/switch-mode /usr/local/bin/apply-migrations /usr/local/bin/pending-deploys
+RUN chmod +x /usr/local/bin/switch-mode
 
 # ── Supervisor config ─────────────────────────────────────────
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
