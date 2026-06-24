@@ -118,7 +118,9 @@ wss.on('connection', async (ws, req) => {
     // the session lands in `rate_limited` state so a refresh shows the same
     // countdown + resume button the live tab last rendered.
     rateLimitResetsAt: runtime.session.meta.rateLimitResetsAt ?? null,
-    satisfactionAsk: runtime.session.meta.satisfactionAsk ?? false,
+    // Open POST-DEV cartouche (satisfaction or live-switch) to restore on reconnect.
+    // `satisfactionAsk` kept as a fallback for sessions written before the unified field.
+    ask: runtime.session.meta.ask ?? runtime.session.meta.satisfactionAsk ?? false,
     isNew: session.isNew,
     // Deploy progress is delivered over its own SSE channel
     // (GET /api/deploy/events), not the chat WebSocket — it's cross-session

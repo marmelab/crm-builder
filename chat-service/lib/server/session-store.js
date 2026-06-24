@@ -285,7 +285,10 @@ export async function openSession(requestedId) {
       if (role === 'user') {
         meta.userMessageCount = (meta.userMessageCount || 0) + 1;
         if (!meta.title) meta.title = content.trim().replace(/\s+/g, ' ').slice(0, 60);
-        if (meta.satisfactionAsk) meta.satisfactionAsk = false;
+        // The user replied → any open cartouche (satisfaction / live-switch) is
+        // now answered; clear it so a reconnect doesn't restore a stale widget.
+        if (meta.ask) meta.ask = false;
+        if (meta.satisfactionAsk) meta.satisfactionAsk = false; // legacy field
       }
       await saveMeta();
     },
@@ -319,8 +322,8 @@ export async function openSession(requestedId) {
       meta.rateLimitResetsAt = next;
       await saveMeta();
     },
-    setSatisfactionAsk: async (payload) => {
-      meta.satisfactionAsk = payload;
+    setAsk: async (payload) => {
+      meta.ask = payload;
       await saveMeta();
     },
     // In-memory equivalent of patchSession — keeps the runtime's meta object

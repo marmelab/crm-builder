@@ -1,23 +1,42 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseSatisfactionMarker } from '../lib/server/turn.js';
+import { parseAskState } from '../lib/server/turn.js';
 
-test('percent sign inside a field does not break the match', () => {
-  const text = 'Done!\n%%ASK_SATISFACTION|Preview ready|Vos changements sont prets a 100 %|Oui|Non%%';
-  const r = parseSatisfactionMarker(text);
-  assert.ok(r);
-  assert.equal(r.payload.body, 'Vos changements sont prets a 100 %');
-  assert.equal(r.cleanText, 'Done!');
+// The orchestrator drops <session_dir>/ask-state.json when it enters STATE
+// PD-ASK (satisfaction) or STATE PD-LIVE-ASK (offer to switch to real data).
+// parseAskState validates + normalizes that file's contents.
+
+test('satisfaction payload parses with localized labels', () => {
+  const r = parseAskState(JSON.stringify({
+    kind: 'satisfaction', header: 'Aperçu prêt', body: 'Tout te convient ?', yes: 'Oui', no: 'Non',
+  }));
+  assert.deepEqual(r, { kind: 'satisfaction', header: 'Aperçu prêt', body: 'Tout te convient ?', yes: 'Oui', no: 'Non' });
 });
 
-test('extra pipes fold into the last field instead of shifting', () => {
-  const text = '%%ASK_SATISFACTION|H|B|Yes|No | rather not%%';
-  const r = parseSatisfactionMarker(text);
-  assert.equal(r.payload.no, 'No | rather not');
+test('live-switch payload parses', () => {
+  const r = parseAskState(JSON.stringify({ kind: 'live-switch', yes: 'Bascule', no: 'Garde la démo' }));
+  assert.ok(r);
+  assert.equal(r.kind, 'live-switch');
+  assert.equal(r.yes, 'Bascule');
+  // Optional fields absent → undefined (client fills its localized defaults).
+  assert.equal(r.header, undefined);
+  assert.equal(r.body, undefined);
 });
 
-test('bare marker still parses with defaults', () => {
-  const r = parseSatisfactionMarker('ok %%ASK_SATISFACTION%%');
-  assert.ok(r);
-  assert.equal(r.payload.yes, 'Yes, save the changes');
+test('missing/blank optional fields normalize to undefined', () => {
+  const r = parseAskState(JSON.stringify({ kind: 'satisfaction', header: '   ', yes: 'Oui' }));
+  assert.equal(r.header, undefined);
+  assert.equal(r.yes, 'Oui');
+  assert.equal(r.no, undefined);
+});
+
+test('unknown kind is rejected', () => {
+  assert.equal(parseAskState(JSON.stringify({ kind: 'something-else', yes: 'x' })), null);
+  assert.equal(parseAskState(JSON.stringify({ yes: 'x' })), null);
+});
+
+test('malformed JSON is rejected (consumed silently upstream)', () => {
+  assert.equal(parseAskState('not json'), null);
+  assert.equal(parseAskState(''), null);
+  assert.equal(parseAskState('[1,2,3]'), null);
 });
