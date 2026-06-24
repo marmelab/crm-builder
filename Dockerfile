@@ -70,6 +70,16 @@ RUN npm install -g typescript-language-server typescript
 # ── Wrangler (Cloudflare Workers deploy — used by the frontend deploy phase) ──
 RUN npm install -g wrangler@${WRANGLER_VERSION}
 
+# RTK — context-compression CLI (feat/headroom benchmark, arm 4 only).
+# Activated at runtime via RTK_ENABLED=1 in pty-session.js.
+# Downloads the latest amd64 .deb from the rtk-ai/rtk GitHub releases.
+RUN RTK_VERSION=$(curl -fsSL https://api.github.com/repos/rtk-ai/rtk/releases/latest \
+        | grep '"tag_name"' | sed 's/.*"v\([^"]*\)".*/\1/') \
+    && curl -fsSL "https://github.com/rtk-ai/rtk/releases/download/v${RTK_VERSION}/rtk_${RTK_VERSION}-1_amd64.deb" \
+        -o /tmp/rtk.deb \
+    && dpkg -i /tmp/rtk.deb \
+    && rm /tmp/rtk.deb
+
 # ── Download project (zip from a branch, tag or SHA) ──────────
 # Defaults to the latest commit on main. Pin a revision at build time:
 #   docker build --build-arg ATOMIC_CRM_REF=<sha|branch|tag> .
