@@ -71,7 +71,67 @@ is both more create and more read, but the creates are 12.5× more expensive per
 
 ---
 
-## 4. The developer agent is the exclusive victim
+## 4. Headroom cache mode: confirmed passthrough
+
+The deeper per-phase analysis answers the question directly.
+
+**Developer cc/cr per phase (all phases across 3 reps, sorted):**
+
+| Arm | cc/cr values (per developer phase) | Median |
+|---|---|--:|
+| baseline | 1.5% 2.1% 2.1% 2.5% 3.7% 4.7% 5.2% 5.7% 8.5% | **3.7%** |
+| headroom-cache | 1.6% 2.4% 2.4% 2.5% 3.7% 3.7% 5.4% 5.5% 5.6% 5.8% 7.0% 8.8% | **4.6%** |
+| headroom-token | 5.9% 6.2% 8.8% 9.2% 10.2% 11.2% 11.8% 12.2% 16.5% 20.5% | **10.7%** |
+
+Headroom cache mode and baseline overlap completely. The individual developer phases
+have the same range and the same distribution. The proxy is not compressing anything.
+
+**Confirmed by input tokens:** fresh (non-cached) input per developer phase:
+- Baseline median: 30 tokens
+- Headroom cache median: 26 tokens
+
+Identical — the uncached portion of the context is also unchanged. In cache mode,
+Headroom routes the request through itself, preserves the prefix byte-for-byte, and
+forwards it to Anthropic unchanged.
+
+**What cache mode actually does:** it forwards HTTP requests without modification. The
+only difference vs a direct connection is the proxy round-trip. Our data shows this adds
+no measurable overhead at the session cost level.
+
+---
+
+## 5. RTK: a shell wrapper that doesn't reach the API
+
+RTK wraps the `claude` CLI subprocess. It intercepts stdin/stdout, not HTTP. The Anthropic
+API calls are made by the Claude SDK inside the `claude` process, with `ANTHROPIC_BASE_URL`
+pointing directly to `api.anthropic.com`. RTK never sees those requests.
+
+**Per-agent output tokens (baseline vs RTK, all instances):**
+
+| Agent | Baseline median | RTK median | Δ |
+|---|--:|--:|--:|
+| orchestrator | 4,296 | 3,664 | −15% |
+| planner | 977 | 1,150 | +18% |
+| developer | 2,424 | 2,165 | −11% |
+| quality-reviewer | 919 | 1,066 | +16% |
+| merger | 29 | 52 | +76% |
+
+No consistent directional pattern. The quality-reviewer is *higher* under RTK (+16%).
+The developer is lower (−11%) but the planner is higher (+18%). These are noise — with
+only 9–11 instances per agent type, the variance swamps any real signal.
+
+**Session structure (duration, agents, ops) is identical** between RTK and baseline.
+RTK does not change how many agent calls are made, how many tool calls fire per agent,
+or how long sessions run.
+
+**RTK's `rtk gain` tracker was not initialized** (`rtk init` was not run before the
+sessions). Without initialization, RTK's own tracking produces "No tracking data yet."
+Even with tracking enabled, `rtk gain` measures CLI-level I/O, not Anthropic API
+token consumption — the two are not the same thing in an agentic multi-subagent system.
+
+---
+
+## 6. The developer agent is the exclusive victim of token mode
 
 Comparing 2-ticket runs (same ticket count, same task scope):
 
@@ -153,7 +213,39 @@ and does not break prompt caching.
 
 ---
 
-## 7. Headroom's own stats vs reality
+## 7. Why neither tool helps: the cache hit rate floor
+
+Our sessions run at **95–98% cache hit rate** (cacheRead / (cacheCreate + cacheRead)):
+
+| Session | Cache hit rate | Total context |
+|---|--:|--:|
+| Baseline rep1 | 95.6% | 11,471k tokens |
+| Baseline rep2 | 94.3% | 6,559k tokens |
+| Baseline rep3 | 96.0% | 9,214k tokens |
+
+The Anthropic prompt cache is already doing its job nearly perfectly. There is almost
+nothing to compress. The 2–5% that is being created (cacheCreate) is:
+- Tool results from the current turn (Bash outputs, file contents just read)
+- New planning messages
+- First-turn prefix establishment
+
+These are *not* repetitive context — they cannot be compressed without losing information
+that the agent needs to do its work correctly.
+
+**Compression tools add value when:** hit rate is low (<50%), context approaches the
+window limit, or sessions are short and independent (no stable prefix).
+
+**Compression tools hurt when:** hit rate is high (>90%), context is large and stable,
+agents read many files. An agentic code workflow maximizes exactly this second profile.
+
+The developer agent reads 30–80 files per task. Each file read adds to a stable cache
+prefix that is re-used on every subsequent tool call in that session. This is the
+*ideal* use case for Anthropic prompt caching — and the worst possible use case for
+any tool that rewrites or compresses that prefix.
+
+---
+
+## 8. Headroom's own stats vs reality
 
 Headroom exposes a `/stats` endpoint with `cost_without` (what it claims you would have
 paid without the proxy) and `cost_with` (what you actually paid through it).
