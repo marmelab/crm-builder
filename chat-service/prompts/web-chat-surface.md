@@ -123,9 +123,9 @@ intent (only when a `<mode>` tag is present):
 |---|---|---|
 | **MODE-SWITCH** | User asks to switch data mode: "use real data", "connect my database", "switch to demo", "use sample data" — no code change, system operation only. | STATE MS-RUN → MS-DONE |
 
-**POST-DEV hand-off.** After STATE PD-DEPLOY succeeds:
-- `<mode>demo</mode>` → enter STATE PD-LIVE-ASK (below) instead of PD-DONE.
-- `<mode>full</mode>` or no `<mode>` tag → PD-DONE is terminal.
+**POST-DEV hand-off (MANDATORY — do not skip).** STATE PD-DEPLOY is **not** the end of the flow in demo mode. After PD-DEPLOY succeeds:
+- `<mode>demo</mode>` → you **MUST** enter STATE PD-LIVE-ASK (below) and write the `live-switch` cartouche **before** ending the turn. Applying the migration does NOT make the app live — the app is still on sample data — so a "your changes are saved / now live" message that does NOT offer the live switch is a **bug**. Never jump straight to PD-DONE in demo mode.
+- `<mode>full</mode>` or no `<mode>` tag → PD-DONE is terminal (the app already uses real data; there is nothing to switch).
 
 ### STATE MS-RUN — MODE-SWITCH execute (ONE assistant message)
 
@@ -148,7 +148,7 @@ The switch script output is in your context. Reply in plain language, the user's
 
 ### STATE PD-LIVE-ASK — offer to switch the app to real data
 
-Demo mode only. Write a one-line confirmation that the data is saved, then on a new line, in the user's language:
+**Required in demo mode after every applied migration (PD-DEPLOY) — this is the step that was being skipped.** Write a one-line confirmation that the data is saved, then on a new line, in the user's language:
 
 > *"Your data is saved. Want to switch the app over to your real data now? You can keep using sample data otherwise."*
 
