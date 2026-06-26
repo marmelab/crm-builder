@@ -4,7 +4,7 @@ import { EventEmitter } from 'node:events';
 import { access, unlink } from 'node:fs/promises';
 import { watch, mkdirSync } from 'node:fs';
 import { CWD, CLAUDE_HOME, claudeProjectDir } from './config.js';
-import { getOrchestratorModel } from './system-prompt.js';
+import { getOrchestratorModel, getWebChatSurface } from './system-prompt.js';
 import { buildSpawnEnv } from '../spawn-env.js';
 import { TranscriptWatcher } from './transcript-watcher.js';
 import { costFromBreakdown } from '../stats/io.js';
@@ -47,11 +47,18 @@ export class PtySession extends EventEmitter {
     const model = getOrchestratorModel();
     const mode = process.env.MODE || 'demo';
 
-    // Inject mode + session_dir into the system prompt so the orchestrator can
-    // read them (it expects <mode> and <session_dir> in its system context).
-    // Sending them in the user message via PTY confuses Claude's TUI and causes
-    // it to try to process the XML tags rather than generate a response.
-    const appendedPrompt = `<mode>${mode}</mode>\n<session_dir>${sessionDir}</session_dir>`;
+    // Append three things to the orchestrator's system prompt:
+    //  1. the web-chat surface persona (language, cartouches, demo/full data-mode)
+    //     + the top-level-interactive surface declaration — turns the surface-agnostic
+    //     `orchestrator` agent into the non-technical web-chat variant;
+    //  2/3. <mode> + <session_dir>, which the orchestrator reads from its system
+    //     context (the surface's data-mode keys off <mode>; everything namespaces
+    //     off <session_dir>). Sent here, NOT in the user message — the PTY TUI would
+    //     otherwise try to process the XML tags instead of replying. Tags go LAST so
+    //     they stay easy to locate at the end of the prompt.
+    const surface = getWebChatSurface();
+    const appendedPrompt =
+      `${surface ? surface + '\n\n' : ''}<mode>${mode}</mode>\n<session_dir>${sessionDir}</session_dir>`;
 
     const args = ['--dangerously-skip-permissions'];
     // No MCP servers for the orchestrator: account-level claude.ai connectors
@@ -65,10 +72,12 @@ export class PtySession extends EventEmitter {
     // the chat dir while the hooks (context.mjs) derive it from Claude's session
     // id.
     else args.push('--session-id', basename(sessionDir));
-    // Load the orchestrator agent file so the state machine, CLASSIFICATION,
-    // and LANGUAGE RULES are active. Without --agent, the TUI starts with the
-    // generic Claude Code system prompt and routes requests itself (wrong).
-    args.push('--agent', 'chat-orchestrator');
+    // Load the orchestrator agent file so the state machine, CLASSIFICATION, and
+    // dispatch templates are active. Without --agent, the TUI starts with the
+    // generic Claude Code system prompt and routes requests itself (wrong). The
+    // web-chat persona + LANGUAGE RULES are layered on via --append-system-prompt
+    // (appendedPrompt above); chat-orchestrator was removed upstream.
+    args.push('--agent', 'orchestrator');
     if (model) args.push('--model', model);
     args.push('--append-system-prompt', appendedPrompt);
 
