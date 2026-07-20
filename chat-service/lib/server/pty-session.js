@@ -43,7 +43,13 @@ export class PtySession extends EventEmitter {
 
   constructor(claudeSessionId, sessionDir, { subagentUsageOffsets, cumulativeUsage, seenMsgIds } = {}) {
     super();
-    this.#sessionId = claudeSessionId || null;
+    // The session id is ALWAYS known up front: on resume it's claudeSessionId; on
+    // a fresh spawn we pin it below via `--session-id basename(sessionDir)`, so the
+    // transcript is deterministically <id>.jsonl. Deriving it here (rather than
+    // learning it from the shared project dir) removes a concurrency race where two
+    // sessions spawned at the same instant latched their watchers onto the same
+    // transcript (contaminated titles/events; a lost session).
+    this.#sessionId = claudeSessionId || basename(sessionDir);
     const model = getOrchestratorModel();
     const mode = process.env.MODE || 'demo';
 
@@ -108,19 +114,17 @@ export class PtySession extends EventEmitter {
       this.emit('exit', exitCode ?? 1);
     });
 
-    this.#watcher = new TranscriptWatcher(claudeSessionId, claudeProjectDir(), { subagentUsageOffsets, cumulativeUsage, seenMsgIds });
-    this.#watcher.on('event', e => {
-      // Discover session_id for new sessions so we can watch for the stop sentinel.
-      if (e.session_id && !this.#sessionId) {
-        this.#sessionId = e.session_id;
-        this.#watchForStop();
-      }
-      this.emit('event', e);
+    // Point the watcher straight at this session's own transcript (this.#sessionId).
+    // A fresh spawn (no claudeSessionId) reads it from byte 0; a resume seeks to end.
+    this.#watcher = new TranscriptWatcher(this.#sessionId, claudeProjectDir(), {
+      subagentUsageOffsets, cumulativeUsage, seenMsgIds,
+      fromStart: !claudeSessionId,
     });
+    this.#watcher.on('event', e => this.emit('event', e));
     this.#watcher.start().catch(() => { });
 
-    // Resumed sessions already know the session_id — set up the stop watcher now.
-    if (claudeSessionId) this.#watchForStop();
+    // The session id is known up front (fresh or resumed) — arm the stop watcher now.
+    this.#watchForStop();
   }
 
   // Send a plain-text message to the Claude interactive session.

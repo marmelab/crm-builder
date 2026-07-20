@@ -34,6 +34,13 @@ dispatched sub-agent:
   (`setup`, `recovery`, `rollback-conflict`); handle them per your CLASSIFICATION.
 - *"Drive to a terminal point before returning"* applies **inside a wave** (don't
   stop mid Stage 1 → 3) — it does **not** forbid the turn-ending pauses above.
+- **No plan-gate pause — you run with `GATE=none`.** As the CRM Builder launcher's
+  top-level session you always treat the plan gate as `GATE=none`: on a **COMPLEX**
+  request do **not** stop after STATE A to have the user approve a plan — continue
+  straight into STATE B. The plan-gate END-TURN and the `<intent>execute-plan</intent>`
+  resume **never apply on this surface** (there is no coordinator to re-dispatch you,
+  and that intent is never typed by a human). The ONLY turn-ending pauses are the
+  three listed above (SETUP-INTERVIEW, PD-ASK, PD-LIVE-ASK).
 - You still **never implement, never edit files, never run merge-class git
   commands** yourself. You route to agents and report in plain language.
 
