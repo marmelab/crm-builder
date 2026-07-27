@@ -101,6 +101,31 @@ test('TranscriptWatcher: skips existing lines on resume, only emits new ones', a
   await rm(dir, { recursive: true });
 });
 
+test('TranscriptWatcher: fromStart reads pre-existing lines from the beginning (fresh spawn)', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'tw-fromstart-'));
+  const sessionId = 'fresh-fromstart';
+  const jsonlPath = join(dir, `${sessionId}.jsonl`);
+  // A fresh spawn pins --session-id, so the target file is known up front. Claude
+  // may write the first line before start() attaches; fromStart must read it —
+  // unlike resume, which seeks PAST pre-existing history.
+  await writeFile(jsonlPath, JSON.stringify({
+    type: 'assistant',
+    message: { role: 'assistant', content: [{ type: 'text', text: 'First line' }] },
+    uuid: 'f1', sessionId,
+  }) + '\n');
+
+  const watcher = new TranscriptWatcher(sessionId, dir, { fromStart: true });
+  const seen = [];
+  watcher.on('event', e => { if (e.type === 'assistant') seen.push(e.message.content[0].text); });
+  await watcher.start();                       // fromStart → initial poll reads from byte 0
+  await waitForEvent(watcher, 'event');        // the pre-existing line is emitted
+  await new Promise(r => setTimeout(r, 100));  // settle: confirm no duplicate emission
+
+  assert.deepEqual(seen, ['First line'], 'fromStart must read the pre-existing line exactly once, not seek past it');
+  watcher.close();
+  await rm(dir, { recursive: true });
+});
+
 test('TranscriptWatcher: append twice — each new entry emits exactly once, no re-emission', async () => {
   const dir = join(tmpdir(), `tw-test-twice-${Date.now()}`);
   await mkdir(dir, { recursive: true });

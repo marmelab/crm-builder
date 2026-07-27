@@ -28,6 +28,7 @@ export class TranscriptWatcher extends EventEmitter {
   #sessionId;
   #projectDir;
   #jsonlPath = null;
+  #fromStart = false; // fresh spawn: read <sessionId>.jsonl from byte 0 (vs seek-to-end on resume)
   // Byte offset into #jsonlPath of the next unread byte, and the mtime at that
   // offset. The main transcript is tailed incrementally via readAppendedLines
   // (shared with subagent-tail.js): each #poll() reads only the bytes appended
@@ -72,6 +73,7 @@ export class TranscriptWatcher extends EventEmitter {
     subagentUsageOffsets = new Map(),
     cumulativeUsage = new Map(),
     seenMsgIds = new Set(),
+    fromStart = false,
   } = {}) {
     super();
     this.#sessionId = sessionId || null;
@@ -79,6 +81,7 @@ export class TranscriptWatcher extends EventEmitter {
     this.#subagentUsageOffsets = subagentUsageOffsets;
     this.#cumulativeUsage = cumulativeUsage;
     this.#seenMsgIds = seenMsgIds;
+    this.#fromStart = fromStart;
     if (sessionId) {
       this.#jsonlPath = join(projectDir, `${sessionId}.jsonl`);
     }
@@ -86,13 +89,19 @@ export class TranscriptWatcher extends EventEmitter {
 
   async start() {
     if (this.#sessionId) {
-      // Resumed session: seek to current end-of-file (by byte offset) so we
-      // only see lines appended after this point — no full read of history.
-      try {
-        const st = await stat(this.#jsonlPath);
-        this.#offset = st.size;
-        this.#mtimeMs = st.mtimeMs;
-      } catch { /* file doesn't exist yet — offset 0 / mtime 0, will be created shortly */ }
+      // Known target file <sessionId>.jsonl. Seek to end-of-file (skip history)
+      // so we only see lines appended after this point — UNLESS this is a fresh
+      // spawn (fromStart), whose brand-new transcript must be read from byte 0.
+      // A fresh spawn knows its id up front (pinned via --session-id), so it no
+      // longer needs to discover it by watching the shared project dir — which
+      // was the source of a cross-session race when two sessions started at once.
+      if (!this.#fromStart) {
+        try {
+          const st = await stat(this.#jsonlPath);
+          this.#offset = st.size;
+          this.#mtimeMs = st.mtimeMs;
+        } catch { /* file doesn't exist yet — offset 0 / mtime 0, will be created shortly */ }
+      }
       this.#watchFile();
     } else {
       // Ensure the project dir exists before watching — fs.watch() throws

@@ -4,7 +4,7 @@ import { EventEmitter } from 'node:events';
 import { access, unlink } from 'node:fs/promises';
 import { watch, mkdirSync } from 'node:fs';
 import { CWD, CLAUDE_HOME, claudeProjectDir } from './config.js';
-import { getOrchestratorModel } from './system-prompt.js';
+import { getOrchestratorModel, getWebChatSurface } from './system-prompt.js';
 import { buildSpawnEnv } from '../spawn-env.js';
 import { TranscriptWatcher } from './transcript-watcher.js';
 import { costFromBreakdown } from '../stats/io.js';
@@ -43,15 +43,28 @@ export class PtySession extends EventEmitter {
 
   constructor(claudeSessionId, sessionDir, { subagentUsageOffsets, cumulativeUsage, seenMsgIds } = {}) {
     super();
-    this.#sessionId = claudeSessionId || null;
+    // The session id is ALWAYS known up front: on resume it's claudeSessionId; on
+    // a fresh spawn we pin it below via `--session-id basename(sessionDir)`, so the
+    // transcript is deterministically <id>.jsonl. Deriving it here (rather than
+    // learning it from the shared project dir) removes a concurrency race where two
+    // sessions spawned at the same instant latched their watchers onto the same
+    // transcript (contaminated titles/events; a lost session).
+    this.#sessionId = claudeSessionId || basename(sessionDir);
     const model = getOrchestratorModel();
     const mode = process.env.MODE || 'demo';
 
-    // Inject mode + session_dir into the system prompt so the orchestrator can
-    // read them (it expects <mode> and <session_dir> in its system context).
-    // Sending them in the user message via PTY confuses Claude's TUI and causes
-    // it to try to process the XML tags rather than generate a response.
-    const appendedPrompt = `<mode>${mode}</mode>\n<session_dir>${sessionDir}</session_dir>`;
+    // Append three things to the orchestrator's system prompt:
+    //  1. the web-chat surface persona (language, cartouches, demo/full data-mode)
+    //     + the top-level-interactive surface declaration — turns the surface-agnostic
+    //     `orchestrator` agent into the non-technical web-chat variant;
+    //  2/3. <mode> + <session_dir>, which the orchestrator reads from its system
+    //     context (the surface's data-mode keys off <mode>; everything namespaces
+    //     off <session_dir>). Sent here, NOT in the user message — the PTY TUI would
+    //     otherwise try to process the XML tags instead of replying. Tags go LAST so
+    //     they stay easy to locate at the end of the prompt.
+    const surface = getWebChatSurface();
+    const appendedPrompt =
+      `${surface ? surface + '\n\n' : ''}<mode>${mode}</mode>\n<session_dir>${sessionDir}</session_dir>`;
 
     const args = ['--dangerously-skip-permissions'];
     // No MCP servers for the orchestrator: account-level claude.ai connectors
@@ -65,10 +78,12 @@ export class PtySession extends EventEmitter {
     // the chat dir while the hooks (context.mjs) derive it from Claude's session
     // id.
     else args.push('--session-id', basename(sessionDir));
-    // Load the orchestrator agent file so the state machine, CLASSIFICATION,
-    // and LANGUAGE RULES are active. Without --agent, the TUI starts with the
-    // generic Claude Code system prompt and routes requests itself (wrong).
-    args.push('--agent', 'chat-orchestrator');
+    // Load the orchestrator agent file so the state machine, CLASSIFICATION, and
+    // dispatch templates are active. Without --agent, the TUI starts with the
+    // generic Claude Code system prompt and routes requests itself (wrong). The
+    // web-chat persona + LANGUAGE RULES are layered on via --append-system-prompt
+    // (appendedPrompt above); chat-orchestrator was removed upstream.
+    args.push('--agent', 'orchestrator');
     if (model) args.push('--model', model);
     args.push('--append-system-prompt', appendedPrompt);
 
@@ -99,19 +114,17 @@ export class PtySession extends EventEmitter {
       this.emit('exit', exitCode ?? 1);
     });
 
-    this.#watcher = new TranscriptWatcher(claudeSessionId, claudeProjectDir(), { subagentUsageOffsets, cumulativeUsage, seenMsgIds });
-    this.#watcher.on('event', e => {
-      // Discover session_id for new sessions so we can watch for the stop sentinel.
-      if (e.session_id && !this.#sessionId) {
-        this.#sessionId = e.session_id;
-        this.#watchForStop();
-      }
-      this.emit('event', e);
+    // Point the watcher straight at this session's own transcript (this.#sessionId).
+    // A fresh spawn (no claudeSessionId) reads it from byte 0; a resume seeks to end.
+    this.#watcher = new TranscriptWatcher(this.#sessionId, claudeProjectDir(), {
+      subagentUsageOffsets, cumulativeUsage, seenMsgIds,
+      fromStart: !claudeSessionId,
     });
+    this.#watcher.on('event', e => this.emit('event', e));
     this.#watcher.start().catch(() => { });
 
-    // Resumed sessions already know the session_id — set up the stop watcher now.
-    if (claudeSessionId) this.#watchForStop();
+    // The session id is known up front (fresh or resumed) — arm the stop watcher now.
+    this.#watchForStop();
   }
 
   // Send a plain-text message to the Claude interactive session.

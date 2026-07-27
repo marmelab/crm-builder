@@ -124,7 +124,7 @@ function buildPrompt(userMessage) {
 }
 
 // The orchestrator titles the session itself: it prepends a
-// <session-title>…</session-title> tag to its first reply (chat-orchestrator.md).
+// <session-title>…</session-title> tag to its first reply (orchestrator.md).
 // We strip the tag from the user-visible message (always — it must never render)
 // and apply the title once, unless the user has manually renamed (titleLocked).
 // This replaces the separate `claude -p` Haiku retitling spawn.

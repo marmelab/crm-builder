@@ -3,7 +3,10 @@ import { join } from 'node:path';
 export const PORT = Number(process.env.PORT) || 8080;
 export const CWD = '/app';
 export const CLAUDE_HOME = '/home/developer';
-export const ORCHESTRATOR_MD = `${CWD}/.claude/agents/chat-orchestrator.md`;
+// The web chat launches the typed `orchestrator` agent and layers the non-technical
+// web-chat persona on top via --append-system-prompt (see web-chat-surface.md).
+// chat-orchestrator was removed upstream; orchestrator.md is the single routing source.
+export const ORCHESTRATOR_MD = `${CWD}/.claude/agents/orchestrator.md`;
 export const LOG_DIR = process.env.CHAT_LOG_DIR || '/chat-service/logs';
 
 // Live Claude CLI workspace layout under $HOME/.claude/projects/<slug>/<csid>/.

@@ -20,7 +20,7 @@ export function extractToolUses(msg) {
 }
 
 // Explicit `<intent>…</intent>` markers the orchestrator classifies on (see the
-// CLASSIFICATION table in chat-orchestrator.md — these literals MUST match the
+// CLASSIFICATION table in orchestrator.md — these literals MUST match the
 // markers that table keys on). Kept as constants so the two builders below and
 // the prompt stay in lockstep.
 export const INTENT_SETUP = '<intent>setup</intent>';
@@ -48,7 +48,7 @@ export function rewriteUserMessage(userMessage) {
 // routes to STATE RECOVERY in the orchestrator, spawned FRESH with no --resume)
 // plus the original request for context. The procedure and constraints —
 // "assume nothing survived, rebuild from disk, never say already-in-progress" —
-// live solely in STATE RECOVERY (chat-orchestrator.md) to avoid drift.
+// live solely in STATE RECOVERY (orchestrator.md) to avoid drift.
 export function buildRecoveryPrompt(originalMessage) {
   return [
     INTENT_RECOVERY,

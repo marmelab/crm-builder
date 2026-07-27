@@ -200,7 +200,7 @@ export async function handleSessionCommitsRequest(req, res, sessionId) {
   }
 }
 
-// Hand the conflict over to the chat-orchestrator: ensure a runtime exists,
+// Hand the conflict over to the orchestrator: ensure a runtime exists,
 // then enqueue/dispatch a synthetic user turn carrying the rollback intent
 // and the list of commits still to revert. The orchestrator routes the
 // `<intent>rollback-conflict</intent>` marker to its SIMPLE-flow variant which

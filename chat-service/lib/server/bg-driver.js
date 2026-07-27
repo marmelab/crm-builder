@@ -26,7 +26,7 @@ import { processMessage } from './turn.js';
 // While the session is idle with pending tickets, a heartbeat nudges the PTY so
 // the runtime delivers pending background-agent completions → the orchestrator
 // runs its Step 2 background turn → Stop hook → `background_result`. This is the
-// primary wave driver (chat-orchestrator.md is built for event-driven background
+// primary wave driver (orchestrator.md is built for event-driven background
 // turns). The heavyweight AUTO_CONTINUE resume is only a stall escalation.
 const HEARTBEAT_MS = 6_000;
 // Consecutive heartbeat ticks with an unchanged pending-ticket set before each

@@ -55,7 +55,7 @@ test('buildRecoveryPrompt embeds the original request for context', () => {
 
 test('buildRecoveryPrompt delegates the procedure to STATE RECOVERY (single source of truth)', () => {
   const out = buildRecoveryPrompt('whatever');
-  // The constraints/procedure live in STATE RECOVERY (chat-orchestrator.md); the
+  // The constraints/procedure live in STATE RECOVERY (orchestrator.md); the
   // directive only triggers it via the marker + points at it, no duplicated prose.
   assert.match(out, /STATE RECOVERY/);
 });
