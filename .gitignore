@@ -17,3 +17,4 @@ chat-service/tests/results/run-*.json
 # Host-side git worktrees (separate from /worktrees inside docker)
 /.worktrees/
 /.claude/commands*/
+.superpowers/
